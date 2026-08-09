@@ -94,3 +94,29 @@ function answerTextForQuestion(q: DecisionRequestQuestion, state: DecisionReques
   );
   return sel.join(", ");
 }
+
+/**
+ * The Phase 5 resume-payload contract (event-bridge.ts:380-422 — SINGLE
+ * SOURCE OF TRUTH): a RESOLVED resume MUST carry non-empty `answers` else the
+ * server rejects with INVALID_PAYLOAD. This mapper builds the approved payload
+ * from the interview form state; gating (all required questions answered) is
+ * `canSubmitDecisionRequest`'s job — the mapper never blocks.
+ */
+export function buildResumePayload(
+  questions: DecisionRequestQuestion[],
+  state: DecisionRequestState,
+  generalNotes: string,
+  recordAsDecisions: boolean,
+): { decision: "approved"; answers: Array<{ question: string; answer: string; weight: string; notes?: string }>; generalNotes?: string; recordAsDecisions: boolean } {
+  return {
+    decision: "approved",
+    answers: buildDecisionAnswers(questions, state),
+    generalNotes: generalNotes?.trim() || undefined,
+    recordAsDecisions,
+  };
+}
+
+/** Cancelled variant — the rejection/dismissal path (Phase 3 D-02): nothing reaches the engine. */
+export function buildCancelResumePayload(): { status: "cancelled" } {
+  return { status: "cancelled" };
+}
