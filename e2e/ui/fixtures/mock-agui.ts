@@ -285,6 +285,18 @@ export function buildSlowRunSseBody(requestInput: unknown): string {
  */
 
 /**
+ * A single chat message replayed verbatim via the connect MESSAGES_SNAPSHOT
+ * (plan 06-01, Pattern 3). Test-authored content flows into the snapshot
+ * frames rendered by the client — the snapshot is client-consumed, so this
+ * shape follows the client's message contract ({ id, role, content? }).
+ */
+export type HistoryMessage = {
+    id: string;
+    role: string;
+    content?: string;
+};
+
+/**
  * Build the SSE body for a connect request (CHAT-07 history replay, RUNR-05):
  * RUN_STARTED + the historic event sequence (quick by default; the tool-call
  * sequence when script === "toolcall") + a MESSAGES_SNAPSHOT listing the
@@ -293,11 +305,17 @@ export function buildSlowRunSseBody(requestInput: unknown): string {
  * never hand-rolled frames.
  *
  * A never-run thread (not in `knownThreadIds`) yields an EMPTY body (RUNR-06).
+ *
+ * `historyMessages` (plan 06-01, Pattern 3): when provided, the snapshot
+ * carries these messages verbatim (order preserved) instead of the script
+ * default below — the ONLY builder change; when omitted the body is
+ * byte-identical to the pre-knob behavior (backward compat).
  */
 export function buildConnectReplaySseBody(
   threadId: string,
   script: RunScript = "quick",
   knownThreadIds: ReadonlySet<string> = new Set(),
+  historyMessages?: HistoryMessage[],
 ): string {
     if (!knownThreadIds.has(threadId)) {
         return "";
@@ -332,7 +350,8 @@ export function buildConnectReplaySseBody(
     // "running" card. The interrupt replay snapshots the assistant text that
     // preceded the interrupt outcome.
     const snapshotMessages =
-        script === "toolcall"
+        historyMessages ??
+        (script === "toolcall"
             ? [
                   {
                       id: "a1",
@@ -344,7 +363,7 @@ export function buildConnectReplaySseBody(
               ]
             : interruptReplay
               ? [{ id: "m1", role: "assistant", content: "What do you think?" }]
-              : [{ id: "m1", role: "assistant", content: "hello" }];
+              : [{ id: "m1", role: "assistant", content: "hello" }]);
     const replayEvents: AGUIEvent[] = [
         ...historic,
         {
@@ -392,6 +411,16 @@ export class MockAgui {
      */
     readonly knownThreadIds = new Set<string>();
 
+    /**
+     * Per-instance multi-message history registry (plan 06-01, Pattern 3):
+     * registerHistory() stores an alternating user/assistant history replayed
+     * VERBATIM in the connect MESSAGES_SNAPSHOT (ordering intents: O-10,
+     * CD-E-1, TD-5/6). Like knownThreadIds (WR-05) this is per-INSTANCE —
+     * never module-level — so history registered in one test can never leak
+     * into another test's connect replay.
+     */
+    readonly historyByThread = new Map<string, HistoryMessage[]>();
+
     constructor(page: Page) {
         this._page = page;
     }
@@ -401,6 +430,20 @@ export class MockAgui {
      * (RUNR-06: threads never registered answer connect with an empty body).
      */
     registerThread(threadId: string): this {
+        this.knownThreadIds.add(threadId);
+        return this;
+    }
+
+    /**
+     * Register a multi-message history for a thread (plan 06-01, Pattern 3):
+     * the connect replay's MESSAGES_SNAPSHOT carries these messages verbatim
+     * (order preserved) instead of the default single "hello" message.
+     * Registering history also marks the thread as "has run" (same effect as
+     * registerThread) — a thread with history answers connect with a replay,
+     * never an empty body.
+     */
+    registerHistory(threadId: string, messages: HistoryMessage[]): this {
+        this.historyByThread.set(threadId, messages);
         this.knownThreadIds.add(threadId);
         return this;
     }
@@ -493,7 +536,7 @@ export class MockAgui {
                     status: 200,
                     contentType: MOCK_AGUI_SSE_HEADERS["content-type"],
                     headers: { "cache-control": MOCK_AGUI_SSE_HEADERS["cache-control"] },
-                    body: buildConnectReplaySseBody(threadId, this.script, this.knownThreadIds),
+                    body: buildConnectReplaySseBody(threadId, this.script, this.knownThreadIds, this.historyByThread.get(threadId)),
                 });
                 return;
             }
