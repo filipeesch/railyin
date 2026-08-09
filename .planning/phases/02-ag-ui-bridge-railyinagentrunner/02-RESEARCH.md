@@ -478,21 +478,26 @@ Call sites for `onRunEnd` in consume(): `case "done"` (line 415), `case "error"`
 | A5 | `finalizeRunEvents` early-return-when-terminal exists means the bridge must do its own `completeOpenToolCalls` pass at run end | Pitfall 5 / Pattern 4 | If the bridge instead relies on finalizeRunEvents, dangling tool calls would persist to JSONL (only caught at replay) |
 | A6 | JSONL replay of `RUN_STARTED.input.messages` is sufficient to restore the user's turns (assistant turns come from replayed events) | Pattern 4 | Matches base in-memory connect behavior; if the client (Phase 5) needs MESSAGES_SNAPSHOT for cold threads, add it to the replay tail (AgentCoreRunner pattern) — additive |
 
-## Open Questions
+## Open Questions (RESOLVED)
+
+> All three questions were resolved during planning. Resolutions are implemented in the plans referenced inline; 02-03 Task 3 records them in the phase-gate docs close-out.
 
 1. **Multi-run replay acceptance on the pinned client (STATE.md blocker #4943).**
    - What we know: `compactEvents` keeps run boundaries; base in-memory `connect()` emits multi-run sequences (RUN_STARTED..RUN_FINISHED, RUN_STARTED..); `verifyEvents` allows RUN_STARTED after RUN_FINISHED but rejects everything after RUN_ERROR; Phase 1 only proved single-run threads over a real server.
    - What's unclear: whether the pinned client's connect path (Phase 5) applies verifyEvents to the replayed stream and rejects RUN_ERROR-then-RUN_STARTED sequences.
    - Recommendation: Phase 2 unit tests cover the replay shapes; if an errored-run-then-run log must rehydrate, truncate replay at the first RUN_ERROR (safe default) and document.
+   - **(RESOLVED — 02-02 Task 2):** the five replay-shape unit tests (incl. per-run boundaries, truncated-at-first-RUN_ERROR shape (e), finalizeRunEvents-for-unterminated-last-run) ship in 02-02 Task 2; the restart-replay e2e proof (Test 10, same dataDir across two servers) ships in 02-02 Task 3. The safe default (truncate at first RUN_ERROR) is the implemented behavior.
 
 2. **Cross-path run locking (board transition vs AG-UI chat on the same conversation).**
    - What we know: the runner lock covers AG-UI runs only; board transitions run through `executeTransition` with the same conversationId; the old stack's cancel races are a known fragile area (CONCERNS.md:88-91).
    - What's unclear: whether Phase 2 must reject an AG-UI run while a transition execution is `running` on the same conversation (PITFALLS Pitfall 4).
    - Recommendation: cheap advisory check in the agent before starting — `SELECT 1 FROM executions WHERE conversation_id = ? AND status IN ('running','waiting_user')` — plus a test; full policy (queue vs reject) is a planner call within the agent's discretion.
+   - **(RESOLVED — 02-03 Task 1):** the advisory executions-row check is implemented in `agent.run()` BEFORE `executeChatTurn` (RUN_ERROR code "THREAD_BUSY", unit-tested), with the layering verified: the runner lock still fires first for same-thread AG-UI concurrency (200 + empty body, e2e unchanged). Policy decision: reject (queue is out of scope for v1).
 
 3. **Workspace key for card conversations.**
    - What we know: `executeChatTurn` defaults to `getDefaultWorkspaceKey()`; card conversations resolve their workspace via `wsRepo.getTaskWorkspaceKey(taskId)` (orchestrator.ts:289-295 pattern); chat_sessions.workspace_key covers standalone sessions.
    - Recommendation: agent resolves workspaceKey: task-linked → task → workspace; else chat_sessions row; else default. Multi-workspace correctness is untested territory — keep the resolver small and unit-test the three branches.
+   - **(RESOLVED — 02-03 Task 1):** `resolveWorkspaceKey(db, conversationId)` mirrors conversations.ts:64-76 (LEFT JOIN tasks → boards, chat_sessions; task_workspace_key ?? session_workspace_key ?? getDefaultWorkspaceKey()) with all three branches unit-tested against a real in-memory DB; null result (unknown conversation) feeds the existing RUN_ERROR THREAD_NOT_FOUND path.
 
 ## Environment Availability
 
@@ -523,14 +528,14 @@ Call sites for `onRunEnd` in consume(): `case "done"` (line 415), `case "error"`
 ### Phase Requirements → Test Map
 | Req ID | Behavior | Test Type | Automated Command | File Exists? |
 |--------|----------|-----------|-------------------|-------------|
-| BRDG-01/02/03 | event-bridge maps every EngineEvent family to valid AG-UI events (parse with `EventSchemas`); exactly one translation path | unit | `bun test src/bun/copilotkit/event-bridge.test.ts -x` | ❌ Wave 0 |
-| RUNR-02/05/06 | jsonl-store append/read/exists + missing-file → null + traversal rejection | unit | `bun test src/bun/copilotkit/jsonl-store.test.ts -x` | ❌ Wave 0 |
-| RUNR-04 | runner throws "Thread already running" on concurrent run | unit | `bun test src/bun/copilotkit/railyin-runner.test.ts -x` | ❌ Wave 0 |
-| RUNR-05/07 | connect replays JSONL with synthesized TOOL_CALL_RESULT (4 replay shapes) | unit | `bun test src/bun/copilotkit/railyin-runner.test.ts -x` | ❌ Wave 0 |
-| RUNR-01/03 | agent run() emits RUN_STARTED-first + mapped events + terminal; clone() preserves deps; abortRun() cancels | unit (fake coordinator) | `bun test src/bun/copilotkit/railyin-agent.test.ts -x` | ❌ Wave 0 |
-| BRDG-01/02/03 | real server: run through RailyinAgent + mock engine streams correct SSE; connect replays; stop works; concurrent run → zero frames | e2e/api | `bun test e2e/api/copilotkit/railyin.test.ts -x` | ❌ Wave 0 |
+| BRDG-01/02/03 | event-bridge maps every EngineEvent family to valid AG-UI events (parse with `EventSchemas`); exactly one translation path | unit | `bun test src/bun/copilotkit/event-bridge.test.ts` | ❌ Wave 0 |
+| RUNR-02/05/06 | jsonl-store append/read/exists + missing-file → null + traversal rejection | unit | `bun test src/bun/copilotkit/jsonl-store.test.ts` | ❌ Wave 0 |
+| RUNR-04 | runner throws "Thread already running" on concurrent run | unit | `bun test src/bun/copilotkit/railyin-runner.test.ts` | ❌ Wave 0 |
+| RUNR-05/07 | connect replays JSONL with synthesized TOOL_CALL_RESULT (4 replay shapes) | unit | `bun test src/bun/copilotkit/railyin-runner.test.ts` | ❌ Wave 0 |
+| RUNR-01/03 | agent run() emits RUN_STARTED-first + mapped events + terminal; clone() preserves deps; abortRun() cancels | unit (fake coordinator) | `bun test src/bun/copilotkit/railyin-agent.test.ts` | ❌ Wave 0 |
+| BRDG-01/02/03 | real server: run through RailyinAgent + mock engine streams correct SSE; connect replays; stop works; concurrent run → zero frames | e2e/api | `bun test e2e/api/copilotkit/railyin.test.ts` | ❌ Wave 0 |
 | RUNR-02 | JSONL file exists at `<RAILYN_DATA_DIR>/threads/{threadId}.jsonl` after a real-server run | e2e/api | same file | ❌ Wave 0 |
-| (regression) | Phase 1 probe tests + SSE text diff still green | e2e/api | `bun test e2e/api/copilotkit -x` | ✅ existing |
+| (regression) | Phase 1 probe tests + SSE text diff still green | e2e/api | `bun test e2e/api/copilotkit` | ✅ existing |
 
 ### Sampling Rate
 - **Per task commit:** `bun test src/bun/copilotkit --timeout 20000`
