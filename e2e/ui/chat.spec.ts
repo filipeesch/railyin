@@ -6,294 +6,301 @@
  *   N — execution state
  *   O — persistence and multi-turn ordering
  *
- * Backend is fully mocked. Stream events are injected via WsMock.
+ * Migrated onto the agui fixture (Phase 6, plan 06-03): all chat traffic
+ * flows through POST /agent/default/run|connect|stop (/api/copilotkit/*)
+ * served by MockAgui; assertions target the CopilotKit surface
+ * ([data-testid="copilot-chat-view"]). N-5/N-7 keep the [data-task-id]
+ * exec-* task-card class assertions (board surface — untouched by the chat
+ * swap); N-9's queue-button half is retired in-file (queue UI removed —
+ * Research Open Question 5; UI-SPEC "no queue affordance").
  */
 
 import { test, expect } from "./fixtures";
-import { openTaskDrawer, sendMessage } from "./fixtures";
-import { makeUserMessage, makeAssistantMessage } from "./fixtures/mock-data";
-import type { Task, StreamEvent } from "@shared/rpc-types";
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-const EXEC_ID = 1001;
-
-function textChunk(taskId: number, seq: number, content: string, done = false): StreamEvent {
-    return {
-        taskId,
-        conversationId: taskId,
-        executionId: EXEC_ID,
-        seq,
-        blockId: `${EXEC_ID}-text`,
-        type: "text_chunk",
-        content,
-        metadata: null,
-        parentBlockId: null,
-        subagentId: null,
-        done,
-    };
-}
+import { openTaskDrawer, chatTextarea, submitChatMessage, collectConnectRequests } from "./fixtures";
+import { makeTask } from "./fixtures/mock-data";
+import type { Task } from "@shared/rpc-types";
 
 // ─── Suite M — basic send & streaming ────────────────────────────────────────
 
 test.describe("M — basic send & streaming", () => {
-    test("M-1: user message appears immediately in .msg--user after send", async ({ page, api, ws, task }) => {
-        const sentMessage = makeUserMessage(task.id, "Hello from M-1");
-
-        api.handle("tasks.sendMessage", () => ({
-            message: sentMessage,
-            executionId: EXEC_ID,
-        }));
-        api.handle("conversations.getMessages", () => ({ messages: [], hasMore: false }));
+    test("M-1: user message appears immediately in the chat view after send", async ({ page, api }) => {
+        const t = makeTask({ id: 101, conversationId: 101, title: "M-1 Task" });
+        api.handle("tasks.list", () => [t]);
 
         await page.goto("/");
-        await openTaskDrawer(page, task.id);
+        await openTaskDrawer(page, t.id);
 
-        const before = await page.locator(".msg--user").count();
-        await sendMessage(page, "Hello from M-1");
+        const chat = page.locator('[data-testid="copilot-chat-view"]');
+        await expect(chat).toBeVisible({ timeout: 10_000 });
+        await expect(chatTextarea(page)).toBeEnabled();
 
-        await expect(page.locator(".msg--user")).toHaveCount(before + 1);
-        await expect(page.locator(".msg--user")).toContainText("Hello from M-1");
+        await submitChatMessage(page, "Hello from M-1");
+
+        // The user message renders (RUN_STARTED carries the run input).
+        await expect(chat).toContainText("Hello from M-1", { timeout: 10_000 });
     });
 
-    test("M-2: streaming bubble (.msg__bubble.streaming) visible while streaming", async ({ page, api, ws, task }) => {
-        let resolveStream!: () => void;
-        const streamStarted = new Promise<void>((r) => (resolveStream = r));
-
-        api.handle("tasks.sendMessage", async () => {
-            // Push stream events after the HTTP response
-            setTimeout(async () => {
-                ws.pushStreamEvent(textChunk(task.id, 0, "Hello "));
-                resolveStream();
-            }, 50);
-            return { message: makeUserMessage(task.id, "M-2 msg"), executionId: EXEC_ID };
-        });
+    test("M-2: assistant text streams into the chat view while the run is in progress", async ({ page, api, agui }) => {
+        const t = makeTask({ id: 102, conversationId: 102, title: "M-2 Task" });
+        api.handle("tasks.list", () => [t]);
+        // Slow variant: the fixture holds the /run response open (terminal-less
+        // body) so the run stays isRunning while the streamed text renders —
+        // the legacy streaming-bubble intent (S-1 pattern).
+        agui.script = "slow";
 
         await page.goto("/");
-        await openTaskDrawer(page, task.id);
-        await sendMessage(page, "M-2 msg");
+        await openTaskDrawer(page, t.id);
+        await expect(chatTextarea(page)).toBeEnabled({ timeout: 10_000 });
 
-        await streamStarted;
-        await expect(page.locator(".msg__bubble.streaming")).toBeVisible();
+        await submitChatMessage(page, "M-2 msg");
+
+        // The run stays isRunning while the fixture holds the response open —
+        // the stop button renders during the streaming window…
+        await expect(page.locator('[data-testid="stop-btn"]')).toBeVisible({ timeout: 5_000 });
+
+        // …and the partial streamed text renders into the chat view.
+        const chat = page.locator('[data-testid="copilot-chat-view"]');
+        await expect(chat).toContainText("working on it", { timeout: 10_000 });
     });
 
-    test("M-3: assistant message persisted after streaming ends", async ({ page, api, ws, task }) => {
-        const assistantMsg = makeAssistantMessage(task.id, "I have analysed your request.");
-        api.handle("tasks.sendMessage", async () => {
-            setTimeout(() => {
-                ws.pushStreamEvent(textChunk(task.id, 0, "I have analysed "));
-                ws.pushStreamEvent(textChunk(task.id, 1, "your request."));
-                ws.pushDone(task.id, EXEC_ID);
-                // After done, the UI calls getMessages to load persisted messages
-            }, 50);
-            return { message: makeUserMessage(task.id, "M-3"), executionId: EXEC_ID };
-        });
-        api.handle("conversations.getMessages", () => ({ messages: [assistantMsg], hasMore: false }));
+    test("M-3: assistant message persisted after streaming ends", async ({ page, api }) => {
+        const t = makeTask({ id: 103, conversationId: 103, title: "M-3 Task" });
+        api.handle("tasks.list", () => [t]);
 
         await page.goto("/");
-        await openTaskDrawer(page, task.id);
-        await sendMessage(page, "M-3 msg");
+        await openTaskDrawer(page, t.id);
+        await expect(chatTextarea(page)).toBeEnabled({ timeout: 10_000 });
 
-        // Wait for streaming to end
-        await expect(page.locator(".msg__bubble.streaming")).not.toBeVisible({ timeout: 10_000 });
-        await expect(page.locator(".msg--assistant")).toHaveCount(1);
+        await submitChatMessage(page, "M-3 msg");
+
+        // The quick script streams the assistant text and completes with
+        // RUN_FINISHED — the assistant message persists in the chat view.
+        const chat = page.locator('[data-testid="copilot-chat-view"]');
+        await expect(chat).toContainText("hello", { timeout: 10_000 });
+        await expect(chat.locator('[data-testid="copilot-assistant-message"]')).toHaveCount(1);
     });
 
-    test("M-4: assistant message content matches streamed text", async ({ page, api, ws, task }) => {
-        const responseText = "I have analysed your codebase thoroughly.";
-        const assistantMsg = makeAssistantMessage(task.id, responseText);
-
-        api.handle("tasks.sendMessage", async () => {
-            setTimeout(() => {
-                ws.pushStreamEvent(textChunk(task.id, 0, responseText));
-                ws.pushDone(task.id, EXEC_ID);
-            }, 50);
-            return { message: makeUserMessage(task.id, "M-4"), executionId: EXEC_ID };
-        });
-        api.handle("conversations.getMessages", () => ({ messages: [assistantMsg], hasMore: false }));
+    test("M-4: assistant message content matches streamed text", async ({ page, api }) => {
+        const t = makeTask({ id: 104, conversationId: 104, title: "M-4 Task" });
+        api.handle("tasks.list", () => [t]);
 
         await page.goto("/");
-        await openTaskDrawer(page, task.id);
-        await sendMessage(page, "M-4 msg");
+        await openTaskDrawer(page, t.id);
+        await expect(chatTextarea(page)).toBeEnabled({ timeout: 10_000 });
 
-        await expect(page.locator(".msg__bubble.streaming")).not.toBeVisible({ timeout: 10_000 });
-        await expect(page.locator(".msg--assistant").last()).toContainText("analysed");
+        await submitChatMessage(page, "M-4 msg");
+
+        // The streamed assistant content (quick script "hello") matches the
+        // rendered assistant message text.
+        const chat = page.locator('[data-testid="copilot-chat-view"]');
+        await expect(chat.locator('[data-testid="copilot-assistant-message"]').last()).toContainText("hello", { timeout: 10_000 });
     });
 });
 
 // ─── Suite N — execution state ────────────────────────────────────────────────
 
 test.describe("N — execution state in the UI", () => {
-    test("N-5: task card gets .exec-running class while streaming", async ({ page, api, ws, task }) => {
-        const runningTask: Task = { ...task, executionState: "running" };
-        const completedTask: Task = { ...task, executionState: "completed" };
-
-        api.handle("tasks.sendMessage", async () => {
-            setTimeout(() => {
-                ws.push({ type: "task.updated", payload: runningTask });
-                ws.pushStreamEvent(textChunk(task.id, 0, "streaming..."));
-            }, 50);
-            return { message: makeUserMessage(task.id, "N-5"), executionId: EXEC_ID };
-        });
+    test("N-5: task card gets .exec-running class while streaming", async ({ page, api, ws, agui }) => {
+        const t = makeTask({ id: 105, conversationId: 105, title: "N-5 Task" });
+        const runningTask: Task = { ...t, executionState: "running" };
+        const completedTask: Task = { ...t, executionState: "completed" };
+        api.handle("tasks.list", () => [t]);
 
         await page.goto("/");
-        await openTaskDrawer(page, task.id);
-        await sendMessage(page, "N-5 msg");
+        await openTaskDrawer(page, t.id);
+        await expect(chatTextarea(page)).toBeEnabled({ timeout: 10_000 });
 
-        await expect(page.locator(`[data-task-id="${task.id}"]`)).toHaveClass(/exec-running/, { timeout: 5_000 });
+        await submitChatMessage(page, "N-5 msg");
+
+        // The chat streams (quick script) while the card reflects the running
+        // state. The exec-* class assertion is board surface (D-03) — driven
+        // by the WebSocket task.updated event, untouched by the chat swap.
+        const chat = page.locator('[data-testid="copilot-chat-view"]');
+        await expect(chat).toContainText("hello", { timeout: 10_000 });
+
+        ws.push({ type: "task.updated", payload: runningTask });
+        await expect(page.locator(`[data-task-id="${t.id}"]`)).toHaveClass(/exec-running/, { timeout: 5_000 });
 
         // Settle
         ws.push({ type: "task.updated", payload: completedTask });
-        ws.pushDone(task.id, EXEC_ID);
     });
 
-    test("N-6: stop button visible during streaming, send button absent", async ({ page, api, ws, task }) => {
-        const runningTask: Task = { ...task, executionState: "running" };
-
-        api.handle("tasks.sendMessage", async () => {
-            setTimeout(() => {
-                ws.push({ type: "task.updated", payload: runningTask });
-                ws.pushStreamEvent(textChunk(task.id, 0, "still streaming..."));
-            }, 50);
-            return { message: makeUserMessage(task.id, "N-6"), executionId: EXEC_ID };
-        });
+    test("N-6: stop button visible during streaming, send button absent", async ({ page, api, agui }) => {
+        const t = makeTask({ id: 106, conversationId: 106, title: "N-6 Task" });
+        api.handle("tasks.list", () => [t]);
+        // Slow variant: the fixture holds the /run response open so the run
+        // stays isRunning until the stop click lands (C-1 pattern).
+        agui.script = "slow";
 
         await page.goto("/");
-        await openTaskDrawer(page, task.id);
-        await sendMessage(page, "N-6 msg");
+        await openTaskDrawer(page, t.id);
+        await expect(chatTextarea(page)).toBeEnabled({ timeout: 10_000 });
 
-        // Stop icon visible
-        await expect(page.locator(".task-detail__input .pi-stop-circle")).toBeVisible({ timeout: 5_000 });
-        // Send icon absent
-        await expect(page.locator(".task-detail__input .pi-send")).not.toBeVisible();
+        await submitChatMessage(page, "N-6 msg");
+
+        // Stop button visible while running (replaces the legacy stop icon).
+        // The new surface has no send button at all —
+        // submission is Enter-based (the queue affordance retired with N-9).
+        const stopBtn = page.locator('[data-testid="stop-btn"]');
+        await expect(stopBtn).toBeVisible({ timeout: 5_000 });
+
+        await stopBtn.click();
+
+        // The run finalizes client-side (aborted fetch) and the "Stopped"
+        // marker renders — pure client state, never derived from wire events.
+        const stopped = page.locator('[data-testid="chat-stopped"]');
+        await expect(stopped).toBeVisible({ timeout: 10_000 });
+        await expect(stopped).toContainText("Stopped");
+
+        // The /stop round-trip hit the fixture for this thread.
+        expect(agui.stopRequests).toContain(String(t.conversationId));
     });
 
-    test("N-7: task card gets .exec-completed after streaming ends", async ({ page, api, ws, task }) => {
-        const completedTask: Task = { ...task, executionState: "completed" };
-
-        api.handle("tasks.sendMessage", async () => {
-            setTimeout(() => {
-                ws.push({ type: "task.updated", payload: { ...task, executionState: "running" } });
-                ws.pushStreamEvent(textChunk(task.id, 0, "done"));
-                ws.pushDone(task.id, EXEC_ID);
-                setTimeout(() => ws.push({ type: "task.updated", payload: completedTask }), 50);
-            }, 50);
-            return { message: makeUserMessage(task.id, "N-7"), executionId: EXEC_ID };
-        });
+    test("N-7: task card gets .exec-completed after streaming ends", async ({ page, api, ws }) => {
+        const t = makeTask({ id: 107, conversationId: 107, title: "N-7 Task" });
+        const completedTask: Task = { ...t, executionState: "completed" };
+        api.handle("tasks.list", () => [t]);
 
         await page.goto("/");
-        await openTaskDrawer(page, task.id);
-        await sendMessage(page, "N-7 msg");
+        await openTaskDrawer(page, t.id);
+        await expect(chatTextarea(page)).toBeEnabled({ timeout: 10_000 });
 
-        await expect(page.locator(`[data-task-id="${task.id}"]`)).toHaveClass(/exec-completed/, { timeout: 10_000 });
-    });
+        await submitChatMessage(page, "N-7 msg");
 
-    test("N-8: send button absent when textarea is empty", async ({ page, api, ws, task }) => {
-        await page.goto("/");
-        await openTaskDrawer(page, task.id);
+        // The chat stream completes via the quick script; the card follows
+        // the execution state pushed over the WebSocket (board surface).
+        const chat = page.locator('[data-testid="copilot-chat-view"]');
+        await expect(chat).toContainText("hello", { timeout: 10_000 });
 
-        // Empty editor — send button must be disabled (not absent — it's always rendered)
-        await expect(page.locator(".task-detail__input .cm-content")).toBeVisible();
-        await expect(page.locator(".task-detail__input button:has(.pi-send)")).toBeDisabled();
-    });
-
-    test("N-9: editor stays enabled and queue button appears while AI is running", async ({ page, api, ws, task }) => {
-        const runningTask: Task = { ...task, executionState: "running" };
-        const completedTask: Task = { ...task, executionState: "completed" };
-
-        api.handle("tasks.sendMessage", async () => {
-            setTimeout(() => {
-                ws.push({ type: "task.updated", payload: runningTask });
-                ws.pushStreamEvent(textChunk(task.id, 0, "thinking..."));
-            }, 50);
-            return { message: makeUserMessage(task.id, "N-9"), executionId: EXEC_ID };
-        });
-        api.handle("conversations.getMessages", () => ({ messages: [makeUserMessage(task.id, "N-9")], hasMore: false }));
-
-        await page.goto("/");
-        await openTaskDrawer(page, task.id);
-        await sendMessage(page, "N-9 msg");
-
-        // Editor stays enabled while AI is running (queue messages feature)
-        const cmContent = page.locator(".task-detail__input .cm-content");
-        await expect(cmContent).toHaveAttribute("contenteditable", "true", { timeout: 5_000 });
-
-        // Queue button replaces send button while running
-        await expect(page.locator('[data-testid="queue-btn"]')).toBeVisible({ timeout: 5_000 });
-        await expect(page.locator('[data-testid="send-btn"]')).not.toBeVisible();
-
-        // Simulate AI turn ending
-        ws.pushDone(task.id, EXEC_ID);
+        ws.push({ type: "task.updated", payload: { ...t, executionState: "running" } });
+        await expect(page.locator(`[data-task-id="${t.id}"]`)).toHaveClass(/exec-running/, { timeout: 5_000 });
         ws.push({ type: "task.updated", payload: completedTask });
+        await expect(page.locator(`[data-task-id="${t.id}"]`)).toHaveClass(/exec-completed/, { timeout: 10_000 });
+    });
 
-        // Send button returns, queue button gone — editor still enabled
-        await expect(page.locator('[data-testid="send-btn"]')).toBeVisible({ timeout: 5_000 });
-        await expect(cmContent).toHaveAttribute("contenteditable", "true");
+    test("N-8: empty editor cannot submit a run", async ({ page, api, agui }) => {
+        const t = makeTask({ id: 108, conversationId: 108, title: "N-8 Task" });
+        api.handle("tasks.list", () => [t]);
+
+        await page.goto("/");
+        await openTaskDrawer(page, t.id);
+
+        // The empty editor is ready for input (replaces the legacy editor
+        // visibility). The surface has no send button — the
+        // submit affordance is Enter (CopilotChatInput trims empty values).
+        const input = chatTextarea(page);
+        await expect(input).toBeEnabled({ timeout: 10_000 });
+
+        await input.click();
+        await page.keyboard.press("Enter");
+
+        // Empty submit attempts never reach the agent — zero /run requests.
+        await expect.poll(() => agui.runInputs.length).toBe(0);
+    });
+
+    test("N-9: editor stays enabled while AI is running (queue button half retired)", async ({ page, api, agui }) => {
+        const t = makeTask({ id: 109, conversationId: 109, title: "N-9 Task" });
+        api.handle("tasks.list", () => [t]);
+        agui.script = "slow";
+
+        await page.goto("/");
+        await openTaskDrawer(page, t.id);
+        await expect(chatTextarea(page)).toBeEnabled({ timeout: 10_000 });
+
+        await submitChatMessage(page, "N-9 msg");
+
+        // Editor stays enabled while the AI is running — the run stays
+        // isRunning under the slow script (only a pending interrupt disables
+        // the input, CHAT-09). RETIRED HALF (in-file): the legacy
+        // queue-button/send-button swap — the queue UI is removed (Research
+        // Open Question 5; UI-SPEC "no queue affordance" — the queue
+        // affordance only existed in the dead ConversationInput).
+        const input = chatTextarea(page);
+        await expect(page.locator('[data-testid="stop-btn"]')).toBeVisible({ timeout: 5_000 });
+        await expect(input).toBeEnabled();
+
+        // Stop ends the run; the editor remains enabled for the next message.
+        await page.locator('[data-testid="stop-btn"]').click();
+        await expect(page.locator('[data-testid="chat-stopped"]')).toBeVisible({ timeout: 10_000 });
+        await expect(input).toBeEnabled();
     });
 });
 
 // ─── Suite O — persistence and multi-turn ordering ───────────────────────────
 
 test.describe("O — persistence and multi-turn ordering", () => {
-    test("O-9: messages survive drawer close and reopen", async ({ page, api, ws, task }) => {
-        const msgs = [
-            makeUserMessage(task.id, "first"),
-            makeAssistantMessage(task.id, "first reply"),
-        ];
-        api.handle("conversations.getMessages", () => ({ messages: msgs, hasMore: false }));
+    test("O-9: messages survive drawer close and reopen", async ({ page, api, agui }) => {
+        const t = makeTask({ id: 110, conversationId: 110, title: "O-9 Task" });
+        api.handle("tasks.list", () => [t]);
+        agui.registerThread(String(t.conversationId));
 
+        const connectRequests = collectConnectRequests(page);
         await page.goto("/");
-        await openTaskDrawer(page, task.id);
-        await expect(page.locator(".msg--assistant")).toHaveCount(1);
+        await openTaskDrawer(page, t.id);
 
-        // Close drawer
+        const chat = page.locator('[data-testid="copilot-chat-view"]');
+        // Connect replay renders the MESSAGES_SNAPSHOT assistant message.
+        await expect(chat).toContainText("hello", { timeout: 10_000 });
+
+        // Close drawer, reopen — the prior assistant text must render again
+        // via the /connect replay (S-2 pattern).
         await page.keyboard.press("Escape");
         await expect(page.locator(".task-detail")).not.toBeVisible({ timeout: 3_000 });
 
-        // Reopen
-        await openTaskDrawer(page, task.id);
-        await expect(page.locator(".msg--assistant")).toHaveCount(1);
+        await openTaskDrawer(page, t.id);
+        await expect(chat).toContainText("hello", { timeout: 10_000 });
+
+        // The second open triggered a fresh POST /agent/default/connect for
+        // the task's threadId (the history replay chain).
+        expect(connectRequests.length).toBeGreaterThanOrEqual(2);
+        expect(connectRequests).toContain(String(t.conversationId));
     });
 
-    test("O-10: two round-trips produce 4 messages in correct order", async ({ page, api, ws, task }) => {
-        const msgs = [
-            makeUserMessage(task.id, "Round 1"),
-            makeAssistantMessage(task.id, "Reply 1"),
-            makeUserMessage(task.id, "Round 2"),
-            makeAssistantMessage(task.id, "Reply 2"),
-        ];
-        api.handle("conversations.getMessages", () => ({ messages: msgs, hasMore: false }));
+    test("O-10: two round-trips produce 4 messages in correct order", async ({ page, api, agui }) => {
+        const t = makeTask({ id: 111, conversationId: 111, title: "O-10 Task" });
+        api.handle("tasks.list", () => [t]);
+        // Ordered multi-message history replay (registerHistory knob): the
+        // connect MESSAGES_SNAPSHOT carries the alternating user/assistant
+        // history verbatim, order preserved.
+        agui.registerHistory(String(t.conversationId), [
+            { id: "u1", role: "user", content: "Round 1" },
+            { id: "a1", role: "assistant", content: "Reply 1" },
+            { id: "u2", role: "user", content: "Round 2" },
+            { id: "a2", role: "assistant", content: "Reply 2" },
+        ]);
 
         await page.goto("/");
-        await openTaskDrawer(page, task.id);
+        await openTaskDrawer(page, t.id);
 
-        await expect(page.locator(".msg--user")).toHaveCount(2);
-        await expect(page.locator(".msg--assistant")).toHaveCount(2);
+        const chat = page.locator('[data-testid="copilot-chat-view"]');
+        const userMsgs = chat.locator('[data-testid="copilot-user-message"]');
+        const assistantMsgs = chat.locator('[data-testid="copilot-assistant-message"]');
+        await expect(userMsgs).toHaveCount(2, { timeout: 10_000 });
+        await expect(assistantMsgs).toHaveCount(2);
 
-        // Order: user → assistant → user → assistant
-        const allMsgs = page.locator(".conversation-inner .msg");
-        await expect(allMsgs.nth(0)).toHaveClass(/msg--user/);
-        await expect(allMsgs.nth(1)).toHaveClass(/msg--assistant/);
-        await expect(allMsgs.nth(2)).toHaveClass(/msg--user/);
-        await expect(allMsgs.nth(3)).toHaveClass(/msg--assistant/);
+        // Order: user → assistant → user → assistant.
+        await expect(userMsgs.nth(0)).toContainText("Round 1");
+        await expect(assistantMsgs.nth(0)).toContainText("Reply 1");
+        await expect(userMsgs.nth(1)).toContainText("Round 2");
+        await expect(assistantMsgs.nth(1)).toContainText("Reply 2");
     });
 
-    test("O-11: no duplicate messages after drawer reopen", async ({ page, api, ws, task }) => {
-        let callCount = 0;
-        const msgs = [makeAssistantMessage(task.id, "only one")];
-        api.handle("conversations.getMessages", () => {
-            callCount++;
-            return { messages: msgs, hasMore: false };
-        });
+    test("O-11: no duplicate messages after drawer reopen", async ({ page, api, agui }) => {
+        const t = makeTask({ id: 112, conversationId: 112, title: "O-11 Task" });
+        api.handle("tasks.list", () => [t]);
+        agui.registerThread(String(t.conversationId));
 
         await page.goto("/");
-        await openTaskDrawer(page, task.id);
-        await expect(page.locator(".msg--assistant")).toHaveCount(1);
+        await openTaskDrawer(page, t.id);
+
+        const chat = page.locator('[data-testid="copilot-chat-view"]');
+        await expect(chat.locator('[data-testid="copilot-assistant-message"]')).toHaveCount(1, { timeout: 10_000 });
 
         await page.keyboard.press("Escape");
-        await openTaskDrawer(page, task.id);
+        await expect(page.locator(".task-detail")).not.toBeVisible({ timeout: 3_000 });
+        await openTaskDrawer(page, t.id);
 
-        // Still exactly 1 assistant message — no duplicates
-        await expect(page.locator(".msg--assistant")).toHaveCount(1);
+        // Still exactly 1 assistant message — no duplicates on reopen.
+        await expect(chat.locator('[data-testid="copilot-assistant-message"]')).toHaveCount(1, { timeout: 10_000 });
     });
 });
