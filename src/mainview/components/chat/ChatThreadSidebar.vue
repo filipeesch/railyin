@@ -5,15 +5,30 @@
 
     <div class="chat-sidebar__header">
       <span class="chat-sidebar__title">Chat Sessions</span>
-      <Button
-        icon="pi pi-plus"
-        text
-        rounded
-        size="small"
-        aria-label="New chat session"
-        data-testid="thread-new"
-        @click="createNewSession"
-      />
+      <div class="chat-sidebar__header-actions">
+        <!-- IN-02: in-sidebar close affordance — BoardView binds @close to
+             close the panel (previously a dead listener; the only close path
+             was the header toolbar toggle). -->
+        <Button
+          icon="pi pi-times"
+          text
+          rounded
+          size="small"
+          severity="secondary"
+          aria-label="Close chat sidebar"
+          data-testid="thread-close"
+          @click="emit('close')"
+        />
+        <Button
+          icon="pi pi-plus"
+          text
+          rounded
+          size="small"
+          aria-label="New chat session"
+          data-testid="thread-new"
+          @click="createNewSession"
+        />
+      </div>
     </div>
 
     <!-- Legacy Import action (IMPR-01): spinner while running, completion
@@ -124,6 +139,10 @@ import { readStorage, writeStorage } from "../../utils/storage";
 const chatStore = useChatStore();
 const workspaceStore = useWorkspaceStore();
 const toast = useToast();
+
+// IN-02: emitted by the header close button — BoardView binds @close to flip
+// chatSidebarOpen (the only previous close path was the toolbar toggle).
+const emit = defineEmits<{ close: [] }>();
 
 // ─── Sidebar width (resizable, persisted) ─────────────────────────────────────
 
@@ -336,6 +355,12 @@ async function runLegacyImport() {
   letter-spacing: 0.05em;
   color: var(--p-text-muted-color);
   flex-shrink: 0;
+}
+
+.chat-sidebar__header-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
 }
 
 .chat-sidebar__list {
