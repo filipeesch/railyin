@@ -1032,6 +1032,10 @@ describe("resume branch (D-05/D-07 — 03-02)", () => {
     expect(executeChatTurnCalls).toBe(0);
     expect(events[events.length - 1].type).toBe(EventType.RUN_ERROR);
     expect(events[events.length - 1]).toMatchObject({ code: "INVALID_PAYLOAD" });
+    // CR-01: the rejection precedes RUN_STARTED — exactly ONE RUN_STARTED for
+    // this run (verifyEvents rejects a second RUN_STARTED while a run is
+    // active, so a spec-compliant client must see the RUN_ERROR, not a throw).
+    expect(events.filter((e) => e.type === EventType.RUN_STARTED)).toHaveLength(1);
     // Delivery never started — the entry stays open so the client can retry
     // with a proper payload (Pitfall 8: clear only after delivery starts).
     expect(interruptRegistry.hasOpen(threadId)).toBe(true);

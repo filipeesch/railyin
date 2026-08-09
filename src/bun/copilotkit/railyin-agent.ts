@@ -266,13 +266,14 @@ export class RailyinAgent extends AbstractAgent {
         return subject.asObservable() as unknown as ReturnType<AbstractAgent["run"]>;
       }
 
-      subject.next({ type: EventType.RUN_STARTED, threadId, runId, input });
       const entry = input.resume.find((r) => r.interruptId === open.interruptId)!;
 
       // A4: a cancelled resume is a dismissal — clear the registry, close the
       // execution row as 'cancelled', and complete with a plain RUN_FINISHED.
-      // NO engine call: the rejection/dismissal delivers nothing (v1).
+      // NO engine call: the rejection/dismissal delivers nothing (v1). Emits
+      // its own single RUN_STARTED (the run starts, then finishes plainly).
       if (entry.status === "cancelled") {
+        subject.next({ type: EventType.RUN_STARTED, threadId, runId, input });
         interruptRegistry.clear(threadId);
         // The durable executionId (registry attach can race the resume — see
         // resolveDecisionExecutionId): finalize the waiting_user row so the
@@ -290,10 +291,20 @@ export class RailyinAgent extends AbstractAgent {
         return subject.asObservable() as unknown as ReturnType<AbstractAgent["run"]>;
       }
 
+      // CR-01: validate the resolved payload and resolve the workspace key
+      // BEFORE the RUN_STARTED emission — every rejection path must precede
+      // the first event so a spec-compliant client sees EXACTLY ONE
+      // RUN_STARTED per run (verifyEvents rejects a second RUN_STARTED while
+      // a run is active: the old order emitted RUN_STARTED here, then
+      // emitRunError emitted a second one, and the client errored before the
+      // INVALID_PAYLOAD RUN_ERROR surfaced). Mirrors the main path's
+      // pre-RUN_STARTED workspace-key validation (IN-03 shape).
+      //
       // Resolved: translate through the existing decision-submission path.
       // translateResumeToSubmission delegates to buildDecisionSubmission — the
       // Q/A pairs and hidden record_decision instructions are NEVER
-      // re-formatted here (Don't Hand-Roll row 3).
+      // re-formatted here (Don't Hand-Roll row 3). Malformed client payloads
+      // (WR-05) yield null → the INVALID_PAYLOAD rejection.
       const sub = translateResumeToSubmission(entry.payload);
       if (sub == null) {
         // Planner's discretion (recorded in the plan objective): a resolved
@@ -302,6 +313,20 @@ export class RailyinAgent extends AbstractAgent {
         emitRunError("Resume payload missing decision answers", "INVALID_PAYLOAD");
         return subject.asObservable() as unknown as ReturnType<AbstractAgent["run"]>;
       }
+
+      // TDZ guard: the main-path workspaceKey const (below, after the advisory
+      // lock) is out of scope at this insertion point — resolve our own copy.
+      // Resolved BEFORE RUN_STARTED so the THREAD_NOT_FOUND rejection cannot
+      // emit a second RUN_STARTED (CR-01).
+      const resumeWorkspaceKey = resolveWorkspaceKey(this.db, conversationId);
+      if (resumeWorkspaceKey == null) {
+        emitRunError(`Unknown thread: ${threadId}`, "THREAD_NOT_FOUND");
+        return subject.asObservable() as unknown as ReturnType<AbstractAgent["run"]>;
+      }
+
+      // RUN_STARTED FIRST, WITH input — the runner only patches when input is
+      // absent, so the persisted user turn matches the wire (State of the Art).
+      subject.next({ type: EventType.RUN_STARTED, threadId, runId, input });
 
       // Pitfall 2: finalize the OLD orphaned 'waiting_user' execution row
       // BEFORE delivery — stream-processor.ts:494-506 is its only writer and no
@@ -314,14 +339,6 @@ export class RailyinAgent extends AbstractAgent {
           "UPDATE executions SET status = 'completed', finished_at = datetime('now') WHERE id = ? AND status = 'waiting_user'",
           [finalizeId],
         );
-      }
-
-      // TDZ guard: the main-path workspaceKey const (below, after the advisory
-      // lock) is out of scope at this insertion point — resolve our own copy.
-      const resumeWorkspaceKey = resolveWorkspaceKey(this.db, conversationId);
-      if (resumeWorkspaceKey == null) {
-        emitRunError(`Unknown thread: ${threadId}`, "THREAD_NOT_FOUND");
-        return subject.asObservable() as unknown as ReturnType<AbstractAgent["run"]>;
       }
 
       // The SAME tap wiring as the main path: translate every engine event and
