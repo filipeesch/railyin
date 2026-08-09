@@ -206,6 +206,13 @@ export class Orchestrator implements ExecutionCoordinator {
       db.run("UPDATE executions SET status = 'cancelled', finished_at = datetime('now') WHERE id = ?", [executionId]);
       if (conversationId) {
         db.run("UPDATE chat_sessions SET status = 'idle' WHERE conversation_id = ?", [conversationId]);
+        // WR-05: the session-status push must fire here too — consume()'s
+        // abort path normally emits it, but in the window where consume()
+        // never observes the abort (executor failure between the row insert
+        // and runNonNative, or an engine whose generator ends without
+        // yielding — see WR-02) this direct write is the only status change
+        // and the sidebar would stay stuck on 'running' (Pitfall-2 gap).
+        this.sessionStatusCb(conversationId);
       }
       this.streamProcessor.emitDone(null, conversationId, executionId);
     }
