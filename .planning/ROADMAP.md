@@ -35,7 +35,7 @@ Railyin's hand-rolled chat stack (~8.2k lines: custom `StreamEvent` protocol, du
   4. Exact versions of `@ag-ui/core`, `@ag-ui/client`, `@copilotkit/runtime`, `@copilotkit/vue` are pinned; the fetch-native vs hono handler decision is recorded with evidence in PROJECT.md
   5. Mock runtime fixtures (mock-runtime/mock-agui) are validated against the real server and usable as the E2E foundation
 
-**Plans**: 2/3 plans executed
+**Plans**: 3/3 plans executed
 Plans:
 **Wave 1**
 
@@ -47,7 +47,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 01-03-PLAN.md — Build + byte-diff-validate the MockAgui fixture foundation and record HOST-03 evidence in PROJECT.md (HOST-01, HOST-03)
+- [x] 01-03-PLAN.md — Build + byte-diff-validate the MockAgui fixture foundation and record HOST-03 evidence in PROJECT.md (HOST-01, HOST-03)
 
 ### Phase 2: AG-UI Bridge & RailyinAgentRunner
 
@@ -164,7 +164,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. CopilotRuntime Hosting & Thread APIs (Spike) | 2/3 | In Progress|  |
+| 1. CopilotRuntime Hosting & Thread APIs (Spike) | 3/3 | In Progress|  |
 | 2. AG-UI Bridge & RailyinAgentRunner | 0/TBD | Not started | - |
 | 3. Decision Interrupts & Resume | 0/TBD | Not started | - |
 | 4. JSONL Persistence & Legacy Import | 0/TBD | Not started | - |
