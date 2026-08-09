@@ -24,10 +24,12 @@ const ANSWERS_CLOSE = "</decision_answers>";
  * turn — escaping the angle brackets prevents a crafted answer from closing
  * the <decision_answers> container early and injecting instructions that sit
  * next to (or override) the hidden one. The escaped form reads as literal
- * text to the engine.
+ * text to the engine. String() coercion preserves the pre-sanitizer
+ * template-literal behavior for non-string values from direct callers (the
+ * resume path validates shapes in translateResumeToSubmission — WR-05).
  */
 function sanitizeDecisionText(text: string): string {
-  return text.replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  return String(text).replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
 export function buildDecisionSubmission(answers: DecisionAnswer[], generalNotes?: string, recordAsDecisions = true): DecisionSubmission {
