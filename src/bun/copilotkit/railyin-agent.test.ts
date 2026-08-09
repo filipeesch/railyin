@@ -90,7 +90,7 @@ describe("RailyinAgent", () => {
     const types = events.map((e) => e.type);
     expect(types[0]).toBe(EventType.RUN_STARTED);
     expect(types[types.length - 1]).toBe(EventType.RUN_FINISHED);
-    expect(types).toEqual([
+    expect(types as unknown[]).toEqual([
       EventType.RUN_STARTED,
       "TEXT_MESSAGE_START",
       "TEXT_MESSAGE_CONTENT",
@@ -105,7 +105,7 @@ describe("RailyinAgent", () => {
       EventType.RUN_FINISHED,
     ]);
 
-    const started = events[0] as { threadId: string; runId: string; input: RunAgentInput };
+    const started = events[0] as unknown as { threadId: string; runId: string; input: RunAgentInput };
     expect(started.threadId).toBe(String(conversationId));
     expect(started.runId).toBe("run-test-1");
     // RUN_STARTED carries the input so the runner's persisted user turn matches the wire.
@@ -170,7 +170,7 @@ describe("RailyinAgent", () => {
         return { message: { id: 1 } as never, executionId: 1 };
       },
     };
-    (agent as unknown as { orchestrator: ExecutionCoordinator }).orchestrator = fakeCoordinator;
+    agent.orchestrator = fakeCoordinator;
 
     const events = await collectRun(agent, runInput("999999", "hello"));
     expect(executeChatTurnCalls).toBe(0);
@@ -189,7 +189,7 @@ describe("RailyinAgent", () => {
         return { message: { id: 1 } as never, executionId: 1 };
       },
     };
-    (agent as unknown as { orchestrator: ExecutionCoordinator }).orchestrator = fakeCoordinator;
+    agent.orchestrator = fakeCoordinator;
 
     const events = await collectRun(agent, runInput("../../etc/passwd", "hello"));
     expect(executeChatTurnCalls).toBe(0);

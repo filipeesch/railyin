@@ -259,16 +259,29 @@ if (copilotProbeEnabled) {
   const probeModule = await import("../../e2e/api/copilotkit/probe-agent.ts");
   scriptedAgent = probeModule.scriptedAgent;
 }
+// D-12: when the probe is disabled AND the orchestrator exists (config loaded
+// cleanly), register RailyinAgent — the real AG-UI bridge. The probe gate is
+// checked FIRST (Pitfall 9): `bun run prod` never loads the e2e probe module.
+// The runner stays the base InMemoryAgentRunner in this plan — RailyinAgentRunner
+// (persistence) swaps in during 02-02.
+let railyinAgent: unknown = null;
+if (!copilotProbeEnabled && orchestrator) {
+  const { RailyinAgent } = await import("./copilotkit/railyin-agent.ts");
+  railyinAgent = new RailyinAgent(db, orchestrator);
+}
 // The runtime's AgentsConfig references its NESTED @ag-ui/client AbstractAgent
-// (nested rxjs@7.8.1), while the probe agent extends the top-level copy
+// (nested rxjs@7.8.1), while the probe/railyin agent extends the top-level copy
 // (rxjs@7.8.2). Structurally identical at runtime — the probe tests prove the
 // round-trip end-to-end — but rxjs's Subscriber is invariant, so the types do
 // not unify. The cast bridges only that type-level gap; the agents map stays
-// empty in `bun run prod` (env gate above, T-1-03 mitigation).
+// empty in `bun run prod` when the orchestrator failed to construct (config
+// error — the runtime mount is inert without an execution surface).
 type CopilotAgents = CopilotRuntimeOptions["agents"];
 const copilotAgents = (copilotProbeEnabled && scriptedAgent
   ? { default: scriptedAgent }
-  : {}) as unknown as CopilotAgents;
+  : railyinAgent
+    ? { default: railyinAgent }
+    : {}) as unknown as CopilotAgents;
 const copilotRuntime = new CopilotRuntime({ agents: copilotAgents });
 const copilotHandler = createCopilotRuntimeHandler({
   runtime: copilotRuntime,
