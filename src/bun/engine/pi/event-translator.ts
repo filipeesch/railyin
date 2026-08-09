@@ -4,7 +4,6 @@
 
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import type { EngineEvent } from "../types.ts";
-import type { FileDiffPayload } from "../../../shared/rpc-types.ts";
 import { buildPiToolDisplay } from "./tools/display.ts";
 
 /**
@@ -43,15 +42,12 @@ export function translateEvent(event: AgentSessionEvent, worktreePath?: string):
     case "tool_execution_end": {
       const result = event.result as {
         content?: Array<{ type: string; text?: string }>;
-        details?: { writtenFiles?: FileDiffPayload[] };
       } | undefined;
 
       const text = result?.content
         ?.filter((c) => c.type === "text")
         .map((c) => c.text ?? "")
         .join("") ?? (event.isError ? "Tool execution failed" : "");
-
-      const writtenFiles = result?.details?.writtenFiles;
 
       return [
         {
@@ -60,7 +56,6 @@ export function translateEvent(event: AgentSessionEvent, worktreePath?: string):
           result: text,
           callId: event.toolCallId,
           isError: event.isError,
-          ...(writtenFiles ? { writtenFiles } : {}),
         },
       ];
     }

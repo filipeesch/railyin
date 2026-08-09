@@ -78,7 +78,6 @@ export function buildCommonTools(
           content: [{ type: "text", text }],
           details: {
             toolName: def.name,
-            ...(result.type === "result" && result.writtenFiles ? { writtenFiles: result.writtenFiles } : {}),
           },
         };
       },

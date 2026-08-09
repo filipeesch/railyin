@@ -386,7 +386,7 @@ export function buildCommonToolDisplay(name: string, args: Record<string, unknow
  * Returns a plain JSON/text string suitable for sending back to the LLM.
  */
 export type ToolExecutionResult =
-  | { type: "result"; text: string; writtenFiles?: import("../../shared/rpc-types.ts").FileDiffPayload[]; beforeFiles?: Record<string, string | null> }
+  | { type: "result"; text: string; beforeFiles?: Record<string, string | null> }
   | { type: "suspend"; text: string; payload: string };
 
 /**

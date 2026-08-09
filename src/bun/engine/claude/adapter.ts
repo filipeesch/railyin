@@ -1,13 +1,9 @@
 import { createHash } from "crypto";
-import type { CommonToolContext, EngineEvent, EngineResumeInput } from "../types.ts";
+import type { CommonToolContext, EngineEvent } from "../types.ts";
 import { buildClaudeToolServer } from "./tools.ts";
 import { translateClaudeMessage, type ToolMetadata } from "./events.ts";
-import type { FileStateCache } from "./file-state-cache.ts";
-import { ShellApprovalRepository, getUnapprovedShellBinaries } from "../../db/repositories/shell-approval-repository.ts";
-import type { ShellApprovalScope } from "../../db/repositories/shell-approval-repository.ts";
 import { LeaseRegistry } from "../lease-registry.ts";
 import type { EngineLeaseState, EngineShutdownOptions } from "../types.ts";
-import { BashPermissionGate } from "./bash-permission-gate.ts";
 
 export interface ClaudeSdkModelInfo {
   value: string;
@@ -19,20 +15,9 @@ export interface ClaudeSdkModelInfo {
   defaultEffortLevel?: string;
 }
 
-export interface ClaudeResumeRequest {
-  type: "ask_user";
-  payload: string;
-}
-
-export interface ClaudeShellApprovalRequest {
-  type: "shell_approval";
-  command: string;
-}
-
 export interface ClaudeRunConfig {
   executionId: number;
   taskId: number | null;
-  shellScope: ShellApprovalScope;
   prompt: string;
   workingDirectory: string;
   model?: string;
@@ -42,11 +27,7 @@ export interface ClaudeRunConfig {
   signal?: AbortSignal;
   sessionId: string;
   commonToolContext: CommonToolContext;
-  waitForResume: (request: ClaudeResumeRequest | ClaudeShellApprovalRequest) => Promise<EngineResumeInput>;
-  onRawMessage?: (message: Record<string, unknown>) => void;
   toolMetaByCallId?: Map<string, ToolMetadata>;
-  /** Captures file content before write/edit tools for accurate per-call diffs. */
-  fileStateCache?: FileStateCache;
   /** Model parameter overrides (e.g. effort level) from the conversation's model_params. */
   modelParams?: import("../../../shared/rpc-types.ts").ModelParamValue[];
 }
@@ -128,45 +109,10 @@ async function loadZodRuntime(): Promise<ZodRuntime> {
   return await import(moduleName) as unknown as ZodRuntime;
 }
 
-function buildAskUserPayload(message: string, requestedSchema?: Record<string, unknown>): string {
-  const properties = requestedSchema && typeof requestedSchema === "object"
-    ? (requestedSchema.properties as Record<string, Record<string, unknown>> | undefined)
-    : undefined;
-
-  const firstProp = properties ? Object.values(properties)[0] : undefined;
-  const options = Array.isArray(firstProp?.enum)
-    ? (firstProp!.enum as unknown[]).map((value) => ({ label: String(value) }))
-    : [];
-
-  return JSON.stringify({
-    questions: [{
-      question: message,
-      selection_mode: "single",
-      options,
-    }],
-  });
-}
-
 function normalizeClaudeModel(model?: string): string | undefined {
   if (!model) return undefined;
   return model.startsWith("claude/") ? model.slice("claude/".length) : model;
 }
-
-export function buildAllowPermissionResult(
-  toolInput: Record<string, unknown>,
-  _suggestions?: unknown,
-): Record<string, unknown> {
-  return {
-    hookSpecificOutput: {
-      hookEventName: "PreToolUse",
-      permissionDecision: "allow",
-      updatedInput: toolInput,
-    },
-  };
-}
-
-export { getUnapprovedShellBinaries };
-
 
 export function claudeSessionIdForTask(taskId: number): string {
   const hash = createHash("sha1").update(`railyin-claude-task-${taskId}`).digest("hex");
@@ -197,13 +143,6 @@ class DefaultClaudeSdkAdapter implements ClaudeSdkAdapter {
   private readonly executionToSession = new Map<number, string>();
   private readonly leaseExecutions = new Map<string, Set<number>>();
   private _modelsFetch: Promise<ClaudeSdkModelInfo[]> | null = null;
-  private readonly shellApprovalRepo: ShellApprovalRepository;
-  private readonly bashGate: BashPermissionGate;
-
-  constructor(shellApprovalRepo?: ShellApprovalRepository, bashGate?: BashPermissionGate) {
-    this.shellApprovalRepo = shellApprovalRepo ?? new ShellApprovalRepository();
-    this.bashGate = bashGate ?? new BashPermissionGate(this.shellApprovalRepo);
-  }
 
   private readonly leases = new LeaseRegistry(
     "claude",
@@ -270,21 +209,6 @@ class DefaultClaudeSdkAdapter implements ClaudeSdkAdapter {
 
         const prompt = taskContextXml ? `${taskContextXml}\n\n${config.prompt}` : config.prompt;
 
-        // Log the outbound query params so we can verify what Claude actually receives
-        // (prompt + systemInstructions/appendSystemPrompt) — useful for diagnosing
-        // context-loss regressions where task title/description goes missing.
-        config.onRawMessage?.({
-          type: "outbound",
-          subtype: "query_params",
-          prompt,
-          systemInstructions: config.systemInstructions ?? null,
-          taskContext: config.taskContext ?? null,
-          sessionId: config.sessionId,
-          hasExistingSession: !!hasExistingSession,
-          workingDirectory: config.workingDirectory,
-          model: config.model ?? null,
-        });
-
         const effortParam = config.modelParams?.find((p) => p.id === "effort")?.value;
 
         // Captured after sdk.query() below; used in SubagentStop hook to reconnect the MCP
@@ -338,18 +262,6 @@ class DefaultClaudeSdkAdapter implements ClaudeSdkAdapter {
             // Wrong format causes iX.initialize() to crash on fn.map() (function ≠ array),
             // which is swallowed by .catch(()=>{}) — preventing sdkMcpServers registration.
             hooks: {
-              PreCompact: [{
-                hooks: [async (_input: unknown) => {
-                  emit({ type: "compaction_start" });
-                  return {};
-                }],
-              }],
-              PostCompact: [{
-                hooks: [async (_input: unknown) => {
-                  emit({ type: "compaction_done" });
-                  return {};
-                }],
-              }],
               PostToolUse: [{
                 hooks: [async () => {
                   // If the handler set a suspend payload, emit the event and stop the loop.
@@ -359,29 +271,6 @@ class DefaultClaudeSdkAdapter implements ClaudeSdkAdapter {
                     return { continue: false };
                   }
                   return {};
-                }],
-              }],
-              // PreToolUse fires for both the parent agent and all subagents.
-              // It is the single gate for Bash calls — bypassPermissions mode means the SDK
-              // does not set up an internal permission channel, so this hook is authoritative.
-              PreToolUse: [{
-                hooks: [async (hookInput: unknown) => {
-                  const input = hookInput as { tool_name?: string; tool_input?: Record<string, unknown> };
-                  const toolName = input.tool_name ?? "";
-                  const toolInput = input.tool_input ?? {};
-
-                  return this.bashGate.evaluate(
-                    toolName,
-                    toolInput,
-                    config.shellScope,
-                    async (request) => {
-                      emit({ type: "shell_approval", command: request.command, executionId: config.executionId });
-                      this.leases.touch(config.sessionId, "waiting_user");
-                      const result = await config.waitForResume(request);
-                      this.leases.touch(config.sessionId, "running");
-                      return result;
-                    },
-                  );
                 }],
               }],
               SubagentStart: [{
@@ -420,19 +309,10 @@ class DefaultClaudeSdkAdapter implements ClaudeSdkAdapter {
             mcpServers: {
               railyin: toolServer,
             },
-            onElicitation: async (request: { message: string; requestedSchema?: Record<string, unknown> }) => {
-              const payload = buildAskUserPayload(request.message, request.requestedSchema);
-              emit({ type: "ask_user", payload });
-              this.leases.touch(config.sessionId, "waiting_user");
-              const resumeInput = await config.waitForResume({ type: "ask_user", payload });
-              this.leases.touch(config.sessionId, "running");
-              if (resumeInput.type !== "ask_user") {
-                return { action: "decline" };
-              }
-              return {
-                action: "accept",
-                content: { response: resumeInput.content },
-              };
+            onElicitation: async () => {
+              // ask_user was trimmed in the EngineEvent union — elicitation requests
+              // are deterministically declined (decision_request is the only HITL channel).
+              return { action: "decline" };
             },
           },
         });
@@ -453,7 +333,6 @@ class DefaultClaudeSdkAdapter implements ClaudeSdkAdapter {
 
         for await (const message of query) {
           this.leases.touch(config.sessionId, "running");
-          config.onRawMessage?.(message as Record<string, unknown>);
           // DOCS: The first message from the SDK is always type="system" subtype="init".
           // It includes mcp_servers[].status for each configured server ("connected" | "failed").
           // A "failed" status means the MCP server process didn't start or the in-process
@@ -462,7 +341,6 @@ class DefaultClaudeSdkAdapter implements ClaudeSdkAdapter {
           for (const event of translateClaudeMessage(message as { type: string }, {
             toolMetaByCallId: config.toolMetaByCallId,
             worktreePath: config.workingDirectory,
-            fileStateCache: config.fileStateCache,
           })) {
             emit(event);
           }
@@ -649,6 +527,6 @@ class DefaultClaudeSdkAdapter implements ClaudeSdkAdapter {
   }
 }
 
-export function createDefaultClaudeSdkAdapter(shellApprovalRepo?: ShellApprovalRepository): ClaudeSdkAdapter {
-  return new DefaultClaudeSdkAdapter(shellApprovalRepo);
+export function createDefaultClaudeSdkAdapter(): ClaudeSdkAdapter {
+  return new DefaultClaudeSdkAdapter();
 }

@@ -3,7 +3,6 @@ import type { ClaudeRunConfig, ClaudeSdkAdapter } from "./adapter.ts";
 import type { ModelSettingAxis } from "../../../shared/rpc-types.ts";
 import { claudeSessionIdForConversation, claudeSessionIdForTask, createDefaultClaudeSdkAdapter } from "./adapter.ts";
 import type { ToolMetadata } from "./events.ts";
-import { DefaultFileStateCache } from "./file-state-cache.ts";
 import { taskLspRegistry } from "../../lsp/task-registry.ts";
 import { getConfig } from "../../config/index.ts";
 import { readdirSync, existsSync, readFileSync } from "fs";
@@ -12,7 +11,6 @@ import { TodoRepository } from "../../db/todos.ts";
 import { DecisionRepository } from "../../db/repositories/decision-repository.ts";
 import { NoteRepository } from "../../db/repositories/note-repository.ts";
 import { getDefaultWorkspaceKey } from "../../workspace-context.ts";
-import type { ShellApprovalScope } from "../../db/repositories/shell-approval-repository.ts";
 
 
 export class ClaudeEngine implements ExecutionEngine {
@@ -41,8 +39,6 @@ export class ClaudeEngine implements ExecutionEngine {
 
     // Create a map to track tool metadata (tool_use blocks) for pairing with tool_result blocks
     const toolMetaByCallId = new Map<string, ToolMetadata>();
-    // Create a cache to capture file content before write/edit tools for accurate diffs
-    const fileStateCache = new DefaultFileStateCache();
 
     const config = getConfig();
     const lspManager = taskLspRegistry.getManager(
@@ -51,14 +47,9 @@ export class ClaudeEngine implements ExecutionEngine {
       workingDirectory,
     );
 
-    const shellScope: ShellApprovalScope = taskId != null
-      ? { kind: "task", taskId }
-      : { kind: "chat", conversationId: params.conversationId };
-
     const runConfig: ClaudeRunConfig = {
       executionId,
       taskId,
-      shellScope,
       prompt,
       workingDirectory,
       model: model || this.defaultModel,
@@ -92,30 +83,17 @@ export class ClaudeEngine implements ExecutionEngine {
           mcpEnabledTools: params.enabledMcpTools,
         },
       },
-      waitForResume: (request) => this.waitForResume(executionId, request, signal),
-      onRawMessage: (message) => {
-        params.onRawModelMessage?.({
-          engine: "claude",
-          sessionId: claudeSessionIdForConversation(taskId, params.conversationId),
-          direction: message.type === "outbound" ? "outbound" : "inbound",
-          eventType: String(message.type ?? "unknown"),
-          eventSubtype: typeof message.subtype === "string" ? message.subtype : undefined,
-          payload: message,
-        });
-      },
       toolMetaByCallId,
-      fileStateCache,
       modelParams: params.modelParams,
     };
 
     // Wrap the adapter execution to ensure cleanup happens
-    return this.createManagedExecution(runConfig, toolMetaByCallId, fileStateCache);
+    return this.createManagedExecution(runConfig, toolMetaByCallId);
   }
 
   private async *createManagedExecution(
     config: ClaudeRunConfig,
     toolMetaByCallId: Map<string, any>,
-    fileStateCache: DefaultFileStateCache,
   ): AsyncGenerator<EngineEvent> {
     try {
       for await (const event of this.sdkAdapter.run(config)) {
@@ -124,8 +102,6 @@ export class ClaudeEngine implements ExecutionEngine {
     } finally {
       // Clean up tool metadata map on execution end
       toolMetaByCallId.clear();
-      // Clear file state cache to release captured before-content
-      fileStateCache.clear();
     }
   }
 

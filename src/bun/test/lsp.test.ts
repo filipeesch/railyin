@@ -580,8 +580,9 @@ describe("LSP split tools", () => {
 
     expect(result.type).toBe("result");
     if (result.type !== "result") return;
-    expect(result.writtenFiles).toBeDefined();
-    expect(result.writtenFiles!.length).toBeGreaterThan(0);
+    // writtenFiles was trimmed in 07-02 (renderer derives diffs from tool args).
+    expect(result).not.toHaveProperty("writtenFiles");
+    // beforeFiles still flows for the undo stack.
     expect(result.beforeFiles).toBeDefined();
     expect(typeof result.beforeFiles![file]).toBe("string");
 

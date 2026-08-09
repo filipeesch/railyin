@@ -1,24 +1,24 @@
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, writeFileSync, rmSync, readFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { DefaultFileStateCache } from "../engine/claude/file-state-cache.ts";
 import { translateClaudeMessage } from "../engine/claude/events.ts";
 
 /**
- * FS integration tests: validates the full capture → disk-write → translateClaudeMessage path.
+ * Trim-proof tests: the writtenFiles / FileStateCache file-diff machinery was
+ * removed with the EngineEvent trim (07-02). FileChangesRenderer renders diffs
+ * from tool ARGS (buildDiffPayloadsFromArgs) — the EngineEvent tool_result no
+ * longer carries computed diffs.
  *
- * These tests use a real temp directory and the real DefaultFileStateCache.
- * Tool execution is simulated via writeFileSync (no Claude SDK needed).
+ * These tests pin the post-trim contract: write/edit tool_result events carry
+ * result + detailedResult, and NEVER a writtenFiles member.
  */
-describe("Claude file diff integration (CFI)", () => {
+describe("Claude tool_result trim (CFT)", () => {
   let dir: string;
-  let cache: DefaultFileStateCache;
   let toolMetaMap: Map<string, { name: string; arguments?: unknown }>;
 
   beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), "railyn-cfi-"));
-    cache = new DefaultFileStateCache();
+    dir = mkdtempSync(join(tmpdir(), "railyn-cft-"));
     toolMetaMap = new Map();
   });
 
@@ -42,107 +42,29 @@ describe("Claude file diff integration (CFI)", () => {
     };
   }
 
-  it("CFI-1: overwrite existing file → added/removed count only changed lines", () => {
-    const original = "line1\nline2\nline3\n";
-    const modified = "line1\nMODIFIED\nline3\n";
+  it("CFT-1: write tool_result carries result + detailedResult but no writtenFiles", () => {
+    // Simulate a real tool execution on disk (result content only — no diff machinery).
+    writeFileSync(join(dir, "target.txt"), "line1\nMODIFIED\nline3\n");
 
-    // Step 1: capture before-content (simulates tool_use time)
-    writeFileSync(join(dir, "target.txt"), original);
-    cache.capture("call-1", dir, "target.txt");
-
-    // Step 2: simulate tool execution (writes new content to disk)
-    writeFileSync(join(dir, "target.txt"), modified);
-
-    // Step 3: translate the tool_result
-    const message = makeToolResultMessage("call-1", modified, "write");
+    const message = makeToolResultMessage("call-1", "line1\nMODIFIED\nline3\n", "write");
     const events = translateClaudeMessage(message, {
       toolMetaByCallId: toolMetaMap,
-      fileStateCache: cache,
       worktreePath: dir,
     });
 
     expect(events).toHaveLength(1);
     const toolResult = events[0] as any;
     expect(toolResult.type).toBe("tool_result");
-    expect(toolResult.writtenFiles).toHaveLength(1);
-    expect(toolResult.writtenFiles[0].operation).toBe("write_file");
-    expect(toolResult.writtenFiles[0].added).toBe(1);
-    expect(toolResult.writtenFiles[0].removed).toBe(1);
-    expect(toolResult.writtenFiles[0].hunks).toHaveLength(1);
-    expect(toolResult.writtenFiles[0].is_new).toBeUndefined();
+    expect(toolResult.result).toContain("detailedContent");
+    expect(toolResult.detailedResult).toBe("line1\nMODIFIED\nline3\n");
+    // The trimmed field must never be populated.
+    expect(toolResult.writtenFiles).toBeUndefined();
   });
 
-  it("CFI-2: new file creation → is_new: true, all lines added, removed: 0", () => {
-    const newContent = "brand new\nline two\nline three\n";
-
-    // Step 1: capture before-content for non-existent file
-    cache.capture("call-2", dir, "target.txt");
-
-    // Step 2: simulate tool execution (creates the file)
-    writeFileSync(join(dir, "target.txt"), newContent);
-
-    // Step 3: translate
-    const message = makeToolResultMessage("call-2", newContent, "write");
-    const events = translateClaudeMessage(message, {
-      toolMetaByCallId: toolMetaMap,
-      fileStateCache: cache,
-      worktreePath: dir,
-    });
-
-    const toolResult = events[0] as any;
-    expect(toolResult.writtenFiles[0].is_new).toBe(true);
-    expect(toolResult.writtenFiles[0].removed).toBe(0);
-    expect(toolResult.writtenFiles[0].added).toBe(3);
-  });
-
-  it("CFI-3: two sequential writes to same file → each result diffs only its own change", () => {
-    const original = "a\nb\nc\n";
-    const afterFirst = "A\nb\nc\n";
-    const afterSecond = "A\nB\nc\n";
-
-    // First write
-    writeFileSync(join(dir, "target.txt"), original);
-    cache.capture("call-a", dir, "target.txt");
-    writeFileSync(join(dir, "target.txt"), afterFirst);
-
-    const msgA = makeToolResultMessage("call-a", afterFirst, "write");
-    const eventsA = translateClaudeMessage(msgA, {
-      toolMetaByCallId: toolMetaMap,
-      fileStateCache: cache,
-      worktreePath: dir,
-    });
-
-    // Second write (diffs against post-first-write state)
-    cache.capture("call-b", dir, "target.txt");
-    writeFileSync(join(dir, "target.txt"), afterSecond);
-
-    const msgB = makeToolResultMessage("call-b", afterSecond, "write");
-    const eventsB = translateClaudeMessage(msgB, {
-      toolMetaByCallId: toolMetaMap,
-      fileStateCache: cache,
-      worktreePath: dir,
-    });
-
-    // First diff: a → A (1 added, 1 removed)
-    const resultA = eventsA[0] as any;
-    expect(resultA.writtenFiles[0].added).toBe(1);
-    expect(resultA.writtenFiles[0].removed).toBe(1);
-
-    // Second diff: b → B (1 added, 1 removed) — NOT a → A + b → B
-    const resultB = eventsB[0] as any;
-    expect(resultB.writtenFiles[0].added).toBe(1);
-    expect(resultB.writtenFiles[0].removed).toBe(1);
-    // Should NOT include the first change
-    expect(resultB.writtenFiles[0].added).not.toBe(2);
-    expect(resultB.writtenFiles[0].removed).not.toBe(2);
-  });
-
-  it("CFI-4: edit tool → correct hunk diff via cache", () => {
-    const before = "function greet(name: string): string {\n  return `Hello, ${name}`;\n}\n";
-    const after = "function greet(name: string): string {\n  return `Hi, ${name}`;\n}\n";
-
+  it("CFT-2: edit tool_result does not compute diffs from disk state", () => {
+    const before = "function greet() { return 1; }\n";
+    const after = "function greet() { return 2; }\n";
     writeFileSync(join(dir, "target.txt"), before);
-    cache.capture("call-edit", dir, "target.txt");
     writeFileSync(join(dir, "target.txt"), after);
 
     toolMetaMap.set("call-edit", { name: "edit", arguments: { file_path: "target.txt" } });
@@ -160,13 +82,14 @@ describe("Claude file diff integration (CFI)", () => {
 
     const events = translateClaudeMessage(message, {
       toolMetaByCallId: toolMetaMap,
-      fileStateCache: cache,
       worktreePath: dir,
     });
 
     const toolResult = events[0] as any;
-    expect(toolResult.writtenFiles[0].operation).toBe("edit_file");
-    expect(toolResult.writtenFiles[0].added).toBe(1);
-    expect(toolResult.writtenFiles[0].removed).toBe(1);
+    expect(toolResult.detailedResult).toBe(after);
+    expect(toolResult.writtenFiles).toBeUndefined();
+    // No diff field is computed against the pre-edit content.
+    expect(toolResult).not.toHaveProperty("added");
+    expect(toolResult).not.toHaveProperty("removed");
   });
 });

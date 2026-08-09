@@ -34,7 +34,6 @@ export type EngineEvent = (
     display?: ToolCallDisplay;
     detailedResult?: string;
     contentBlocks?: Array<Record<string, unknown>>;
-    writtenFiles?: Array<import("../../shared/rpc-types.ts").FileDiffPayload>;
   }
   | { type: "decision_request"; payload: string /* serialised DecisionRequestPayload JSON */ }
   | { type: "task_updated"; task: import("../../shared/rpc-types.ts").Task }

@@ -7,23 +7,18 @@ import { McpClientRegistry } from "../mcp/registry.ts";
 import { FakeMcpClient } from "./support/fake-mcp-client.ts";
 import {
   MockClaudeSdkAdapter,
-  askUser,
   callTool,
   done,
   fatal,
   reasoning,
-  shellApproval,
   subagentStart,
   subagentStop,
   token,
   toolResult,
   toolStart,
-  usage,
   waitForAbort,
 } from "./support/claude-sdk-mock.ts";
 import {
-  runAskUserResumeScenario,
-  runAskUserScenario,
   runCancellationScenario,
   runFatalFailureScenario,
   runMcpDiscoveryScenario,
@@ -48,8 +43,8 @@ function createClaudeRuntime(adapter: MockClaudeSdkAdapter, registryPool?: McpRe
 
   const runtime = createBackendRpcRuntime({
     taskModel: "claude/claude-sonnet-4-6",
-    createEngine: ({ onTaskUpdated, onNewMessage }) =>
-      new ClaudeEngine("claude-sonnet-4-6", onTaskUpdated, onNewMessage, adapter),
+    createEngine: ({ onTaskUpdated }) =>
+      new ClaudeEngine("claude-sonnet-4-6", onTaskUpdated, undefined, adapter),
     registryPool,
   });
   runtimes.push(runtime);
@@ -66,7 +61,7 @@ describe("Claude backend RPC scenarios", () => {
   it("covers single-turn and multi-turn chat via shared scenarios", async () => {
     const adapter = new MockClaudeSdkAdapter();
     adapter
-      .queueCreate({ steps: [token("Hello"), token(" world"), usage(10, 20), done()] })
+      .queueCreate({ steps: [token("Hello"), token(" world"), done()] })
       .queueCreate({ steps: [token("Reply one"), done()] })
       .queueResume({ steps: [token("Reply two"), done()] });
     const runtime = createClaudeRuntime(adapter);
@@ -90,28 +85,12 @@ describe("Claude backend RPC scenarios", () => {
     await runToolFailureScenario(runtime);
   });
 
-  it("covers ask-user suspension via shared scenario", async () => {
-    const adapter = new MockClaudeSdkAdapter();
-    adapter.queueCreate({ steps: [token("Need input"), askUser('{"question":"Need input"}')] });
-    const runtime = createClaudeRuntime(adapter);
-
-    await runAskUserScenario(runtime);
-  });
-
   it("covers cancellation via shared scenario", async () => {
     const adapter = new MockClaudeSdkAdapter();
     adapter.queueCreate({ steps: [token("working"), waitForAbort()] });
     const runtime = createClaudeRuntime(adapter);
 
     await runCancellationScenario(runtime);
-  });
-
-  it("resumes the same execution after ask-user input", async () => {
-    const adapter = new MockClaudeSdkAdapter();
-    adapter.queueCreate({ steps: [askUser('{"questions":[{"question":"Need input","selection_mode":"single","options":[]}]}'), token("Resumed successfully"), done()] });
-    const runtime = createClaudeRuntime(adapter);
-
-    await runAskUserResumeScenario(runtime);
   });
 
   it("covers fatal failures and model listing via shared scenarios", async () => {
@@ -132,29 +111,12 @@ describe("Claude backend RPC scenarios", () => {
     const { taskId } = await runtime.createTask();
 
     const first = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "First" });
-    await runtime.recorder.waitForStreamDone(first.executionId);
+    await runtime.waitForExecutionStatus(first.executionId, "completed");
     const second = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "Second" });
-    await runtime.recorder.waitForStreamDone(second.executionId);
+    await runtime.waitForExecutionStatus(second.executionId, "completed");
 
     expect(adapter.trace.createCalls).toHaveLength(1);
     expect(adapter.trace.resumeCalls).toHaveLength(1);
-  });
-
-  it("surfaces shell approval pauses and resumes after approval", async () => {
-    const adapter = new MockClaudeSdkAdapter();
-    adapter.queueCreate({
-      steps: [shellApproval("npm test"), token("Approved and continued"), done()],
-    });
-    const runtime = createClaudeRuntime(adapter);
-    const { taskId } = await runtime.createTask();
-
-    const first = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "Run a shell command" });
-    await runtime.waitForExecutionStatus(first.executionId, "waiting_user");
-    expect(runtime.getMessages(taskId).some((message) => message.type === "ask_user_prompt" && message.content.includes('"subtype":"shell_approval"'))).toBe(true);
-
-    await runtime.handlers["executions.respondShellApproval"]({ executionId: first.executionId, decision: "approve_once" });
-    await runtime.recorder.waitForStreamDone(first.executionId);
-    await runtime.waitForExecutionStatus(first.executionId, "completed");
   });
 
   it("transitions to waiting_user when Claude emits decision_request", async () => {
@@ -169,7 +131,6 @@ describe("Claude backend RPC scenarios", () => {
     await runtime.waitForExecutionStatus(result.executionId, "waiting_user");
 
     expect(runtime.getTaskState(taskId)).toBe("waiting_user");
-    expect(runtime.getMessages(taskId).some((message) => message.type === "decision_request_prompt")).toBe(true);
   });
 });
 
@@ -213,7 +174,7 @@ describe("Claude engine — systemInstructions propagation", () => {
 });
 
 describe("Claude engine — subagent scenarios", () => {
-  it("CRS-SA-1: subagent lifecycle (start → tool → stop) completes end-to-end without shell_approval pause", async () => {
+  it("CRS-SA-1: subagent lifecycle (start → tool → stop) completes end-to-end", async () => {
     const adapter = new MockClaudeSdkAdapter();
     adapter.queueCreate({
       steps: [
@@ -229,76 +190,22 @@ describe("Claude engine — subagent scenarios", () => {
     const { taskId } = await runtime.createTask();
 
     const { executionId } = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "run" });
-    await runtime.recorder.waitForStreamDone(executionId);
-    await runtime.waitForExecutionStatus(executionId, "completed");
-
-    // Execution completed without hitting waiting_user — no shell_approval pause
-    const messages = runtime.getMessages(taskId);
-    expect(messages.some((m) => m.type === "ask_user_prompt" && m.content.includes('"subtype":"shell_approval"'))).toBe(false);
-  });
-
-  it("CRS-SA-2: subagent Bash with unapproved binary emits shell_approval and resumes on approval", async () => {
-    const adapter = new MockClaudeSdkAdapter();
-    adapter.queueCreate({
-      steps: [subagentStart("sa-2", "install deps"), shellApproval("bun install"), token("installed"), done()],
-    });
-    const runtime = createClaudeRuntime(adapter);
-    const { taskId } = await runtime.createTask();
-
-    const { executionId } = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "install" });
-    await runtime.waitForExecutionStatus(executionId, "waiting_user");
-
-    expect(runtime.getMessages(taskId).some((m) => m.type === "ask_user_prompt" && m.content.includes('"subtype":"shell_approval"'))).toBe(true);
-
-    await runtime.handlers["executions.respondShellApproval"]({ executionId, decision: "approve_once" });
-    await runtime.recorder.waitForStreamDone(executionId);
     await runtime.waitForExecutionStatus(executionId, "completed");
   });
 
-  it("CRS-SA-3: subagent_start is persisted as tool_call conversation message with subagentId", async () => {
+  it("CRS-SA-2: subagent_start → subagent_stop events stream through without interrupting the run", async () => {
     const adapter = new MockClaudeSdkAdapter();
     adapter.queueCreate({
-      steps: [subagentStart("sa-3", "read files", "Read src/auth.ts"), token("done"), done()],
+      steps: [subagentStart("sa-2", "investigate"), subagentStop("sa-2"), token("done"), done()],
     });
     const runtime = createClaudeRuntime(adapter);
     const { taskId } = await runtime.createTask();
 
     const { executionId } = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "go" });
-    await runtime.recorder.waitForStreamDone(executionId);
-
-    // IPC should include a tool_call block with subagentId=sa-3
-    const ipc = runtime.getIpcEvents(executionId);
-    const subagentBlock = ipc.find((e) => e.type === "tool_call" && e.subagentId === "sa-3");
-    expect(subagentBlock).toBeDefined();
-    expect(subagentBlock?.blockId).toBe("sa-3");
-
-    // DB should persist a tool_call message
-    const dbEvents = runtime.getDbStreamEvents(executionId);
-    const dbBlock = dbEvents.find((e) => e.type === "tool_call" && e.subagentId === "sa-3");
-    expect(dbBlock).toBeDefined();
-  });
-
-  it("CRS-SA-4: subagent_stop is persisted as tool_result message matching the subagent callId", async () => {
-    const adapter = new MockClaudeSdkAdapter();
-    adapter.queueCreate({
-      steps: [subagentStart("sa-4", "investigate"), subagentStop("sa-4"), token("done"), done()],
-    });
-    const runtime = createClaudeRuntime(adapter);
-    const { taskId } = await runtime.createTask();
-
-    const { executionId } = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "go" });
-    await runtime.recorder.waitForStreamDone(executionId);
-
-    const ipc = runtime.getIpcEvents(executionId);
-    // subagent_stop should emit a done=true tool_result block with blockId=sa-4
-    const stopBlock = ipc.find((e) => e.type === "tool_result" && e.blockId === "sa-4" && e.subagentId === "sa-4");
-    expect(stopBlock).toBeDefined();
-    expect(stopBlock?.done).toBe(true);
-
-    // DB should also persist the tool_result
-    const dbEvents = runtime.getDbStreamEvents(executionId);
-    const dbStop = dbEvents.find((e) => e.type === "tool_result" && e.subagentId === "sa-4");
-    expect(dbStop).toBeDefined();
+    // Subagent events are kept EngineEvent members; the run must complete normally
+    // (no pause, no error). Persistence assertions died with the stream pipeline (07-01).
+    await runtime.waitForExecutionStatus(executionId, "completed");
+    await runtime.waitForTaskState(taskId, "completed");
   });
 });
 
