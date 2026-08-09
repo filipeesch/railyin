@@ -179,26 +179,21 @@ describe("legacyImport.run (IMPR-01, D-06/D-07/D-08)", () => {
 });
 
 describe("crash tolerance (criterion 5)", () => {
-    // Test A leaves its durable dir here so Test C can re-import over the SAME
-    // crash artifact (the plan's "after the simulated crash (Test A's partial
-    // tail)" — tests within a file run sequentially in bun:test).
-    let crashDurableDir: string;
-
     test("A: a partial trailing line (interrupted append, A1) neither hides the thread from the index nor breaks cold replay — the complete lines replay, the partial line is skipped", async () => {
-        crashDurableDir = mkdtempSync(join(tmpdir(), "railyn-crash-a-"));
+        const durableDir = mkdtempSync(join(tmpdir(), "railyn-crash-a-"));
         try {
             // Server A: seed + import, then simulate a runner that died mid-append
             // (assumption A1): a truncated JSON line with NO trailing newline at
             // the very end of the log — the tolerant reader must skip it.
-            const serverA: TestServer = await startServer({ dataDir: crashDurableDir, durableDb: true });
+            const serverA: TestServer = await startServer({ dataDir: durableDir, durableDb: true });
             let threadId: string;
             try {
-                threadId = seedLegacyConversation(join(crashDurableDir, "railyn.db"));
+                threadId = seedLegacyConversation(join(durableDir, "railyn.db"));
                 const summary = await serverA.request("legacyImport.run", {});
                 expect(summary.imported).toBe(1);
 
                 appendFileSync(
-                    join(crashDurableDir, "threads", `${threadId}.jsonl`),
+                    join(durableDir, "threads", `${threadId}.jsonl`),
                     '{"type":"RUN_STARTED","threadId":',
                     "utf-8",
                 );
@@ -215,7 +210,7 @@ describe("crash tolerance (criterion 5)", () => {
             // Server B: a FRESH process over the SAME dataDir — cold connect must
             // replay the COMPLETE imported lines and skip the partial tail
             // (half 2 of criterion 5 — tolerant read across a restart).
-            const serverB: TestServer = await startServer({ dataDir: crashDurableDir, durableDb: true });
+            const serverB: TestServer = await startServer({ dataDir: durableDir, durableDb: true });
             try {
                 const res = await postJsonOn(
                     serverB.baseUrl,
@@ -246,7 +241,7 @@ describe("crash tolerance (criterion 5)", () => {
                 await serverB.shutdown();
             }
         } finally {
-            // Cleanup deferred to Test C, which re-imports over this same dir.
+            rmSync(durableDir, { recursive: true, force: true });
         }
     }, 30_000);
 
@@ -282,18 +277,32 @@ describe("crash tolerance (criterion 5)", () => {
         }
     }, 30_000);
 
-    test("C: re-import after the simulated crash (Test A's partial tail) stays skipped — the crash artifact cannot fool the D-07 marker", async () => {
-        // Reuses Test A's durable dir: the final file (present but with a partial
-        // tail) is still the honest idempotency marker, and a re-import writes
-        // nothing (no .tmp residue from the re-run either).
-        const serverC: TestServer = await startServer({ dataDir: crashDurableDir, durableDb: true });
+    test("C: re-import after a simulated crash (partial tail) stays skipped — the crash artifact cannot fool the D-07 marker", async () => {
+        // Self-contained (WR-05): creates its own crash artifact — a final file
+        // with a partial tail — instead of reusing another test's side effects.
+        const durableDir = mkdtempSync(join(tmpdir(), "railyn-crash-c-"));
+        const serverC: TestServer = await startServer({ dataDir: durableDir, durableDb: true });
         try {
-            const summary = await serverC.request("legacyImport.run", {});
-            expect(summary).toEqual({ total: 1, imported: 0, skipped: 1, failed: 0, errors: [] });
-            expect(readdirSync(join(crashDurableDir, "threads")).filter((f) => f.endsWith(".tmp"))).toEqual([]);
+            const threadId = seedLegacyConversation(join(durableDir, "railyn.db"));
+            const first = await serverC.request("legacyImport.run", {});
+            expect(first).toEqual({ total: 1, imported: 1, skipped: 0, failed: 0, errors: [] });
+
+            // Simulate the crash artifact: a truncated trailing JSON line.
+            appendFileSync(
+                join(durableDir, "threads", `${threadId}.jsonl`),
+                '{"type":"RUN_STARTED","threadId":',
+                "utf-8",
+            );
+
+            // The final file (present but with a partial tail) is still the
+            // honest idempotency marker, and a re-import writes nothing (no
+            // .tmp residue from the re-run either).
+            const second = await serverC.request("legacyImport.run", {});
+            expect(second).toEqual({ total: 1, imported: 0, skipped: 1, failed: 0, errors: [] });
+            expect(readdirSync(join(durableDir, "threads")).filter((f) => f.endsWith(".tmp"))).toEqual([]);
         } finally {
             await serverC.shutdown();
-            rmSync(crashDurableDir, { recursive: true, force: true });
+            rmSync(durableDir, { recursive: true, force: true });
         }
     }, 30_000);
 });
