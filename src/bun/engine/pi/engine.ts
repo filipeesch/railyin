@@ -28,7 +28,6 @@ import type { ModelSettingsRepository } from "../../db/repositories/model-settin
 import type { Model } from "@earendil-works/pi-ai";
 import { buildAllTools } from "./tools/index.ts";
 import { getDb } from "../../db/index.ts";
-import { appendMessage } from "../../conversation/messages.ts";
 import { ProviderLimiterRegistry, PROVIDER_LIMITER_DEFAULTS } from "./provider-limiter.ts";
 import { formatPiError } from "./pi-error.ts";
 import { validatePiEngineConfig } from "./pi-config-validation.ts";
@@ -518,10 +517,11 @@ export class PiEngine implements ExecutionEngine {
 
     try {
       const result = await session.compact();
-      if (result?.summary) {
-        const db = getDb();
-        appendMessage(db, null, conversationId, "compaction_summary", null, result.summary);
-      }
+      // 07-01 (D-05): the compaction_summary conversation_messages row no
+      // longer persists — conversation_messages is a frozen table. The pi
+      // engine's compact() itself stays live; only the persisted summary row
+      // goes away.
+      void result;
     } catch (err) {
       console.error(`[pi] compact(): session.compact() failed for conversation ${conversationId}:`, err);
       throw err;

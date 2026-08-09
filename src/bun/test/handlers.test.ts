@@ -133,7 +133,7 @@ describe("tasks.create", () => {
     expect(ctx!.git_root_path).toBe(gitDir);
   });
 
-  it("seeds system message with task description", async () => {
+  it("writes zero conversation_messages rows on task create (07-01 D-05 frozen-table guarantee)", async () => {
     const { projectKey, boardId } = seedProjectAndTask(db, gitDir);
     const { handlers } = makeHandlers();
 
@@ -150,10 +150,7 @@ describe("tasks.create", () => {
       )
       .all(task.id);
 
-    expect(msgs.length).toBeGreaterThan(0);
-    expect(msgs[0].type).toBe("system");
-    expect(msgs[0].content).toContain("My task");
-    expect(msgs[0].content).toContain("My description");
+    expect(msgs.length).toBe(0);
   });
 
 // TC-1: defaultModel is set → conversation.model IS automatically seeded
@@ -369,15 +366,14 @@ describe("tasks.transition / worktree failure", () => {
 
     expect(result.task.executionState).toBe("failed");
 
-    // Error message should appear in conversation
+    // 07-01: worktree-failure messages no longer persist to conversation_messages
     const errMsg = db
       .query<{ content: string }, [number]>(
         "SELECT content FROM conversation_messages WHERE task_id = ? AND content LIKE '%Worktree setup failed%' LIMIT 1",
       )
       .get(taskId);
 
-    expect(errMsg).not.toBeNull();
-    expect(errMsg!.content).toMatch(/Worktree setup failed/i);
+    expect(errMsg).toBeNull();
   });
 });
 
@@ -428,11 +424,11 @@ describe("tasks.transition / running task deferred", () => {
     // needs_column_prompt flag was set (plan column has on_enter_prompt)
     const dbRow = db.query<{ needs_column_prompt: number }, [number]>("SELECT needs_column_prompt FROM tasks WHERE id = ?").get(taskId);
     expect(dbRow?.needs_column_prompt).toBe(1);
-    // transition_event was appended to the conversation
+    // 07-01: transition_event rows no longer persist (frozen-table guarantee)
     const msg = db.query<{ type: string }, [number]>(
       "SELECT type FROM conversation_messages WHERE task_id = ? AND type = 'transition_event' LIMIT 1",
     ).get(taskId);
-    expect(msg).not.toBeNull();
+    expect(msg).toBeNull();
     // onTaskUpdated was called
     expect(taskUpdates.length).toBeGreaterThan(0);
   });
@@ -476,7 +472,15 @@ describe("tasks.delete", () => {
         "SELECT COUNT(*) AS count FROM conversation_messages WHERE task_id = ?",
       )
       .get(task.id);
-    expect(beforeMsgs!.count).toBeGreaterThan(0); // seeded system message exists
+    // 07-01: task create writes zero conversation_messages rows (D-05); the
+    // delete cascade still clears any rows that exist (e.g. from fixtures).
+    expect(beforeMsgs!.count).toBe(0);
+
+    // Seed a message row manually so the cascade-delete path is exercised.
+    db.run(
+      "INSERT INTO conversation_messages (task_id, conversation_id, type, role, content) VALUES (?, ?, 'system', NULL, 'seed')",
+      [task.id, task.conversationId],
+    );
 
     const result = await handlers["tasks.delete"]({ taskId: task.id });
     expect(result.success).toBe(true);

@@ -250,7 +250,7 @@ describe("PiEngine background compaction", () => {
     expect(session.compactCallCount).toBe(0);
   });
 
-  test("BC-5: compact() result.summary is persisted as compaction_summary message", async () => {
+  test("BC-5: compact() result.summary is NOT persisted as compaction_summary message (07-01 D-05)", async () => {
     const session = new MockBgSession();
     session.contextUsage = { tokens: 110_000, contextWindow: 128_000, maxTokens: 128_000, fraction: 0.86, percent: 86 };
     session.compactResult = { summary: "the background summary" };
@@ -266,12 +266,14 @@ describe("PiEngine background compaction", () => {
 
     expect(session.compactCallCount).toBe(1);
 
+    // 07-01: the compaction_summary conversation_messages row no longer
+    // persists — background compaction itself stays live, only the persisted
+    // summary row goes away (frozen-table guarantee).
     const row = db.query<{ content: string }, [number]>(
       "SELECT content FROM conversation_messages WHERE conversation_id = ? AND type = 'compaction_summary' ORDER BY id DESC LIMIT 1",
     ).get(conversationId);
 
-    expect(row).toBeDefined();
-    expect(row!.content).toBe("the background summary");
+    expect(row).toBeNull();
   });
 
   test("BC-6: BG compaction fires mid-execution → queue stays open until agent.continue() completes", async () => {

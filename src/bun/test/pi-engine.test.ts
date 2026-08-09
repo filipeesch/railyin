@@ -242,18 +242,20 @@ describe("PiEngine.compact()", () => {
     );
   });
 
-  it("PE-COMPACT-3: compact() returns summary → compaction_summary row persisted in DB", async () => {
+  it("PE-COMPACT-3: compact() returns summary → no compaction_summary row persisted (07-01 D-05)", async () => {
     const session = new MockAgentSession();
     session.compactResult = { summary: "the summary" };
     const engine = makePiEngine(session);
 
     await engine.compact(null, conversationId, "/test-working-dir", "test-workspace");
 
+    // 07-01: the compaction_summary conversation_messages row no longer
+    // persists — the pi engine's compact() itself stays live, only the
+    // persisted summary row goes away (frozen-table guarantee).
     const row = db.query<{ content: string }, [number]>(
       "SELECT content FROM conversation_messages WHERE conversation_id = ? AND type = 'compaction_summary' ORDER BY id DESC LIMIT 1",
     ).get(conversationId);
-    expect(row).toBeDefined();
-    expect(row!.content).toBe("the summary");
+    expect(row).toBeNull();
   });
 
   it("PE-COMPACT-4: compact() returns null → no compaction_summary row inserted", async () => {

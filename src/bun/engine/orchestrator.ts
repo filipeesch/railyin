@@ -9,13 +9,8 @@
  *  - TransitionExecutor / HumanTurnExecutor / RetryExecutor / CodeReviewExecutor / ChatExecutor
  */
 
-import type {
-  OnError,
-  OnTaskUpdated,
-  EngineShutdownOptions,
-  EngineModelInfo,
-} from "./types.ts";
-import type { Task, ConversationMessage } from "../../shared/rpc-types.ts";
+import type { OnError, OnTaskUpdated, EngineShutdownOptions, EngineModelInfo } from "./types.ts";
+import type { Task } from "../../shared/rpc-types.ts";
 import type { ExecutionCoordinator } from "./coordinator.ts";
 import { mapTask } from "../db/mappers.ts";
 import { fetchTaskWithModel } from "../db/task-queries.ts";
@@ -141,18 +136,18 @@ export class Orchestrator implements ExecutionCoordinator {
     attachments?: import("../../shared/rpc-types.ts").Attachment[],
     engineContent?: string,
     opts?: import("./coordinator.ts").ChatTurnOpts,
-  ): Promise<{ message: ConversationMessage; executionId: number }> {
+  ): Promise<{ executionId: number }> {
     return this.humanTurnExecutor.execute(taskId, content, attachments, engineContent, this.mergeSessionStatusOpts(opts));
   }
 
-  executeRetry(taskId: number): Promise<{ task: Task; executionId: number }> {
+  executeRetry(taskId: number): Promise<{ executionId: number }> {
     return this.retryExecutor.execute(taskId);
   }
 
   executeCodeReview(
     taskId: number,
     manualEdits?: import("../../shared/rpc-types.ts").ManualEdit[],
-  ): Promise<{ message: ConversationMessage; executionId: number }> {
+  ): Promise<{ executionId: number }> {
     return this.codeReviewExecutor.execute(taskId, manualEdits);
   }
 
@@ -168,7 +163,7 @@ export class Orchestrator implements ExecutionCoordinator {
     attachments?: import("../../shared/rpc-types.ts").Attachment[],
     engineContent?: string,
     opts?: import("./coordinator.ts").ChatTurnOpts,
-  ): Promise<{ message: ConversationMessage; executionId: number }> {
+  ): Promise<{ executionId: number }> {
     return this.chatExecutor.execute(sessionId, conversationId, content, model, enabledMcpTools, workspaceKey, attachments, engineContent, this.mergeSessionStatusOpts(opts));
   }
 

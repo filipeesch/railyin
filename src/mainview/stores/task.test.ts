@@ -403,7 +403,7 @@ describe("taskStore", () => {
   });
 
 
-  it("T-SC-1: sendMessage for a background (non-active) task does not contaminate the active conversation", async () => {
+  it("T-SC-1: sendMessage calls the RPC with { executionId } and touches neither conversationStore nor a response message", async () => {
     const store = useTaskStore();
     const conversationStore = useConversationStore();
     const taskA = makeTask({ id: 1, boardId: 1, conversationId: 1 });
@@ -415,21 +415,22 @@ describe("taskStore", () => {
     apiMock.mockResolvedValueOnce({ messages: [], hasMore: false });
     await store.selectTask(1);
 
-    // Background task B sends a message
-    apiMock.mockResolvedValueOnce({
-      message: { id: 99, taskId: 2, conversationId: 2, type: "user", role: "user", content: "hi", metadata: null, createdAt: new Date().toISOString() },
-      executionId: null,
-    });
+    // 07-01: tasks.sendMessage returns { executionId } only — no message object
+    apiMock.mockResolvedValueOnce({ executionId: 42 });
 
-    await store.sendMessage(2, "hi");
+    const result = await store.sendMessage(2, "hi");
 
-    // Active conversation must remain 1 (not contaminated to 2)
+    // Store calls the RPC with the right params
+    const sendCalls = apiMock.mock.calls.filter((c) => c[0] === "tasks.sendMessage");
+    expect(sendCalls.at(-1)?.[1]).toEqual(expect.objectContaining({ taskId: 2, content: "hi" }));
+    // Response contract is { executionId } — no message field consumed
+    expect(result).toEqual({ executionId: 42 });
+    // No conversationStore mutation: active conversation untouched, no messages appended
     expect(conversationStore.activeConversationId).toBe(1);
-    // No message from task B should appear in active conversation
     expect(conversationStore.messages.some((m) => m.taskId === 2)).toBe(false);
   });
 
-  it("T-SC-2: sendMessage for the active task appends the message to the conversation", async () => {
+  it("T-SC-2: sendMessage for the active task does not append to conversationStore", async () => {
     const store = useTaskStore();
     const conversationStore = useConversationStore();
     const task = makeTask({ id: 1, boardId: 1, conversationId: 1 });
@@ -439,15 +440,18 @@ describe("taskStore", () => {
     apiMock.mockResolvedValueOnce({ messages: [], hasMore: false });
     await store.selectTask(1);
 
-    const userMessage = { id: 50, taskId: 1, conversationId: 1, type: "user", role: "user", content: "hello", metadata: null, createdAt: new Date().toISOString() };
-    apiMock.mockResolvedValueOnce({ message: userMessage, executionId: null });
+    apiMock.mockResolvedValueOnce({ executionId: 50 });
 
     await store.sendMessage(1, "hello");
 
-    expect(conversationStore.messages).toContainEqual(userMessage);
+    // The assistant reply surfaces via the AG-UI/JSONL flow — nothing is
+    // appended to conversationStore from this RPC anymore.
+    expect(conversationStore.messages).toEqual([]);
+    const sendCalls = apiMock.mock.calls.filter((c) => c[0] === "tasks.sendMessage");
+    expect(sendCalls.at(-1)?.[1]).toEqual(expect.objectContaining({ taskId: 1, content: "hello" }));
   });
 
-  it("T-SC-3: submitDecisions for a background task does not contaminate the active conversation", async () => {
+  it("T-SC-3: submitDecisions calls the RPC with { executionId } and touches neither conversationStore nor a response message", async () => {
     const store = useTaskStore();
     const conversationStore = useConversationStore();
     const taskA = makeTask({ id: 1, boardId: 1, conversationId: 1 });
@@ -458,18 +462,16 @@ describe("taskStore", () => {
     apiMock.mockResolvedValueOnce({ messages: [], hasMore: false });
     await store.selectTask(1);
 
-    apiMock.mockResolvedValueOnce({
-      message: { id: 77, taskId: 2, conversationId: 2, type: "user", role: "user", content: "ans", metadata: null, createdAt: new Date().toISOString() },
-    });
+    apiMock.mockResolvedValueOnce({ executionId: 77 });
 
     await store.submitDecisions(2, []);
 
-    // Active conversation must remain 1 (not contaminated to 2)
+    // Active conversation must remain 1 (no conversationId sync anymore)
     expect(conversationStore.activeConversationId).toBe(1);
     expect(conversationStore.messages.some((m) => m.taskId === 2)).toBe(false);
   });
 
-  it("T-SC-4: sendMessage for active task syncs conversationId when backend assigns a new one (0→N)", async () => {
+  it("T-SC-4: sendMessage does not sync conversationId from a response message (contract is { executionId } only)", async () => {
     const store = useTaskStore();
     const conversationStore = useConversationStore();
     // Task starts with conversationId=0 (backend hasn't assigned one yet)
@@ -480,16 +482,15 @@ describe("taskStore", () => {
     apiMock.mockResolvedValueOnce({ messages: [], hasMore: false });
     await store.selectTask(1);
 
-    // Backend creates a real conversation (id=99) on first message
-    const userMessage = { id: 50, taskId: 1, conversationId: 99, type: "user", role: "user", content: "hello", metadata: null, createdAt: new Date().toISOString() };
-    apiMock.mockResolvedValueOnce({ message: userMessage, executionId: null });
+    // 07-01: the response carries no message object — conversationId sync is gone
+    apiMock.mockResolvedValueOnce({ executionId: 99 });
 
     await store.sendMessage(1, "hello");
 
-    // Active conversation must be updated to 99 and message must appear
-    expect(conversationStore.activeConversationId).toBe(99);
-    expect(conversationStore.messages).toContainEqual(userMessage);
-    expect(store.taskIndex[1]?.conversationId).toBe(99);
+    // No conversationId sync: active conversation stays as selected
+    expect(conversationStore.activeConversationId).toBe(0);
+    expect(conversationStore.messages).toEqual([]);
+    expect(store.taskIndex[1]?.conversationId).toBe(0);
   });
 
   it("T-WT-1: onTaskUpdated preserves worktreePath in taskIndex", async () => {

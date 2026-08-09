@@ -1,8 +1,6 @@
-import type { ConversationMessage, ManualEdit, CodeReviewPayload, CodeReviewHunk, LineComment, HunkDecision } from "../../../shared/rpc-types.ts";
+import type { ManualEdit, CodeReviewPayload, CodeReviewHunk, LineComment, HunkDecision } from "../../../shared/rpc-types.ts";
 import type { Database } from "bun:sqlite";
-import { mapTask, mapConversationMessage } from "../../db/mappers.ts";
-import { fetchTaskWithModel } from "../../db/task-queries.ts";
-import { appendMessage, ensureTaskConversation } from "../../conversation/messages.ts";
+import { fetchTaskWithModel, ensureTaskConversation } from "../../db/task-queries.ts";
 import { getWorkspaceConfig } from "../../workspace-context.ts";
 import { getColumnConfig } from "../../workflow/column-config.ts";
 import { formatReviewMessageForLLM } from "../../workflow/review.ts";
@@ -12,7 +10,7 @@ import type { ExecutionParamsBuilder } from "./execution-params-builder.ts";
 import type { IWorkingDirectoryResolver } from "./working-directory-resolver.ts";
 import type { StreamProcessor } from "../stream/stream-processor.ts";
 import type { OnTaskUpdated } from "../types.ts";
-import type { TaskRow, ConversationMessageRow, TaskGitContextRow } from "../../db/row-types.ts";
+import type { TaskRow, TaskGitContextRow } from "../../db/row-types.ts";
 import type { IWorkspaceRepository } from "../../db/workspace-repository.ts";
 import type { IBoardToolExecutor } from "../../workflow/tools/board-tool-executor.ts";
 import type { ModelSettingsRepository } from "../../db/repositories/model-settings-repository.ts";
@@ -59,7 +57,7 @@ export class CodeReviewExecutor {
   async execute(
     taskId: number,
     manualEdits?: ManualEdit[],
-  ): Promise<{ message: ConversationMessage; executionId: number }> {
+  ): Promise<{ executionId: number }> {
     const db = this.db;
     const task = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
     if (!task) throw new Error(`Task ${taskId} not found`);
@@ -142,9 +140,6 @@ export class CodeReviewExecutor {
 
     const conversationId = ensureTaskConversation(db, taskId, task.conversation_id);
 
-    const reviewMsgId = appendMessage(db, taskId, conversationId, "code_review", "user", JSON.stringify(payload));
-    appendMessage(db, taskId, conversationId, "user", "user", reviewText);
-
     const column = getColumnConfig(config, task.board_id, task.workflow_state);
     const execResult = db.run(
       `INSERT INTO executions (task_id, conversation_id, from_state, to_state, prompt_id, status, attempt)
@@ -157,12 +152,6 @@ export class CodeReviewExecutor {
       [executionId, taskId],
     );
     this.onTaskUpdated(fetchTaskWithModel(db, taskId)!);
-
-    // Frozen-table read: the code_review row written by appendMessage above feeds
-    // the legacy { message, executionId } return contract (reworked in 07-01 Task 4).
-    const reviewMsgRow = db
-      .query<ConversationMessageRow, [number]>("SELECT * FROM conversation_messages WHERE id = ?")
-      .get(reviewMsgId)!;
 
     const signal = this.streamProcessor.createSignal(executionId);
 
@@ -204,6 +193,6 @@ export class CodeReviewExecutor {
     };
     this.streamProcessor.runNonNative(taskId, conversationId, executionId, engine, execParams);
 
-    return { message: mapConversationMessage(reviewMsgRow), executionId };
+    return { executionId };
   }
 }

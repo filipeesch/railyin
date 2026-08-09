@@ -1,15 +1,12 @@
-import type { ConversationMessage } from "../../../shared/rpc-types.ts";
 import type { Attachment } from "../../../shared/rpc-types.ts";
 import type { Database } from "bun:sqlite";
-import { mapConversationMessage } from "../../db/mappers";
-import { appendMessage } from "../../conversation/messages";
 import { getDefaultWorkspaceKey, getWorkspaceConfig } from "../../workspace-context";
 import { getEffectiveWorkspacePath } from "../../config/path-utils";
 import type { EngineRegistry } from "../engine-registry";
 import type { ExecutionParamsBuilder } from "./execution-params-builder";
 import type { IWorkingDirectoryResolver } from "./working-directory-resolver";
 import type { StreamProcessor } from "../stream/stream-processor";
-import type { ConversationMessageRow, TaskRow } from "../../db/row-types";
+import type { TaskRow } from "../../db/row-types";
 import { QualifiedModelId } from "../qualified-model-id";
 import { CustomPromptInjector, type PromptFilterContext } from "./custom-prompt-injector.ts";
 import type { ExecutionParamsEnricher } from "./execution-params-enricher.ts";
@@ -42,11 +39,9 @@ export class ChatExecutor {
     attachments?: Attachment[],
     engineContent?: string,
     opts?: import("../coordinator.ts").ChatTurnOpts,
-  ): Promise<{ message: ConversationMessage; executionId: number }> {
+  ): Promise<{ executionId: number }> {
     const db = this.db;
     const config = getWorkspaceConfig(workspaceKey);
-
-    const msgId = appendMessage(db, null, conversationId, "user", "user", content);
 
     const conversationRow = db
       .prepare(`
@@ -103,12 +98,11 @@ export class ChatExecutor {
     // OR the engineId (catches the standard `pi/...` qualified model). This guards against
     // Pi engines silently failing when the engine id differs from the literal `pi`.
     if ((engine.type === "pi" || engineId === "pi") && !contextWindowOverride) {
-      const errorContent = `Pi engine requires a context window to be configured for model '${effectiveModel}'. Go to Model Settings to configure it.`;
       db.run("UPDATE chat_sessions SET status = 'idle' WHERE conversation_id = ?", [conversationId]);
-      const userMsgRow = db
-        .query<ConversationMessageRow, [number]>("SELECT * FROM conversation_messages WHERE id = ?")
-        .get(msgId)!;
-      return { message: mapConversationMessage(userMsgRow), executionId: -1 };
+      // No message row is persisted (zero conversation_messages writes); the
+      // caller gets a sentinel executionId and the error surfaces via the
+      // engine/board failure channels.
+      return { executionId: -1 };
     }
 
     const targetModelInfo = (await engine.listModels()).find(m => m.qualifiedId === effectiveModel);
@@ -119,7 +113,6 @@ export class ChatExecutor {
       workingDirectory,
       workspaceKey,
       engine.type,
-      msgId,
     );
 
     const resolvedChatTail = await this.slashCommandResolver.resolve(
@@ -179,9 +172,6 @@ export class ChatExecutor {
     this.streamProcessor.runNonNative(null, conversationId, executionId, engine, execParams, opts);
     db.run("UPDATE conversations SET last_engine_type = ? WHERE id = ?", [engineId, conversationId]);
 
-    const msgRow = db
-      .query<ConversationMessageRow, [number]>("SELECT * FROM conversation_messages WHERE id = ?")
-      .get(msgId)!;
-    return { message: mapConversationMessage(msgRow), executionId };
+    return { executionId };
   }
 }

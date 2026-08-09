@@ -1,8 +1,6 @@
-import type { Task } from "../../../shared/rpc-types.ts";
 import { QualifiedModelId } from "../qualified-model-id";
 import type { Database } from "bun:sqlite";
-import { fetchTaskWithModel } from "../../db/task-queries.ts";
-import { appendMessage, ensureTaskConversation } from "../../conversation/messages";
+import { ensureTaskConversation } from "../../db/task-queries.ts";
 import { getWorkspaceConfig } from "../../workspace-context";
 import { getColumnConfig } from "../../workflow/column-config";
 import type { EngineRegistry } from "../engine-registry.ts";
@@ -33,7 +31,7 @@ export class RetryExecutor {
     private readonly paramsEnricher?: ExecutionParamsEnricher,
   ) {}
 
-  async execute(taskId: number): Promise<{ task: Task; executionId: number }> {
+  async execute(taskId: number): Promise<{ executionId: number }> {
     const db = this.db;
     const task = db.query<TaskRow, [number]>(
       `SELECT t.*, c.model AS conversation_model 
@@ -64,7 +62,6 @@ export class RetryExecutor {
       "UPDATE tasks SET execution_state = 'running', current_execution_id = ? WHERE id = ?",
       [executionId, taskId],
     );
-    appendMessage(db, taskId, conversationId, "system", null, `Retry attempt ${attempt}`);
 
     const updatedRow = db.query<TaskRow & { conversation_model: string | null }, [number]>(
       `SELECT t.*, c.model AS conversation_model 
@@ -134,6 +131,6 @@ export class RetryExecutor {
       : retryBase;
     this.streamProcessor.runNonNative(taskId, conversationId, executionId, engine, execParams);
 
-    return { task: fetchTaskWithModel(db, taskId)!, executionId };
+    return { executionId };
   }
 }

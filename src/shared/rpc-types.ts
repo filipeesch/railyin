@@ -762,15 +762,15 @@ export type RailynAPI = {
   };
   "tasks.retry": {
     params: { taskId: number };
-    response: { task: Task; executionId: number };
+    response: { executionId: number };
   };
   "tasks.sendMessage": {
     params: { taskId: number; content: string; engineContent?: string; attachments?: Attachment[] };
-    response: { message: ConversationMessage; executionId: number };
+    response: { executionId: number };
   };
   "tasks.submitDecisions": {
     params: { taskId: number; answers: DecisionAnswer[]; generalNotes?: string; recordAsDecisions?: boolean };
-    response: { message: ConversationMessage; executionId: number };
+    response: { executionId: number };
   };
 
   // Conversations

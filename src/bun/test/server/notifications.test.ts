@@ -9,13 +9,11 @@ const makeChannel = () => {
 };
 
 describe("NotificationService", () => {
-  test("NS-1 — onError broadcasts stream.error", () => {
+  test("NS-1 — onError is a no-op (A2: stream.error push dropped)", () => {
     const { channel, calls } = makeChannel();
     const svc = new NotificationService(channel);
     svc.onError(42, 7, 3, "boom");
-    expect(calls).toEqual([
-      { type: "stream.error", payload: { taskId: 42, conversationId: 7, executionId: 3, error: "boom" } },
-    ]);
+    expect(calls).toEqual([]);
   });
 
   test("NS-2 — notifyTaskUpdated broadcasts task.updated", () => {

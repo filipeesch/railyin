@@ -3,10 +3,7 @@ import { getConfig } from "../config/index.ts";
 import { noopLogger, type Logger } from "../logger.ts";
 import { resolveProvider, retryTurn } from "../ai/index.ts";
 import type { AIMessage } from "../ai/types.ts";
-import type { ConversationMessage, MessageType } from "../../shared/rpc-types.ts";
 import type { ConversationMessageRow, TaskRow } from "../db/row-types.ts";
-import { mapConversationMessage } from "../db/mappers.ts";
-import { appendMessage } from "./messages.ts";
 import { extractChips } from "../../mainview/utils/chat-chips.ts";
 
 const TOOL_RESULT_MAX_CHARS = 8_000;
@@ -300,7 +297,13 @@ export function extractSummaryBlock(raw: string): string {
   return match?.[1]?.trim() ?? raw.trim();
 }
 
-export async function compactConversation(db: Database, taskId: number): Promise<ConversationMessage> {
+/**
+ * Runs the LLM compaction summarization for a task's conversation. The
+ * summarization behavior stays; the `compaction_summary` conversation_messages
+ * row no longer persists (07-01 D-05 zero-write guarantee on frozen tables).
+ * Returns the extracted summary text.
+ */
+export async function compactConversation(db: Database, taskId: number): Promise<string> {
   const task = db.query<TaskRow, [number]>(
     `SELECT t.*, c.model AS conversation_model 
      FROM tasks t 
@@ -335,10 +338,5 @@ export async function compactConversation(db: Database, taskId: number): Promise
   ], {}, 10, {}, "background");
 
   const rawSummary = result.type === "text" ? (result.content ?? "(empty summary)") : "(compaction failed)";
-  const summary = extractSummaryBlock(rawSummary);
-  const messageId = appendMessage(db, taskId, task.conversation_id, "compaction_summary" as MessageType, null, summary);
-  const messageRow = db
-    .query<ConversationMessageRow, [number]>("SELECT * FROM conversation_messages WHERE id = ?")
-    .get(messageId)!;
-  return mapConversationMessage(messageRow);
+  return extractSummaryBlock(rawSummary);
 }

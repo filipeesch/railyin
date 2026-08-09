@@ -133,43 +133,33 @@ export const useTaskStore = defineStore("task", () => {
   // ─── Retry ────────────────────────────────────────────────────────────────
 
   async function retryTask(taskId: number) {
-    const { task } = await api("tasks.retry", { taskId });
-    onTaskUpdated(task);
-    return task;
+    // 07-01: tasks.retry returns { executionId } only — no task object. The
+    // refreshed task state arrives via the kept task.updated push.
+    const { executionId } = await api("tasks.retry", { taskId });
+    return { executionId };
   }
 
   // ─── Send message ─────────────────────────────────────────────────────────
 
   async function sendMessage(taskId: number, content: string, engineContent?: string, attachments?: import("@shared/rpc-types").Attachment[]) {
-    const { message, executionId } = await api("tasks.sendMessage", {
+    // 07-01: tasks.sendMessage returns { executionId } only — no message
+    // object. Nothing reaches conversationStore from this RPC anymore: the
+    // assistant reply surfaces via the AG-UI/JSONL flow (RailyinChat history),
+    // status via the chatSession.updated / task.updated pushes.
+    const { executionId } = await api("tasks.sendMessage", {
       taskId,
       content,
       ...(engineContent != null ? { engineContent } : {}),
       ...(attachments?.length ? { attachments } : {}),
     });
-    void executionId;
-    // Background task: skip display to prevent cross-chat contamination.
-    if (taskId !== activeTaskId.value) return;
-    // Active task: sync conversationId if backend assigned a new one (e.g. first message: 0→N).
-    if (message.conversationId !== conversationStore.activeConversationId) {
-      conversationStore.setActiveConversation(message.conversationId);
-      const task = taskIndex.value[taskId];
-      if (task) taskIndex.value[taskId] = { ...task, conversationId: message.conversationId };
-    }
-    conversationStore.appendMessage(message);
+    return { executionId };
   }
 
   async function submitDecisions(taskId: number, answers: import("@shared/rpc-types").DecisionAnswer[], generalNotes?: string, recordAsDecisions = true) {
-    const { message } = await api("tasks.submitDecisions", { taskId, answers, generalNotes, recordAsDecisions });
-    // Background task: skip display to prevent cross-chat contamination.
-    if (taskId !== activeTaskId.value) return;
-    // Active task: sync conversationId if backend assigned a new one (e.g. first message: 0→N).
-    if (message.conversationId !== conversationStore.activeConversationId) {
-      conversationStore.setActiveConversation(message.conversationId);
-      const task = taskIndex.value[taskId];
-      if (task) taskIndex.value[taskId] = { ...task, conversationId: message.conversationId };
-    }
-    conversationStore.appendMessage(message);
+    // 07-01: tasks.submitDecisions returns { executionId } only — no message
+    // object. recordAsDecisions threading is unchanged.
+    const { executionId } = await api("tasks.submitDecisions", { taskId, answers, generalNotes, recordAsDecisions });
+    return { executionId };
   }
 
   // ─── Load messages for active task ────────────────────────────────────────

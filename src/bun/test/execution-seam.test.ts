@@ -163,11 +163,12 @@ describe("executeChatTurn seam (onEngineEvent/onRunEnd)", () => {
     ).get(conversationId)!;
     expect(sessRow.status).toBe("idle");
 
-    // The user message was persisted as before.
+    // 07-01 (Task 4): zero conversation_messages writes — the run persisted
+    // nothing to the frozen table.
     const msgCount = db.query<{ n: number }, [number]>(
       "SELECT COUNT(*) AS n FROM conversation_messages WHERE conversation_id = ?",
     ).get(conversationId)!;
-    expect(msgCount.n).toBeGreaterThanOrEqual(1);
+    expect(msgCount.n).toBe(0);
   });
 
   it("3a: done outcome → onRunEnd('done')", async () => {

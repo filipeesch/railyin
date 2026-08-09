@@ -13,18 +13,24 @@
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import type { PiEngineConfig } from "../../config/index.ts";
 import type { ProviderLimiterRegistry } from "./provider-limiter.ts";
-import { getDb } from "../../db/index.ts";
-import { appendMessage } from "../../conversation/messages.ts";
 
 /** Narrow interface so the coordinator does not import getDb() directly. */
 export interface MessageAppender {
   appendCompactionSummary(conversationId: number, summary: string): void;
 }
 
-/** Production implementation wrapping the real appendMessage helper. */
+/**
+ * Production implementation wrapping the real appendMessage helper.
+ *
+ * 07-01 (D-05): the compaction_summary conversation_messages row no longer
+ * persists — conversation_messages is a frozen table with zero new writes. The
+ * pi engine's background compaction itself stays live; only the persisted
+ * summary row goes away.
+ */
 export class DefaultMessageAppender implements MessageAppender {
-  appendCompactionSummary(conversationId: number, summary: string): void {
-    appendMessage(getDb(), null, conversationId, "compaction_summary", null, summary);
+  appendCompactionSummary(_conversationId: number, _summary: string): void {
+    // no-op: the compaction_summary row is no longer written (D-05 zero-write
+    // guarantee on conversation_messages).
   }
 }
 

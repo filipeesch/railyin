@@ -111,7 +111,7 @@ describe("Orchestrator.executeTransition", () => {
     expect(row!.workflow_state).toBe("plan");
   });
 
-  it("creates a transition_event message", async () => {
+  it("writes zero transition_event rows (07-01 D-05 frozen-table guarantee)", async () => {
     const { taskId } = seedProjectAndTask(db, gitDir);
     db.run("UPDATE tasks SET workflow_state = 'backlog' WHERE id = ?", [taskId]);
 
@@ -122,7 +122,7 @@ describe("Orchestrator.executeTransition", () => {
         "SELECT type FROM conversation_messages WHERE task_id = ? AND type = 'transition_event' LIMIT 1",
       )
       .get(taskId);
-    expect(event).not.toBeNull();
+    expect(event).toBeNull();
   });
 
   it("returns null executionId for columns without on_enter_prompt", async () => {
@@ -144,32 +144,19 @@ describe("Orchestrator.executeTransition", () => {
     expect(typeof executionId).toBe("number");
   }, 10_000);
 
-  it("stores prompted transition instructions on the transition event without a standalone prompt row", async () => {
+  it("runs prompted transitions without persisting transition-event metadata (07-01 D-05)", async () => {
     const { taskId } = seedProjectAndTask(db, gitDir);
     db.run("UPDATE tasks SET workflow_state = 'backlog' WHERE id = ?", [taskId]);
 
     await orchestrator.executeTransition(taskId, "plan");
 
+    // 07-01: transition_event rows no longer persist (frozen-table guarantee)
     const event = db
       .query<{ metadata: string | null }, [number]>(
         "SELECT metadata FROM conversation_messages WHERE task_id = ? AND type = 'transition_event' ORDER BY id DESC LIMIT 1",
       )
       .get(taskId);
-    const metadata = JSON.parse(event?.metadata ?? "{}") as {
-      from?: string;
-      to?: string;
-      instructionDetail?: { displayText?: string; sourceText?: string; sourceKind?: string };
-    };
-
-    expect(metadata).toEqual({
-      from: "backlog",
-      to: "plan",
-      instructionDetail: {
-        displayText: "Plan the task.",
-        sourceText: "Plan the task.",
-        sourceKind: "inline",
-      },
-    });
+    expect(event).toBeNull();
 
     const promptRows = db
       .query<{ count: number }, [number]>(
@@ -183,7 +170,7 @@ describe("Orchestrator.executeTransition", () => {
 // ─── executeHumanTurn ────────────────────────────────────────────────────────
 
 describe("Orchestrator.executeHumanTurn", () => {
-  it("07-01 — completes the execution lifecycle and writes zero assistant rows (frozen tables)", async () => {
+  it("07-01 — completes the execution lifecycle and writes zero conversation_messages rows (frozen tables)", async () => {
     const { taskId } = seedProjectAndTask(db, gitDir);
     db.run("UPDATE tasks SET workflow_state = 'plan' WHERE id = ?", [taskId]);
 
@@ -205,14 +192,15 @@ describe("Orchestrator.executeHumanTurn", () => {
       .get(executionId);
     expect(execRow!.status).toBe("completed");
 
-    // The user message is still written by the executor (appendMessage, excised in
-    // Task 4) — but consume() writes NO assistant rows anymore (07-01 zero-write).
+    // 07-01 (Task 4): the executor writes ZERO rows to conversation_messages —
+    // the user message write (appendMessage) was excised along with the
+    // assistant rows.
     const userMsg = db
       .query<{ content: string }, [number]>(
         "SELECT content FROM conversation_messages WHERE task_id = ? AND type = 'user' ORDER BY id DESC LIMIT 1",
       )
       .get(taskId);
-    expect(userMsg!.content).toBe("What should I do first?");
+    expect(userMsg).toBeNull();
 
     const assistantMsg = db
       .query<{ content: string }, [number]>(
@@ -253,15 +241,14 @@ describe("Orchestrator.executeHumanTurn", () => {
     expect(row).toEqual({ task_id: taskId, conversation_id: conversationId });
   });
 
-  it("returns message and executionId", async () => {
+  it("returns executionId only (07-01: no message object in the contract)", async () => {
     const { taskId } = seedProjectAndTask(db, gitDir);
     db.run("UPDATE tasks SET workflow_state = 'plan' WHERE id = ?", [taskId]);
 
-    const { message, executionId } = await orchestrator.executeHumanTurn(taskId, "Hello.");
+    const result = await orchestrator.executeHumanTurn(taskId, "Hello.");
 
-    expect(message).toBeDefined();
-    expect(message.taskId).toBe(taskId);
-    expect(typeof executionId).toBe("number");
+    expect(result).not.toHaveProperty("message");
+    expect(typeof result.executionId).toBe("number");
   });
 
   it("backfills a missing conversation for non-native human turns", async () => {
@@ -288,14 +275,14 @@ describe("Orchestrator.executeHumanTurn", () => {
     db.run("UPDATE tasks SET workflow_state = 'plan', conversation_id = NULL WHERE id = ?", [taskId]);
     db.run("UPDATE conversations SET task_id = 0 WHERE id = ?", [conversationId]);
 
-    const { message } = await nonNative.executeHumanTurn(taskId, "Hello from legacy task.");
+    const { executionId } = await nonNative.executeHumanTurn(taskId, "Hello from legacy task.");
 
     const taskRow = db
       .query<{ conversation_id: number | null }, [number]>("SELECT conversation_id FROM tasks WHERE id = ?")
       .get(taskId);
     expect(taskRow?.conversation_id).not.toBeNull();
     expect(taskRow?.conversation_id).not.toBe(conversationId);
-    expect(message.conversationId).toBe(taskRow!.conversation_id!);
+    expect(executionId).toBeGreaterThan(0);
   });
 });
 

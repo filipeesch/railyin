@@ -129,12 +129,12 @@ export function chatSessionHandlers(db: Database, onSessionUpdated: OnChatSessio
         [params.sessionId]
       );
 
-      // Trigger AI execution — orchestrator appends user message and returns executionId
+      // Trigger AI execution — orchestrator starts the run and returns executionId
       const { extractChips } = await import("../../mainview/utils/chat-chips.ts");
       const engine = QualifiedModelId.tryParse(session.conversation_model)?.engineId ?? "copilot";
       const promptContent = params.engineContent ?? extractChips(params.content).humanText;
       const prepared = await prepareMessageForEngine(engine, promptContent, params.attachments);
-      const { message, executionId } = await orchestrator.executeChatTurn(
+      const { executionId } = await orchestrator.executeChatTurn(
         params.sessionId,
         session.conversation_id,
         params.content,
@@ -155,7 +155,10 @@ export function chatSessionHandlers(db: Database, onSessionUpdated: OnChatSessio
       const updatedSession = fetchChatSessionWithModel(db, params.sessionId);
       if (updatedSession) onSessionUpdated(updatedSession);
 
-      return { messageId: message.id, executionId };
+      // 07-01: the executor no longer persists a message row — messageId is a
+      // sentinel 0 (chat.ts:180-211 ignores it; the message itself surfaces via
+      // the AG-UI/JSONL flow).
+      return { messageId: 0, executionId };
     },
 
     "chatSessions.submitDecisions": async (params: {
@@ -180,7 +183,7 @@ export function chatSessionHandlers(db: Database, onSessionUpdated: OnChatSessio
 
       const engine = QualifiedModelId.tryParse(session.conversation_model)?.engineId ?? "copilot";
       const prepared = await prepareMessageForEngine(engine, engineContent, undefined);
-      const { message, executionId } = await orchestrator.executeChatTurn(
+      const { executionId } = await orchestrator.executeChatTurn(
         params.sessionId,
         session.conversation_id,
         userContent,
@@ -200,7 +203,10 @@ export function chatSessionHandlers(db: Database, onSessionUpdated: OnChatSessio
       const updatedSession = fetchChatSessionWithModel(db, params.sessionId);
       if (updatedSession) onSessionUpdated(updatedSession);
 
-      return { messageId: message.id, executionId };
+      // 07-01: the executor no longer persists a message row — messageId is a
+      // sentinel 0 (chat.ts:180-211 ignores it; the message itself surfaces via
+      // the AG-UI/JSONL flow).
+      return { messageId: 0, executionId };
     },
 
     "chatSessions.getMessages": async (params: {
@@ -249,13 +255,6 @@ export function chatSessionHandlers(db: Database, onSessionUpdated: OnChatSessio
       }
     },
 
-    "chatSessions.compact": async (params: { sessionId: number }): Promise<void> => {
-
-      const session = db.query<ChatSessionRow, [number]>("SELECT * FROM chat_sessions WHERE id = ?").get(params.sessionId);
-      if (!session) throw new Error(`Chat session ${params.sessionId} not found`);
-      if (!orchestrator) throw new Error("Orchestrator not available");
-      await orchestrator.compactConversation(session.conversation_id, session.workspace_key);
-    },
     // ─── chatSessions.setModel ───────────────────────────────────────────────
     "chatSessions.setModel": async (params: { sessionId: number; model: string | null }): Promise<ChatSession> => {
       const session = db.query<ChatSessionRow, [number]>("SELECT * FROM chat_sessions WHERE id = ?").get(params.sessionId);
