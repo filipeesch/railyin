@@ -61,7 +61,7 @@ export class PiModelBuilder {
       compat.thinkingFormat = thinkingFormat;
       // DeepSeek streams reasoning in a separate `reasoning_content` field on assistant
       // messages; the SDK must replay/send that field to keep the conversation coherent.
-      if (thinkingFormat === "deepseek") {
+      if (thinkingFormat === "deepseek" || (thinkingFormat === "openrouter" && nativeId.toLowerCase().includes("deepseek"))) {
         compat.requiresReasoningContentOnAssistantMessages = true;
       }
     }
