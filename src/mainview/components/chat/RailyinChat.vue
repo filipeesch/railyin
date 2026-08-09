@@ -310,6 +310,19 @@ const runError = ref<string | null>(null);
 
 const empty = computed(() => connected.value && messageCount.value === 0);
 
+// WR-02: RailyinChat stays mounted when the drawer switches tasks or the
+// session view switches sessions (only the threadId prop changes) — stale
+// stopRequested/runError from the previous conversation would otherwise
+// render the "Stopped" chip / error row on the fresh thread until its first
+// run. Reset the per-thread state on every thread switch.
+watch(
+  () => props.threadId,
+  () => {
+    stopRequested.value = false;
+    runError.value = null;
+  },
+);
+
 let unsubscribe: (() => void) | null = null;
 watch(
   agent,
