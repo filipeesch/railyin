@@ -90,9 +90,8 @@ function makePiEngine(session: MockLoopSession, config: PiEngineConfig = { type:
   return new PiEngine(
     "test-pi",
     config,
-    () => {},
-    () => {},
-    undefined,
+            () => {},
+            undefined,
     new NullModelSettingsRepository(),
     async () => session as any,
   );

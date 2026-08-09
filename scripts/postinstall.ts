@@ -1,6 +1,13 @@
 import { existsSync } from "fs";
 import { join } from "path";
 
+// Patch eventsource@3.0.7 exports -> CJS build. Bun's require() resolves the
+// "bun" export condition to the ESM build (dist/index.js) and intermittently
+// throws "require() async module ... is unsupported" when @ag-ui/mcp-apps-middleware
+// (via @modelcontextprotocol/sdk) requires it. Pointing all conditions at the CJS
+// build removes the dual-package hazard deterministically. See 01-SUMMARY / PROJECT.md.
+await import("./patch-eventsource.ts");
+
 const platform = process.platform;
 
 // Run code-server's own postinstall on non-Windows platforms

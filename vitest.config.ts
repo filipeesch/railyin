@@ -9,6 +9,6 @@ export default defineConfig({
     },
   },
   test: {
-    include: ["src/mainview/**/*.test.ts"],
+    include: ["src/mainview/**/*.test.ts", "e2e/ui/fixtures/**/*.test.ts"],
   },
 });

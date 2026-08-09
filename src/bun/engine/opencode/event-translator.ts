@@ -3,13 +3,10 @@ import { COMMON_TOOL_NAMES, buildCommonToolDisplay } from "../common-tools.ts";
 import { humanizeToolName } from "../tool-display.ts";
 import type {
   Part,
-  StepFinishPart,
   TextPart,
   ReasoningPart,
   ToolPart,
-  EventPermissionAsked,
   EventSessionError,
-  EventSessionStatus,
 } from "@opencode-ai/sdk/v2";
 
 /**
@@ -24,9 +21,9 @@ export function translatePart(part: Part): EngineEvent[] {
       return translateReasoningPart(part as ReasoningPart);
     case "tool":
       return translateToolPart(part as ToolPart);
-    case "step-finish":
-      return translateStepFinishPart(part as StepFinishPart);
     default:
+      // step-finish (usage tokens), session.* events and unknown part types
+      // map to nothing — usage/status display were trimmed from the protocol.
       return [];
   }
 }
@@ -79,19 +76,6 @@ function translateToolPart(part: ToolPart): EngineEvent[] {
   return [];
 }
 
-function translateStepFinishPart(part: StepFinishPart): EngineEvent[] {
-  const { input, output } = part.tokens;
-  if (!input && !output) return [];
-  return [{ type: "usage", inputTokens: input, outputTokens: output }];
-}
-
-/** Translate a permission.asked event into a shell_approval EngineEvent. */
-export function translatePermissionAsked(event: EventPermissionAsked, executionId: number): EngineEvent {
-  const patterns = event.properties.patterns ?? [];
-  const command = patterns.length > 0 ? patterns.join(", ") : event.properties.permission;
-  return { type: "shell_approval", command, executionId };
-}
-
 /** Translate a session.error event into an EngineEvent error. */
 export function translateSessionError(event: EventSessionError): EngineEvent {
   const err = event.properties.error;
@@ -100,11 +84,4 @@ export function translateSessionError(event: EventSessionError): EngineEvent {
     message = err.message;
   }
   return { type: "error", message, fatal: true };
-}
-
-/** Translate a session.status event into a status EngineEvent if meaningful. */
-export function translateSessionStatus(event: EventSessionStatus): EngineEvent | null {
-  const status = event.properties.status;
-  if (!status) return null;
-  return { type: "status", message: String(status) };
 }

@@ -25,6 +25,9 @@ import { lspHandlers } from "./handlers/lsp.ts";
 import { codeServerHandlers } from "./handlers/code-server.ts";
 import { mcpHandlers, handleMcpOAuthCallback } from "./handlers/mcp.ts";
 import { chatSessionHandlers, startChatSessionAutoArchiveJob } from "./handlers/chat-sessions.ts";
+import { fetchChatSessionWithModel } from "./db/task-queries.ts";
+import { threadHandlers } from "./handlers/threads.ts";
+import { legacyImportHandlers } from "./handlers/legacy-import.ts";
 import { decisionHandlers } from "./handlers/decisions.ts";
 import { noteHandlers } from "./handlers/notes.ts";
 import { configHandlers } from "./handlers/config.ts";
@@ -32,6 +35,12 @@ import { Orchestrator } from "./engine/orchestrator.ts";
 import { EngineRegistry } from "./engine/engine-registry.ts";
 import { CopilotEngine } from "./engine/copilot/engine.ts";
 import { createDefaultCopilotSdkAdapter } from "./engine/copilot/session.ts";
+import { CopilotRuntime, createCopilotRuntimeHandler, type CopilotRuntimeOptions } from "@copilotkit/runtime/v2";
+import { RailyinAgent } from "./copilotkit/railyin-agent.ts";
+import { JsonlStore } from "./copilotkit/jsonl-store.ts";
+import { BoardRunLogger } from "./copilotkit/board-run-logger.ts";
+import { RailyinAgentRunner } from "./copilotkit/railyin-runner.ts";
+import * as interruptRegistry from "./copilotkit/interrupt-registry.ts";
 import { ClaudeEngine } from "./engine/claude/engine.ts";
 import { createDefaultClaudeSdkAdapter } from "./engine/claude/adapter.ts";
 import { OpenCodeEngine } from "./engine/opencode/engine.ts";
@@ -47,7 +56,6 @@ import type { Task, ConversationMessage, ChatSession } from "../shared/rpc-types
 import { setupFileLogging } from "./server/file-logger.ts";
 import { BroadcastChannel } from "./server/broadcast-channel.ts";
 import { NotificationService } from "./server/notifications.ts";
-import { StreamEventProcessor } from "./server/stream-processor.ts";
 import { WebSocketHandler } from "./server/websocket.ts";
 import { createShutdownHandler } from "./server/shutdown.ts";
 import { ProjectResolver } from "./git/ProjectResolver.ts";
@@ -55,7 +63,7 @@ import { TaskGitContextRepository } from "./db/repositories/TaskGitContextReposi
 import { GitRepositoryManager } from "./git/GitRepositoryManager.ts";
 import { WorktreeManager } from "./git/WorktreeManager.ts";
 import type { ExecutionEngine } from "./engine/types.ts";
-import type { OnTaskUpdated, OnNewMessage } from "./engine/types.ts";
+import type { OnTaskUpdated } from "./engine/types.ts";
 
 // ─── File logging (canary/production: no terminal to read) ───────────────────
 setupFileLogging();
@@ -132,31 +140,29 @@ registryPool.getGlobalRegistry().startAll().catch((err: unknown) => {
 
 const channel = new BroadcastChannel();
 const notifier = new NotificationService(channel);
-const streamProc = new StreamEventProcessor(channel, db);
 
 // ─── Engine factory map (composition root) ───────────────────────────────────
 
-type EngineFactory = (engineId: string, cfg: EngineConfig, onTaskUpdated: OnTaskUpdated, onNewMessage: OnNewMessage) => ExecutionEngine;
+type EngineFactory = (engineId: string, cfg: EngineConfig, onTaskUpdated: OnTaskUpdated) => ExecutionEngine;
 
 const engineFactories: Record<string, EngineFactory> = {
-  copilot: (_engineId, _cfg, onTaskUpdated, onNewMessage) =>
-    new CopilotEngine(onTaskUpdated, onNewMessage, createDefaultCopilotSdkAdapter()),
-  claude: (_engineId, cfg, onTaskUpdated, onNewMessage) =>
-    new ClaudeEngine((cfg as { model?: string }).model, onTaskUpdated, onNewMessage, createDefaultClaudeSdkAdapter()),
-  opencode: (_engineId, cfg, onTaskUpdated, onNewMessage) =>
-    new OpenCodeEngine(onTaskUpdated, onNewMessage, createDefaultOpenCodeSdkAdapter(cfg as Parameters<typeof createDefaultOpenCodeSdkAdapter>[0])),
-  cursor: (_engineId, cfg, onTaskUpdated, onNewMessage) => {
+  copilot: (_engineId, _cfg, onTaskUpdated) =>
+    new CopilotEngine(onTaskUpdated, createDefaultCopilotSdkAdapter()),
+  claude: (_engineId, cfg, onTaskUpdated) =>
+    new ClaudeEngine((cfg as { model?: string }).model, onTaskUpdated, createDefaultClaudeSdkAdapter()),
+  opencode: (_engineId, cfg, onTaskUpdated) =>
+    new OpenCodeEngine(onTaskUpdated, createDefaultOpenCodeSdkAdapter(cfg as Parameters<typeof createDefaultOpenCodeSdkAdapter>[0])),
+  cursor: (_engineId, cfg, onTaskUpdated) => {
     const cursorCfg = cfg as { api_key?: string };
     return new CursorEngine(
       onTaskUpdated,
-      onNewMessage,
       createDefaultCursorSdkAdapter({ apiKey: cursorCfg.api_key }),
     );
   },
-  pi: (engineId, cfg, onTaskUpdated, onNewMessage) => {
+  pi: (engineId, cfg, onTaskUpdated) => {
     const piCfg = cfg as PiEngineConfig;
     const dialect = createDefaultDialectRegistry().create(piCfg.dialect ?? "none");
-    return createPiEngine({ engineId, config: piCfg, onTaskUpdated, onNewMessage, dialect, modelSettingsRepo });
+    return createPiEngine({ engineId, config: piCfg, onTaskUpdated, dialect, modelSettingsRepo });
   },
   scripted: () => new MockExecutionEngine(),
 };
@@ -165,7 +171,6 @@ function buildEngineInstances(
   engines: EngineEntry[],
   factories: Record<string, EngineFactory>,
   onTaskUpdated: OnTaskUpdated,
-  onNewMessage: OnNewMessage,
 ): Map<string, ExecutionEngine> {
   const map = new Map<string, ExecutionEngine>();
   for (const entry of engines) {
@@ -175,7 +180,7 @@ function buildEngineInstances(
       continue;
     }
     try {
-      map.set(entry.id, factory(entry.id, entry.config, onTaskUpdated, onNewMessage));
+      map.set(entry.id, factory(entry.id, entry.config, onTaskUpdated));
     } catch (err) {
       console.error(`[engine] Failed to construct engine '${entry.id}':`, err);
     }
@@ -219,27 +224,109 @@ if (injectedEngine) {
     uniqueEngines,
     engineFactories,
     notifier.notifyTaskUpdated.bind(notifier),
-    notifier.notifyNewMessage.bind(notifier),
   );
   engineRegistry = new EngineRegistry(instanceMap, getWorkspaceConfig);
 }
 
+// Session-status replacement push (07-01 Pitfall 2): consume() fires
+// onSessionStatusChange at every chat_sessions status write; this wrapper
+// broadcasts chatSession.updated so the sidebar flips running → idle without
+// the removed legacy "done" push.
+const sessionStatusCb = (conversationId: number): void => {
+  const row = db.query<{ id: number }, [number]>(
+    "SELECT id FROM chat_sessions WHERE conversation_id = ?",
+  ).get(conversationId);
+  if (row) {
+    const session = fetchChatSessionWithModel(db, row.id);
+    if (session) notifier.notifyChatSessionUpdated(session);
+  }
+};
+
+// ─── Durable AG-UI thread log (D-05, RUNR-02) ─────────────────────────────────
+// Created BEFORE the orchestrator: board-driven runs (WR-01) append their
+// translated AG-UI events to the same per-thread JSONL the runner persists, so
+// the task-drawer chat shows board-run output. Gated off the injected mock
+// engine used by e2e — test servers run without RAILYN_DATA_DIR and must not
+// write board-run logs into the developer's real ~/.railyn/threads dir.
+const jsonlStore = new JsonlStore(getDataDir());
+const boardRunLogger = injectedEngine ? undefined : new BoardRunLogger(jsonlStore);
+
 const orchestrator: Orchestrator | null = !configError
-  ? new Orchestrator(db, engineRegistry, notifier.onError.bind(notifier), notifier.notifyTaskUpdated.bind(notifier), notifier.notifyNewMessage.bind(notifier), wsRepo, streamProc.onRawMessageEnqueued.bind(streamProc), worktreeManager, modelSettingsRepo, registryPool)
+  ? new Orchestrator(db, engineRegistry, notifier.onError.bind(notifier), notifier.notifyTaskUpdated.bind(notifier), wsRepo, sessionStatusCb, worktreeManager, modelSettingsRepo, registryPool, boardRunLogger)
   : null;
-
-if (orchestrator) {
-  orchestrator.setOnStreamEvent(streamProc.onStreamEvent.bind(streamProc));
-  // Late-bind: resolves the circular dependency (orchestrator needs streamProc, streamProc needs orchestrator)
-  streamProc.setMarkClaudeExecution((id) => orchestrator.markClaudeExecution(id));
-}
-
-streamProc.start();
 
 // ─── Start retention job ──────────────────────────────────────────────────────
 const { RetentionJob } = await import("./jobs/retention-job.ts");
 const retentionJob = new RetentionJob(db);
 retentionJob.start();
+
+// ─── CopilotRuntime mount (HOST-01/02) ───────────────────────────────────────
+// AG-UI runtime mounted on the SAME Bun.serve origin under /api/copilotkit/*.
+// - D-01: fetch-native `createCopilotRuntimeHandler` (NOT hono — decision
+//   locked in phase planning; reversible one-line swap later).
+// - D-02: multi-route mode under the /api/copilotkit basePath.
+// - D-03: same-origin serving — NO cors option passed to the handler.
+// - The ScriptedAgent probe agent is registered ONLY when RAILYN_COPILOTKIT_PROBE=1
+//   (set by the e2e startServer({ copilotkitProbe }) fixture). `bun run prod`
+//   never loads the e2e/ module nor registers the fake agent — env-gate pattern
+//   mirroring RAILYN_TEST_EXECUTION_ENGINE above (T-1-03 mitigation). The
+//   dynamic import keeps the e2e/ tree out of the production module graph.
+// D-06: the legacy import path is retired behind RAILYN_LEGACY_IMPORT=1 —
+// `legacyImport.run` is registered ONLY when the flag is set (mirrors the
+// copilotProbeEnabled env-gate pattern above; `bun run prod` never sets it).
+// The import module + its frozen-table reads stay available for a future
+// migration, but the RPC is absent by default (404 over the wire, never an
+// erroring handler). The frontend's visibility channel is the unconditional
+// `legacyImport.enabled` RPC registered by legacyImportHandlers.
+const legacyImportEnabled = process.env.RAILYN_LEGACY_IMPORT === "1";
+const copilotProbeEnabled = process.env.RAILYN_COPILOTKIT_PROBE === "1";
+let scriptedAgent: unknown;
+if (copilotProbeEnabled) {
+  const probeModule = await import("../../e2e/api/copilotkit/probe-agent.ts");
+  scriptedAgent = probeModule.scriptedAgent;
+}
+// D-12: when the probe is disabled AND the orchestrator exists (config loaded
+// cleanly), register RailyinAgent — the real AG-UI bridge. The probe gate is
+// checked FIRST (Pitfall 9): `bun run prod` never loads the e2e probe module.
+let railyinAgent: unknown = null;
+if (!copilotProbeEnabled && orchestrator) {
+  railyinAgent = new RailyinAgent(db, orchestrator);
+}
+// The runtime's AgentsConfig references its NESTED @ag-ui/client AbstractAgent
+// (nested rxjs@7.8.1), while the probe/railyin agent extends the top-level copy
+// (rxjs@7.8.2). Structurally identical at runtime — the probe tests prove the
+// round-trip end-to-end — but rxjs's Subscriber is invariant, so the types do
+// not unify. The cast bridges only that type-level gap; the agents map stays
+// empty in `bun run prod` when the orchestrator failed to construct (config
+// error — the runtime mount is inert without an execution surface).
+type CopilotAgents = CopilotRuntimeOptions["agents"];
+const copilotAgents = (copilotProbeEnabled && scriptedAgent
+  ? { default: scriptedAgent }
+  : railyinAgent
+    ? { default: railyinAgent }
+    : {}) as unknown as CopilotAgents;
+// 02-02 (D-12 runner swap, RUNR-02): the durable RailyinAgentRunner persists
+// every wire event to `data/threads/{threadId}.jsonl` and replays cold
+// connects from the log. The runner is used ONLY in the non-probe path —
+// probe mode keeps the base InMemoryAgentRunner so ScriptedAgent wire text
+// stays byte-identical (probe threadIds like "t1" are non-numeric and must
+// never reach the JSONL store).
+// 03-03 (A2): give the module-level interrupt registry the durable store so a
+// fresh process can lazily rebuild a pending decision from the thread's JSONL
+// tail + the waiting_user executions row (post-restart resume — old-stack
+// parity). Gated to the non-probe path: probe threadIds ("t1") are non-numeric
+// and must never reach the store's validation.
+if (!copilotProbeEnabled) interruptRegistry.configure({ store: jsonlStore });
+const railyinRunner = !copilotProbeEnabled ? new RailyinAgentRunner(jsonlStore) : undefined;
+const copilotRuntime = new CopilotRuntime({
+  agents: copilotAgents,
+  ...(railyinRunner ? { runner: railyinRunner } : {}),
+});
+const copilotHandler = createCopilotRuntimeHandler({
+  runtime: copilotRuntime,
+  basePath: "/api/copilotkit",
+  mode: "multi-route",
+});
 
 // ─── Bun HTTP + WebSocket server ──────────────────────────────────────────────
 
@@ -271,12 +358,36 @@ const allHandlers = {
     },
   }),
   ...chatSessionHandlers(db, notifier.notifyChatSessionUpdated.bind(notifier), orchestrator),
+  ...threadHandlers(db, jsonlStore),
+  ...legacyImportHandlers(db, jsonlStore, legacyImportEnabled),
   ...decisionHandlers(db),
   ...noteHandlers(db),
   ...configHandlers(),
 } as Record<string, (params: unknown) => unknown>;
 
 const wsHandler = new WebSocketHandler(channel, getPtySession);
+
+/**
+ * WR-03: same-origin gate for the unauthenticated AG-UI execution mount
+ * (/api/copilotkit/*). The mount drives REAL engines — including their
+ * shell/bash tools — from an attacker-chosen prompt, so a cross-origin
+ * browser POST (DNS rebinding / CSRF) must never reach it. Browsers send
+ * `Origin` on every POST (same- AND cross-origin): a mismatch with the
+ * server's own Host is rejected with 403. Requests WITHOUT an Origin header
+ * (curl, native clients, Node fetch, same-origin EventSource GETs) pass —
+ * this is a local single-user app and the header is only meaningful for
+ * browser-originated requests.
+ */
+function isSameOriginRequest(req: Request, url: URL): boolean {
+  const origin = req.headers.get("origin");
+  if (origin == null) return true; // non-browser client — nothing to verify
+  try {
+    const originUrl = new URL(origin);
+    return originUrl.host === (req.headers.get("host") ?? url.host);
+  } catch {
+    return false; // unparseable Origin (e.g. "null" from sandboxed frames) → reject
+  }
+}
 
 const server = Bun.serve({
   hostname: "127.0.0.1",
@@ -301,6 +412,26 @@ const server = Bun.serve({
 
     if (req.method === "GET" && url.pathname === "/api/mcp/oauth/callback") {
       return handleMcpOAuthCallback(url, registryPool);
+    }
+
+    // /api/copilotkit/* — CopilotRuntime mount (HOST-01). MUST precede the
+    // POST /api/ RPC router below (Pitfall 3: the RPC router would 404 these
+    // paths). Deliberately NOT wrapped in the RPC try/catch — it JSON-encodes
+    // errors and would corrupt SSE streams. HOST-02: disable the per-request
+    // idle timeout for runtime paths only (SSE streams go quiet > global
+    // idleTimeout 30s during agent silences); the global idleTimeout stays for
+    // the rest of the app.
+    if (url.pathname.startsWith("/api/copilotkit/")) {
+      // WR-03: reject cross-origin browser requests before they reach the
+      // runtime (403, not SSE) — see isSameOriginRequest above.
+      if (!isSameOriginRequest(req, url)) {
+        return new Response(JSON.stringify({ error: "Cross-origin request rejected" }), {
+          status: 403,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      srv.timeout(req, 0);
+      return copilotHandler(req);
     }
 
     if (req.method === "POST" && url.pathname.startsWith("/api/")) {
@@ -371,15 +502,4 @@ if (process.env.RAILYN_DEBUG) {
   });
   Bun.write(path.join(getTmpDir(), "railyn-debug.port"), String(debugServer.port)).catch(() => { });
   console.log(`DEBUG_PORT=${debugServer.port}`);
-}
-
-// ─── Config error: push to connected clients ──────────────────────────────────
-if (configError) {
-  setTimeout(() => {
-    notifier.broadcastConfigError({
-      taskId: -1,
-      executionId: -1,
-      error: `Config error: ${configError}`,
-    });
-  }, 2000);
 }

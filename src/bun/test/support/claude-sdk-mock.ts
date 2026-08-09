@@ -1,11 +1,9 @@
-import type { EngineEvent, EngineResumeInput } from "../../engine/types.ts";
+import type { EngineEvent } from "../../engine/types.ts";
 import type { ClaudeRunConfig, ClaudeSdkAdapter, ClaudeSdkModelInfo } from "../../engine/claude/adapter.ts";
 import { executeCommonTool } from "../../engine/common-tools.ts";
 
 type MockTurnStep =
   | { kind: "emit"; event: EngineEvent }
-  | { kind: "ask_user"; payload: string }
-  | { kind: "shell_approval"; command: string }
   | { kind: "subagent_start"; callId: string; intent: string; prompt: string }
   | { kind: "subagent_stop"; callId: string }
   | { kind: "callTool"; toolName: string; args: unknown }
@@ -80,18 +78,6 @@ export class MockClaudeSdkAdapter implements ClaudeSdkAdapter {
             yield step.event;
             break;
 
-          case "ask_user": {
-            yield { type: "ask_user", payload: step.payload };
-            await config.waitForResume({ type: "ask_user", payload: step.payload });
-            break;
-          }
-
-          case "shell_approval": {
-            yield { type: "shell_approval", command: step.command, executionId: config.executionId };
-            await config.waitForResume({ type: "shell_approval", command: step.command });
-            break;
-          }
-
           case "subagent_start": {
             yield { type: "subagent_start", callId: step.callId, intent: step.intent, prompt: step.prompt };
             break;
@@ -162,20 +148,8 @@ export function toolResult(callId: string, name: string, result: string, isError
   return { kind: "emit", event: { type: "tool_result", name, result, callId, isError } };
 }
 
-export function usage(inputTokens: number, outputTokens: number): MockTurnStep {
-  return { kind: "emit", event: { type: "usage", inputTokens, outputTokens } };
-}
-
 export function done(): MockTurnStep {
   return { kind: "emit", event: { type: "done" } };
-}
-
-export function askUser(payload = '{"question":"Need input"}'): MockTurnStep {
-  return { kind: "ask_user", payload };
-}
-
-export function shellApproval(command: string): MockTurnStep {
-  return { kind: "shell_approval", command };
 }
 
 export function fatal(message: string): MockTurnStep {

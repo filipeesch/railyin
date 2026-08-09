@@ -1,8 +1,6 @@
-import type { Task } from "../../../shared/rpc-types.ts";
 import { QualifiedModelId } from "../qualified-model-id";
 import type { Database } from "bun:sqlite";
-import { fetchTaskWithModel } from "../../db/task-queries.ts";
-import { appendMessage, ensureTaskConversation } from "../../conversation/messages";
+import { ensureTaskConversation } from "../../db/task-queries.ts";
 import { getWorkspaceConfig } from "../../workspace-context";
 import { getColumnConfig } from "../../workflow/column-config";
 import type { EngineRegistry } from "../engine-registry.ts";
@@ -17,6 +15,7 @@ import { PromptAssemblyService } from "./prompt-assembly-service.ts";
 import type { PromptFilterContext } from "./custom-prompt-injector.ts";
 import type { ExecutionParamsEnricher } from "./execution-params-enricher.ts";
 import { SlashCommandResolver } from "./slash-command-resolver.ts";
+import type { BoardRunLogger } from "../../copilotkit/board-run-logger.ts";
 
 
 export class RetryExecutor {
@@ -31,9 +30,11 @@ export class RetryExecutor {
     private readonly promptAssemblyService: PromptAssemblyService,
     private readonly slashCommandResolver: SlashCommandResolver,
     private readonly paramsEnricher?: ExecutionParamsEnricher,
+    /** WR-01: taps board-driven runs' engine events into the AG-UI/JSONL flow. */
+    private readonly boardRunLogger?: BoardRunLogger,
   ) {}
 
-  async execute(taskId: number): Promise<{ task: Task; executionId: number }> {
+  async execute(taskId: number): Promise<{ executionId: number }> {
     const db = this.db;
     const task = db.query<TaskRow, [number]>(
       `SELECT t.*, c.model AS conversation_model 
@@ -64,7 +65,6 @@ export class RetryExecutor {
       "UPDATE tasks SET execution_state = 'running', current_execution_id = ? WHERE id = ?",
       [executionId, taskId],
     );
-    appendMessage(db, taskId, conversationId, "system", null, `Retry attempt ${attempt}`);
 
     const updatedRow = db.query<TaskRow & { conversation_model: string | null }, [number]>(
       `SELECT t.*, c.model AS conversation_model 
@@ -114,7 +114,6 @@ export class RetryExecutor {
         systemInstructions,
         this.workdirResolver.resolve(updatedRow),
         signal,
-        this.streamProcessor.makePersistCallback(taskId, conversationId, executionId),
         undefined,
         undefined,
         config.projects.find((p) => p.key === updatedRow.project_key)?.projectPath,
@@ -133,8 +132,11 @@ export class RetryExecutor {
           model: effectiveModel ?? "",
         })
       : retryBase;
-    this.streamProcessor.runNonNative(taskId, conversationId, executionId, engine, execParams);
+    // WR-01: board-driven runs have no AG-UI run in flight — the logger's tap
+    // translates engine events into AG-UI events and appends them to the
+    // conversation's JSONL thread so the task-drawer chat shows the output.
+    this.streamProcessor.runNonNative(taskId, conversationId, executionId, engine, execParams, this.boardRunLogger?.buildOpts(conversationId, executionId));
 
-    return { task: fetchTaskWithModel(db, taskId)!, executionId };
+    return { executionId };
   }
 }

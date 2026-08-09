@@ -6,6 +6,8 @@ import {
   buildDecisionAnswers,
   buildSubmissionText,
   isOptionSelected,
+  buildResumePayload,
+  buildCancelResumePayload,
   type DecisionRequestState,
 } from "./decisionRequest";
 
@@ -200,5 +202,54 @@ describe("isOptionSelected", () => {
 
     const stateNon = makeState({ multiSelected: [["__other__"]] });
     expect(isOptionSelected(nonExclusiveQuestion, "__other__", stateNon, 0)).toBe(true);
+  });
+});
+
+describe("buildResumePayload", () => {
+  it("DRU-14: approved shape carries decision, answers, notes and toggle", () => {
+    const state = makeState({ singleSelected: ["PostgreSQL"] });
+    const payload = buildResumePayload([exclusiveQuestion], state, "General context", true);
+    expect(payload).toEqual({
+      decision: "approved",
+      answers: [{ question: "Which database?", answer: "PostgreSQL", weight: "critical", notes: undefined }],
+      generalNotes: "General context",
+      recordAsDecisions: true,
+    });
+  });
+
+  it("DRU-15: resolved payload always produces one answer entry per question (INVALID_PAYLOAD contract — gating stays in canSubmitDecisionRequest)", () => {
+    const state = makeState({ singleSelected: ["PostgreSQL", ""], freetextValues: ["", ""] });
+    const payload = buildResumePayload([exclusiveQuestion, freetextQuestion], state, "", true);
+    expect(payload.answers).toHaveLength(2);
+    // The answered question yields a non-empty answer; the mapper does NOT gate
+    // unanswered questions — canSubmitDecisionRequest owns that.
+    expect(payload.answers![0].answer).toBe("PostgreSQL");
+    expect(payload.answers![1].answer).toBe("");
+  });
+
+  it("DRU-16: empty generalNotes is omitted; recordAsDecisions passes through", () => {
+    const state = makeState({ singleSelected: ["PostgreSQL"] });
+    const noNotes = buildResumePayload([exclusiveQuestion], state, "", false);
+    expect(noNotes.generalNotes).toBeUndefined();
+    expect(noNotes.recordAsDecisions).toBe(false);
+  });
+
+  it("DRU-17: notes + __other__ answers pass through from buildDecisionAnswers", () => {
+    const state = makeState({
+      singleSelected: ["__other__"],
+      otherValues: ["Custom choice"],
+      notesValues: ["Ignored for other"],
+    });
+    const payload = buildResumePayload([exclusiveQuestion], state, "", true);
+    expect(payload.answers![0]).toEqual({
+      question: "Which database?",
+      answer: "Custom choice",
+      weight: "critical",
+      notes: undefined,
+    });
+  });
+
+  it("DRU-18: cancelled variant maps to { status: 'cancelled' } (Phase 3 D-02 rejection)", () => {
+    expect(buildCancelResumePayload()).toEqual({ status: "cancelled" });
   });
 });

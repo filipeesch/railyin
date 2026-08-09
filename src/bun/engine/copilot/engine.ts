@@ -9,7 +9,7 @@
  * Compaction: handled by Copilot's infinite sessions feature.
  */
 
-import type { ExecutionEngine, ExecutionParams, EngineEvent, EngineModelInfo, EngineResumeInput, CommandInfo, OnTaskUpdated, OnNewMessage } from "../types.ts";
+import type { ExecutionEngine, ExecutionParams, EngineEvent, EngineModelInfo, CommandInfo, OnTaskUpdated } from "../types.ts";
 import type { CopilotSdkAdapter, CopilotSdkAttachment, CopilotSdkSession, CopilotSdkModelInfo } from "./session";
 import { copilotSessionIdForConversation, copilotSessionIdForTask, createDefaultCopilotSdkAdapter } from "./session";
 import { approveAll } from "@github/copilot-sdk";
@@ -74,14 +74,9 @@ export class CopilotEngine implements ExecutionEngine {
   /** Active sessions keyed by executionId. */
   private readonly sessions = new Map<number, CopilotSdkSession>();
   private readonly executionSessionIds = new Map<number, string>();
-  private readonly pendingResumes = new Map<number, {
-    resolve: (input: EngineResumeInput) => void;
-    reject: (error: Error) => void;
-  }>();
 
   constructor(
     onTaskUpdated: OnTaskUpdated,
-    _onNewMessage: OnNewMessage,
     sdkAdapter: CopilotSdkAdapter = createDefaultCopilotSdkAdapter(),
     dialect: CopilotDialect = new CopilotDialect(),
     // cliPath is only used when constructing the default adapter above;
@@ -96,31 +91,15 @@ export class CopilotEngine implements ExecutionEngine {
     return this._run(params);
   }
 
-  async resume(executionId: number, input: EngineResumeInput): Promise<void> {
-    const sdkSessionId = this.executionSessionIds.get(executionId);
-    if (sdkSessionId) this.sdkAdapter.touchLease(sdkSessionId, "running");
-    const pending = this.pendingResumes.get(executionId);
-    if (!pending) {
-      throw new Error(`Execution ${executionId} is not waiting for resume input`);
-    }
-    this.pendingResumes.delete(executionId);
-    pending.resolve(input);
+  async resume(_executionId: number, _input: never): Promise<void> {
+    // All engine-level resume channels were trimmed with ask_user/shell_approval
+    // (EngineResumeInput deleted). Decision interrupts resume via a NEW turn —
+    // executeChatTurn/executeHumanTurn deliver the answer as engineContent —
+    // never through engine.resume().
   }
 
   private async *_run(params: ExecutionParams): AsyncGenerator<EngineEvent> {
     const { executionId, taskId, boardId, prompt, systemInstructions, taskContext, workingDirectory, model, boardTools, workspaceKey } = params;
-
-    // Collect status messages from the adapter (download/setup progress)
-    // so we can yield them as engine events for the UI.
-    const pendingStatus: string[] = [];
-    const unsubStatus = this.sdkAdapter.onStatus((msg) => pendingStatus.push(msg));
-
-    // Helper: yield any buffered status events.
-    const flushStatus = function* (): Generator<EngineEvent> {
-      while (pendingStatus.length > 0) {
-        yield { type: "status", message: pendingStatus.shift()! };
-      }
-    };
 
     // Resolve model from execution params only.
     // Strip the "copilot/" namespace prefix — it's our internal qualifier, the SDK
@@ -207,15 +186,11 @@ export class CopilotEngine implements ExecutionEngine {
     let unsubEvict: () => void = () => {};
     try {
       try {
-        yield* flushStatus();
         session = await this.sdkAdapter.resumeSession(sdkSessionId, sessionConfig);
-        yield* flushStatus();
       } catch {
         // Session data doesn't exist on disk yet (first run) or was deleted.
         // Create with the same deterministic ID so future runs can always resume it.
-        yield* flushStatus();
         session = await this.sdkAdapter.createSession({ sessionId: sdkSessionId, ...sessionConfig });
-        yield* flushStatus();
       }
 
       this.sessions.set(executionId, session);
@@ -242,14 +217,14 @@ export class CopilotEngine implements ExecutionEngine {
       // SlashCommandResolver, BEFORE historyBlock/decisionsBlock/stageInstructionsBlock
       // are joined into `prompt` — resolving here (on the full composed string) would
       // fail to match the dialect's leading "/command" pattern.
-      let nextPrompt: string | null = prompt;
-
-      while (nextPrompt != null) {
+      // Single-pass turn: the ask_user/shell_approval pause loop was trimmed in
+      // 07-02 (EngineResumeInput deleted), so the run ends when the stream ends
+      // or the run is aborted — no resume-wait between turns.
+      {
         // Fire the prompt; pass the promise into translateCopilotStream so a rejection
         // (e.g. CLI crash) is surfaced as a fatal error rather than silently hanging.
         // Combine the external abort signal with the decision_request internal abort.
-        // Guard: if the outer signal is already aborted (can happen on a second
-        // turn if cancel fired while waitForResume was pending), abort immediately
+        // Guard: if the outer signal is already aborted, abort immediately
         // instead of adding a listener that will never fire.
         if (params.signal?.aborted) return;
         const combinedController = new AbortController();
@@ -301,11 +276,10 @@ export class CopilotEngine implements ExecutionEngine {
         });
 
         const sendPromise = session.send({
-          prompt: nextPrompt,
+          prompt,
           ...(mappedAttachments.length ? { attachments: mappedAttachments } : {}),
         });
         const onWatchdogFire = () => this.sdkAdapter.pingClient(sdkSessionId);
-        let paused = false;
         let terminal = false;
 
         for await (const event of translateCopilotStream(session, {
@@ -313,28 +287,10 @@ export class CopilotEngine implements ExecutionEngine {
           sendPromise,
           worktreePath: workingDirectory,
           onWatchdogFire,
-          onRawEvent: (rawEvent) => {
-            params.onRawModelMessage?.({
-              engine: "copilot",
-              sessionId: sdkSessionId,
-              direction: "inbound",
-              eventType: rawEvent.type,
-              payload: rawEvent as unknown as Record<string, unknown>,
-            });
-          },
           onHeartbeat: () => this.sdkAdapter.touchLease(sdkSessionId, "running"),
         })) {
-          if (event.type === "ask_user" || event.type === "shell_approval") {
-            this.sdkAdapter.touchLease(sdkSessionId, "waiting_user");
-          } else {
-            this.sdkAdapter.touchLease(sdkSessionId, "running");
-          }
+          this.sdkAdapter.touchLease(sdkSessionId, "running");
           yield event;
-
-          if (event.type === "ask_user" || event.type === "shell_approval") {
-            paused = true;
-            break;
-          }
 
           if (
             event.type === "done" ||
@@ -350,16 +306,7 @@ export class CopilotEngine implements ExecutionEngine {
           return;
         }
 
-        if (params.signal?.aborted || terminal) {
-          return;
-        }
-
-        if (!paused) {
-          return;
-        }
-
-        const resumeInput = await this.waitForResume(executionId, params.signal);
-        nextPrompt = this.mapResumeInputToPrompt(resumeInput);
+        return;
       }
     } catch (err) {
       if (
@@ -379,12 +326,6 @@ export class CopilotEngine implements ExecutionEngine {
       };
     } finally {
       unsubEvict();
-      unsubStatus();
-      const pending = this.pendingResumes.get(executionId);
-      if (pending) {
-        this.pendingResumes.delete(executionId);
-        pending.reject(new Error(`Execution ${executionId} was closed before resuming`));
-      }
       this.sessions.delete(executionId);
       this.executionSessionIds.delete(executionId);
       if (session) {
@@ -396,11 +337,6 @@ export class CopilotEngine implements ExecutionEngine {
   }
 
   cancel(executionId: number): void {
-    const pending = this.pendingResumes.get(executionId);
-    if (pending) {
-      this.pendingResumes.delete(executionId);
-      pending.reject(new Error(`Execution ${executionId} cancelled`));
-    }
     const session = this.sessions.get(executionId);
     const sdkSessionId = this.executionSessionIds.get(executionId);
     if (session) {
@@ -505,51 +441,6 @@ export class CopilotEngine implements ExecutionEngine {
     }
 
     return this.dialect.listCommands(worktreePath, projectPath);
-  }
-
-  private waitForResume(executionId: number, signal?: AbortSignal): Promise<EngineResumeInput> {
-    return new Promise<EngineResumeInput>((resolve, reject) => {
-      const existing = this.pendingResumes.get(executionId);
-      if (existing) {
-        reject(new Error(`Execution ${executionId} is already waiting for resume input`));
-        return;
-      }
-
-      const cleanup = () => {
-        signal?.removeEventListener("abort", onAbort);
-        this.pendingResumes.delete(executionId);
-      };
-
-      const onAbort = () => {
-        cleanup();
-        reject(new Error(`Execution ${executionId} aborted while waiting for input`));
-      };
-
-      signal?.addEventListener("abort", onAbort, { once: true });
-      this.pendingResumes.set(executionId, {
-        resolve: (input) => {
-          cleanup();
-          resolve(input);
-        },
-        reject: (error) => {
-          cleanup();
-          reject(error);
-        },
-      });
-    });
-  }
-
-  private mapResumeInputToPrompt(input: EngineResumeInput): string {
-    switch (input.type) {
-      case "ask_user":
-        return input.content;
-      case "shell_approval":
-        return input.decision === "deny"
-          ? "The requested shell command was denied by the user. Adjust your plan and continue without it."
-          : input.decision === "approve_all"
-            ? "The requested shell command was approved for this and similar commands. Continue."
-            : "The requested shell command was approved once. Continue.";
-    }
   }
 }
 

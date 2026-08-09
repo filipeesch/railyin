@@ -1,8 +1,6 @@
-import type { ConversationMessage, ManualEdit, CodeReviewPayload, CodeReviewHunk, LineComment, HunkDecision } from "../../../shared/rpc-types.ts";
+import type { ManualEdit, CodeReviewPayload, CodeReviewHunk, LineComment, HunkDecision } from "../../../shared/rpc-types.ts";
 import type { Database } from "bun:sqlite";
-import { mapTask, mapConversationMessage } from "../../db/mappers.ts";
-import { fetchTaskWithModel } from "../../db/task-queries.ts";
-import { appendMessage, ensureTaskConversation } from "../../conversation/messages.ts";
+import { fetchTaskWithModel, ensureTaskConversation } from "../../db/task-queries.ts";
 import { getWorkspaceConfig } from "../../workspace-context.ts";
 import { getColumnConfig } from "../../workflow/column-config.ts";
 import { formatReviewMessageForLLM } from "../../workflow/review.ts";
@@ -11,14 +9,15 @@ import type { EngineRegistry } from "../engine-registry.ts";
 import type { ExecutionParamsBuilder } from "./execution-params-builder.ts";
 import type { IWorkingDirectoryResolver } from "./working-directory-resolver.ts";
 import type { StreamProcessor } from "../stream/stream-processor.ts";
-import type { OnTaskUpdated, OnNewMessage } from "../types.ts";
-import type { TaskRow, ConversationMessageRow, TaskGitContextRow } from "../../db/row-types.ts";
+import type { OnTaskUpdated } from "../types.ts";
+import type { TaskRow, TaskGitContextRow } from "../../db/row-types.ts";
 import type { IWorkspaceRepository } from "../../db/workspace-repository.ts";
 import type { IBoardToolExecutor } from "../../workflow/tools/board-tool-executor.ts";
 import type { ModelSettingsRepository } from "../../db/repositories/model-settings-repository.ts";
 import { QualifiedModelId } from "../qualified-model-id";
 import { PromptAssemblyService } from "./prompt-assembly-service.ts";
 import type { PromptFilterContext } from "./custom-prompt-injector.ts";
+import type { BoardRunLogger } from "../../copilotkit/board-run-logger.ts";
 
 type DecisionRow = {
   hunk_hash: string;
@@ -50,17 +49,18 @@ export class CodeReviewExecutor {
     private readonly workdirResolver: IWorkingDirectoryResolver,
     private readonly streamProcessor: StreamProcessor,
     private readonly onTaskUpdated: OnTaskUpdated,
-    private readonly onNewMessage: OnNewMessage,
     private readonly wsRepo: IWorkspaceRepository,
     private readonly boardTools: IBoardToolExecutor,
     private readonly promptAssemblyService: PromptAssemblyService,
     private readonly modelSettingsRepo?: ModelSettingsRepository,
+    /** WR-01: taps board-driven runs' engine events into the AG-UI/JSONL flow. */
+    private readonly boardRunLogger?: BoardRunLogger,
   ) {}
 
   async execute(
     taskId: number,
     manualEdits?: ManualEdit[],
-  ): Promise<{ message: ConversationMessage; executionId: number }> {
+  ): Promise<{ executionId: number }> {
     const db = this.db;
     const task = db.query<TaskRow, [number]>("SELECT * FROM tasks WHERE id = ?").get(taskId);
     if (!task) throw new Error(`Task ${taskId} not found`);
@@ -143,9 +143,6 @@ export class CodeReviewExecutor {
 
     const conversationId = ensureTaskConversation(db, taskId, task.conversation_id);
 
-    const reviewMsgId = appendMessage(db, taskId, conversationId, "code_review", "user", JSON.stringify(payload));
-    appendMessage(db, taskId, conversationId, "user", "user", reviewText);
-
     const column = getColumnConfig(config, task.board_id, task.workflow_state);
     const execResult = db.run(
       `INSERT INTO executions (task_id, conversation_id, from_state, to_state, prompt_id, status, attempt)
@@ -158,11 +155,6 @@ export class CodeReviewExecutor {
       [executionId, taskId],
     );
     this.onTaskUpdated(fetchTaskWithModel(db, taskId)!);
-
-    const reviewMsgRow = db
-      .query<ConversationMessageRow, [number]>("SELECT * FROM conversation_messages WHERE id = ?")
-      .get(reviewMsgId)!;
-    this.onNewMessage(mapConversationMessage(reviewMsgRow));
 
     const signal = this.streamProcessor.createSignal(executionId);
 
@@ -193,7 +185,6 @@ export class CodeReviewExecutor {
         systemInstructions,
         this.workdirResolver.resolve(task),
         signal,
-        this.streamProcessor.makePersistCallback(taskId, conversationId, executionId),
         undefined,
         undefined,
         config.projects.find((p) => p.key === task.project_key)?.projectPath,
@@ -203,8 +194,11 @@ export class CodeReviewExecutor {
       onSoftCancel: () => this.streamProcessor.abort(executionId),
       ...(this.modelSettingsRepo && conversationModel ? { contextWindowOverride: this.modelSettingsRepo.getContextWindow(workspaceKey, conversationModel) ?? undefined } : {}),
     };
-    this.streamProcessor.runNonNative(taskId, conversationId, executionId, engine, execParams);
+    // WR-01: board-driven runs have no AG-UI run in flight — the logger's tap
+    // translates engine events into AG-UI events and appends them to the
+    // conversation's JSONL thread so the task-drawer chat shows the output.
+    this.streamProcessor.runNonNative(taskId, conversationId, executionId, engine, execParams, this.boardRunLogger?.buildOpts(conversationId, executionId));
 
-    return { message: mapConversationMessage(reviewMsgRow), executionId };
+    return { executionId };
   }
 }

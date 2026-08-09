@@ -1,8 +1,9 @@
 /**
- * dispatch.test.ts — Multi-store dispatch ordering tests (D1…D5)
+ * dispatch.test.ts — Multi-store dispatch tests for the kept /ws pushes
  *
- * Verifies that the App.vue dispatch sequence (conversationStore → taskStore → chatStore)
- * is correct: downstream stores read already-updated conversation state.
+ * Verifies the App.vue wiring of the kept push types (task.updated,
+ * chatSession.updated) delivers to the right store handlers. The custom
+ * protocol dispatch coverage died with the protocol trim (07-03).
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
@@ -15,28 +16,6 @@ vi.mock("../rpc", () => ({
 const { useConversationStore } = await import("./conversation");
 const { useTaskStore } = await import("./task");
 const { useChatStore } = await import("./chat");
-
-function makeStreamEvent(
-  conversationId: number,
-  taskId: number | null,
-  type: import("@shared/rpc-types").StreamEventType,
-  overrides: Partial<import("@shared/rpc-types").StreamEvent> = {},
-): import("@shared/rpc-types").StreamEvent {
-  return {
-    taskId,
-    conversationId,
-    executionId: 1,
-    seq: 1,
-    blockId: "b1",
-    type,
-    content: "hello",
-    metadata: null,
-    parentBlockId: null,
-    subagentId: null,
-    done: false,
-    ...overrides,
-  };
-}
 
 function makeTask(boardId = 1, id = 1): import("@shared/rpc-types").Task {
   return {
@@ -64,123 +43,77 @@ function makeTask(boardId = 1, id = 1): import("@shared/rpc-types").Task {
   } as unknown as import("@shared/rpc-types").Task;
 }
 
-/** Simulates the App.vue dispatch sequence for a stream event */
-function dispatch(
-  conv: ReturnType<typeof useConversationStore>,
-  task: ReturnType<typeof useTaskStore>,
-  chat: ReturnType<typeof useChatStore>,
-  event: import("@shared/rpc-types").StreamEvent,
-) {
-  conv.onStreamEvent(event);
-  task.onTaskStreamEvent(event);
-  chat.onChatStreamEvent(event);
+function makeChatSession(overrides: Partial<import("@shared/rpc-types").ChatSession> = {}): import("@shared/rpc-types").ChatSession {
+  return {
+    id: 1,
+    workspaceKey: "default",
+    title: "Session",
+    status: "idle",
+    conversationId: 10,
+    model: null,
+    enabledMcpTools: null,
+    samplingPresetOverride: null,
+    lastActivityAt: new Date().toISOString(),
+    lastReadAt: new Date().toISOString(),
+    archivedAt: null,
+    createdAt: new Date().toISOString(),
+    shellAutoApprove: false,
+    approvedCommands: [],
+    modelParams: [],
+    ...overrides,
+  };
 }
 
-/** Simulates the App.vue dispatch sequence for a new message */
-function dispatchMessage(
-  conv: ReturnType<typeof useConversationStore>,
-  task: ReturnType<typeof useTaskStore>,
-  chat: ReturnType<typeof useChatStore>,
-  message: import("@shared/rpc-types").ConversationMessage,
-) {
-  void task;
-  conv.onNewMessage(message);
-  chat.onChatNewMessage(message);
-}
-
-describe("multi-store dispatch ordering", () => {
+describe("kept-push dispatch", () => {
   beforeEach(() => {
     setActivePinia(createPinia());
     apiMock.mockImplementation(async () => ({ messages: [], hasMore: false }));
   });
 
-  // D1: conversationStore is populated BEFORE taskStore reads it.
-  // After the dispatch, conversationStore.streamStates must have the entry.
-  it("D1: conversation store is populated before task store reacts to the same event", () => {
+  it("D1: task.updated push dispatches to the task store (onTaskUpdated)", async () => {
     const conv = useConversationStore();
     const task = useTaskStore();
     const chat = useChatStore();
+    void conv; void chat;
 
-    conv.setActiveConversation(1);
-    const event = makeStreamEvent(1, 1, "text_chunk");
+    const original = makeTask(1, 1);
+    apiMock.mockResolvedValueOnce([original]);
+    await task.loadTasks(1);
 
-    dispatch(conv, task, chat, event);
+    const updated = makeTask(1, 1);
+    updated.title = "Renamed via push";
+    task.onTaskUpdated(updated);
 
-    // Conversation store has the stream state populated
-    const state = conv.streamStates.get(1);
-    expect(state).toBeDefined();
-    expect(state!.roots).toHaveLength(1);
+    expect(task.taskIndex[1].title).toBe("Renamed via push");
+    expect(task.tasksByBoard[1][0].title).toBe("Renamed via push");
   });
 
-  it("D2: all three stores receive the event after full dispatch", () => {
+  it("D2: chatSession.updated push dispatches to the chat store (onChatSessionUpdated)", () => {
     const conv = useConversationStore();
     const task = useTaskStore();
     const chat = useChatStore();
+    void conv; void task;
 
-    conv.setActiveConversation(1);
+    chat.onChatSessionUpdated(makeChatSession({ id: 7, conversationId: 70, status: "running" }));
+    expect(chat.sessions).toHaveLength(1);
 
-    // Load a task so taskStore can react to unread marking on background events
-    apiMock.mockResolvedValueOnce([makeTask(1, 1)]);
-
-    const event = makeStreamEvent(1, 1, "text_chunk");
-    dispatch(conv, task, chat, event);
-
-    // Conversation store has stream state
-    expect(conv.streamStates.get(1)).toBeDefined();
-    // Task store — onTaskStreamEvent only marks unread for non-active tasks; it doesn't throw
-    // Chat store — onChatStreamEvent ignores events with taskId != null
-    // All three completed without throwing = test passes
+    // Running → idle push flips the status the drawer reads
+    chat.onChatSessionUpdated(makeChatSession({ id: 7, conversationId: 70, status: "idle" }));
+    expect(chat.sessions[0].status).toBe("idle");
   });
 
-  it("D3: onNewMessage dispatch — conversation store appends message before task store reacts", () => {
+  it("D3: dispatch with unknown payload shapes does not throw in any store", () => {
     const conv = useConversationStore();
     const task = useTaskStore();
     const chat = useChatStore();
+    void conv;
 
-    conv.setActiveConversation(1);
+    // chatSession.updated for a session in another workspace is filtered, not thrown
+    expect(() =>
+      chat.onChatSessionUpdated(makeChatSession({ id: 999, workspaceKey: "other" })),
+    ).not.toThrow();
 
-    const message: import("@shared/rpc-types").ConversationMessage = {
-      id: 1,
-      taskId: 1,
-      conversationId: 1,
-      type: "assistant",
-      role: "assistant",
-      content: "from agent",
-      metadata: null,
-      createdAt: new Date().toISOString(),
-    };
-
-    dispatchMessage(conv, task, chat, message);
-
-    // Conversation store has the message
-    expect(conv.messages).toHaveLength(1);
-    expect(conv.messages[0].content).toBe("from agent");
-  });
-
-  it("D4: repeated dispatch with same event is idempotent (no duplicate stream entries)", () => {
-    const conv = useConversationStore();
-    const task = useTaskStore();
-    const chat = useChatStore();
-
-    conv.setActiveConversation(1);
-    const event = makeStreamEvent(1, 1, "text_chunk", { content: "x" });
-
-    dispatch(conv, task, chat, event);
-    dispatch(conv, task, chat, event);
-
-    // The second dispatch replays the same event — same executionId means block appends, not duplicates
-    const state = conv.streamStates.get(1)!;
-    expect(state.roots).toHaveLength(1); // still one root block
-  });
-
-  it("D5: dispatch with unknown conversationId does not throw in any store", () => {
-    const conv = useConversationStore();
-    const task = useTaskStore();
-    const chat = useChatStore();
-
-    // No active conversation, no tasks loaded
-    const event = makeStreamEvent(999, 999, "text_chunk");
-
-    expect(() => dispatch(conv, task, chat, event)).not.toThrow();
+    // task.updated for an unknown task is replaced into the index without throwing
+    expect(() => task.onTaskUpdated(makeTask(9, 999))).not.toThrow();
   });
 });

@@ -1,4 +1,4 @@
-import type { WaitFn } from "../../pipeline/write-buffer.ts";
+import type { WaitFn } from "../../jobs/retention-job.ts";
 
 export interface MockWait {
   waitFn: WaitFn;

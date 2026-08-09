@@ -116,17 +116,14 @@
 
     <!-- Chat tab -->
     <template v-if="activeTab === 'chat' && task">
-      <!-- Conversation body -->
-      <ConversationBody
-        ref="conversationBodyRef"
-        :messages="conversationStore.messages"
-        :stream-state="conversationStore.activeStreamState"
-        :execution-state="task.executionState"
-        :self-id="task.conversationId"
-        :has-more-before="conversationStore.hasMoreBefore"
-        :is-loading-older="conversationStore.isLoadingOlder"
-        @load-older="task && conversationStore.loadOlderMessages({ conversationId: task.conversationId })"
-      />
+      <!-- Chat surface (CopilotKit — D-01: threadId = String(conversationId), D-03) -->
+      <div class="tcv-chat">
+        <RailyinChat
+          :thread-id="String(task.conversationId)"
+          :title="task.title"
+          :commands-scope="{ taskId: task.id }"
+        />
+      </div>
 
       <!-- Changed files panel -->
       <ChangedFilesPanel
@@ -143,36 +140,6 @@
         :refresh-trigger="todoRefreshTrigger"
         :board-id="task.boardId"
         :workflow-state="task.workflowState"
-      />
-
-      <!-- Input bar -->
-      <ConversationInput
-        :execution-state="task.executionState"
-        :task-id="task.id"
-        :model-id="task.model"
-        :sampling-preset-override="task.samplingPresetOverride ?? null"
-        :model-params="task.modelParams ?? []"
-        :workspace-key="taskWorkspaceKey"
-        :project-key="task.projectKey"
-        :context-usage="conversationStore.contextUsage"
-        :compacting="compacting"
-        :enabled-mcp-tools="task.enabledMcpTools ?? null"
-        :shell-auto-approve="task.shellAutoApprove"
-        :queue-state="taskStore.taskQueues[task.id] ?? null"
-        @send="onSend"
-        @enqueue="onEnqueue"
-        @confirm-edit="onConfirmEdit"
-        @update:model-id="onModelSelected"
-        @update:sampling-preset-override="taskStore.setSamplingPreset(task!.id, $event)"
-        @update:model-params="taskStore.setModelParams(task!.id, $event)"
-        @dequeue="(msgId) => taskStore.dequeueMessage(task!.id, msgId)"
-        @start-edit="(msgId) => taskStore.startEdit(task!.id, msgId)"
-        @cancel-edit="() => task && taskStore.cancelEdit(task.id)"
-        @cancel="cancel"
-        @compact="compactConversation"
-        @manage-models="manageModelsOpen = true"
-        @tools-changed="taskStore.onTaskUpdated"
-        @update:shell-auto-approve="toggleShellAutoApprove"
       />
     </template>
 
@@ -230,8 +197,7 @@ import Tag from "primevue/tag";
 import Button from "primevue/button";
 import Select from "primevue/select";
 import Dialog from "primevue/dialog";
-import ConversationBody from "./ConversationBody.vue";
-import ConversationInput from "./ConversationInput.vue";
+import RailyinChat from "./chat/RailyinChat.vue";
 import TaskInfoPanel from "./TaskInfoPanel.vue";
 import TaskGitPanel from "./TaskGitPanel.vue";
 import ChangedFilesPanel from "./ChangedFilesPanel.vue";
@@ -241,7 +207,6 @@ import ManageModelsModal from "./ManageModelsModal.vue";
 import DecisionsPanel from "./DecisionsPanel.vue";
 import NotesPanel from "./NotesPanel.vue";
 import { useTaskStore } from "../stores/task";
-import { useConversationStore } from "../stores/conversation";
 import { useBoardStore } from "../stores/board";
 import { useWorkspaceStore } from "../stores/workspace";
 import { useReviewStore } from "../stores/review";
@@ -251,14 +216,13 @@ import { useCodeServerStore } from "../stores/codeServer";
 import { useDrawerStore } from "../stores/drawer";
 import { useToast } from "primevue/usetoast";
 import { api } from "../rpc";
-import type { LaunchConfig, GitNumstat, Attachment, Task } from "@shared/rpc-types";
+import type { LaunchConfig, GitNumstat } from "@shared/rpc-types";
 
 const props = defineProps<{
   taskId: number;
 }>();
 
 const taskStore = useTaskStore();
-const conversationStore = useConversationStore();
 const boardStore = useBoardStore();
 const workspaceStore = useWorkspaceStore();
 const reviewStore = useReviewStore();
@@ -299,7 +263,6 @@ const execSeverity = computed((): "secondary" | "info" | "warn" | "danger" | "su
 // ─── UI state ─────────────────────────────────────────────────────────────────
 
 const activeTab = ref<"chat" | "info" | "git" | "decisions" | "notes">("chat");
-const compacting = ref(false);
 const manageModelsOpen = ref(false);
 const retrying = ref(false);
 const transitioning = ref(false);
@@ -350,46 +313,6 @@ async function refreshTaskDataOnExecutionEnd() {
 
 // ─── Actions ──────────────────────────────────────────────────────────────────
 
-async function onSend(text: string, engineText: string, attachments: Attachment[]) {
-  if (!task.value) return;
-  await taskStore.sendMessage(task.value.id, text, engineText, attachments.length ? attachments : undefined);
-}
-
-function onEnqueue(text: string, engineText: string, attachments: Attachment[]) {
-  if (!task.value) return;
-  taskStore.enqueueMessage(task.value.id, {
-    id: crypto.randomUUID(),
-    text,
-    engineText,
-    attachments,
-    addedAt: Date.now(),
-  });
-}
-
-function onConfirmEdit(msgId: string, text: string, engineText: string, attachments: Attachment[]) {
-  if (!task.value) return;
-  taskStore.confirmEdit(task.value.id, msgId, text, engineText, attachments);
-}
-
-async function cancel() {
-  if (!task.value) return;
-  await taskStore.cancelTask(task.value.id);
-}
-
-// Handle model selection changes
-const previousModelId = ref<string | null>(null);
-async function onModelSelected(newModel: string | null) {
-  if (!task.value || newModel === previousModelId.value) return;
-  
-  try {
-    console.log('[TaskChatView] Setting model for task', task.value.id, 'to', newModel);
-    await taskStore.setModel(task.value.id, newModel);
-    previousModelId.value = newModel;
-  } catch (err) {
-    console.error('[TaskChatView] Failed to set model:', err);
-  }
-}
-
 async function retry() {
   if (!task.value) return;
   retrying.value = true;
@@ -428,23 +351,6 @@ async function openTerminal() {
 async function onModelChange(model: string | null) {
   if (!task.value) return;
   await taskStore.setModel(task.value.id, model);
-}
-
-async function toggleShellAutoApprove(value: boolean) {
-  if (!task.value) return;
-  await api("tasks.setShellAutoApprove", { taskId: task.value.id, enabled: value });
-}
-
-async function compactConversation() {
-  if (!task.value) return;
-  compacting.value = true;
-  try {
-    await taskStore.compactTask(task.value.id);
-  } catch (err) {
-    toast.add({ severity: "error", summary: "Compact failed", detail: err instanceof Error ? err.message : String(err), life: 6000 });
-  } finally {
-    compacting.value = false;
-  }
 }
 
 async function syncChangedFiles() {
@@ -537,11 +443,12 @@ watch(
   },
 );
 
-const conversationBodyRef = ref<InstanceType<typeof ConversationBody> | null>(null);
-
+// Safe no-ops: the CopilotKit surface owns its own scroll (CopilotChat
+// autoScroll); these stay exposed because ConversationDrawer.onAfterShow
+// still calls scheduleScrollToBottomIfAuto on drawer open (drawer:70-72).
 defineExpose({
-  scrollToBottom: () => conversationBodyRef.value?.scrollToBottom(),
-  scheduleScrollToBottomIfAuto: () => conversationBodyRef.value?.scheduleScrollToBottomIfAuto(),
+  scrollToBottom: () => {},
+  scheduleScrollToBottomIfAuto: () => {},
 });
 </script>
 
@@ -551,6 +458,15 @@ defineExpose({
   flex-direction: column;
   height: 100%;
   overflow: hidden;
+}
+
+/* CopilotKit chat surface — flex child filling the space between the toolbar
+   and the changed-files/todo panels (ConversationBody's flex:1 contract). */
+.tcv-chat {
+  flex: 1 1 0%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .tcv-header {

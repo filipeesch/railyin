@@ -1,4 +1,4 @@
-import type { AIProvider, AIMessage, AICallOptions, StreamEvent, AITurnResult } from "./types.ts";
+import type { AIProvider, AIMessage, AICallOptions, AIEvent, AITurnResult } from "./types.ts";
 import { type Logger, realLogger } from "../logger.ts";
 
 // ─── ProviderError ────────────────────────────────────────────────────────────
@@ -128,7 +128,7 @@ export async function* retryStream(
   _tc: _RetryTimingConfig = {},
   source: "foreground" | "background" = "foreground",
   fallbackProvider: AIProvider | null = null,
-): AsyncGenerator<StreamEvent> {
+): AsyncGenerator<AIEvent> {
   const idleTimeoutMs = _tc.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS;
   const stallWarnMs = _tc.stallWarnMs ?? DEFAULT_STALL_WARN_MS;
   const baseBackoffMs = _tc.baseBackoffMs ?? BASE_BACKOFF_MS;
@@ -253,7 +253,7 @@ async function* _retryStreamFallback(
   maxTurnRetries: number,
   _tc: _RetryTimingConfig = {},
   source: "foreground" | "background" = "foreground",
-): AsyncGenerator<StreamEvent> {
+): AsyncGenerator<AIEvent> {
   const baseBackoffMs = _tc.baseBackoffMs ?? BASE_BACKOFF_MS;
   const logger = _tc.logger ?? realLogger;
   let turnAttempt = 0;

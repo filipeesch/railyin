@@ -5,7 +5,6 @@ import { tmpdir } from "os";
 import { execSync } from "child_process";
 import { initDb, seedProjectAndTask, setupTestConfig } from "./helpers.ts";
 import { taskHandlers } from "../handlers/tasks.ts";
-import { SqliteModelSettingsRepository } from "../db/repositories/model-settings-repository.ts";
 import { WorkspaceRepository } from "../db/workspace-repository.ts";
 import { taskGitHandlers } from "../handlers/task-git.ts";
 import { WorktreeManager } from "../git/WorktreeManager.ts";
@@ -93,12 +92,9 @@ function makeDbOrchestrator(): ExecutionCoordinator {
     executeHumanTurn: async () => { throw new Error("not implemented"); },
     executeRetry: async () => { throw new Error("not implemented"); },
     executeCodeReview: async () => { throw new Error("not implemented"); },
-    respondShellApprovalByExecution: async () => { throw new Error("not implemented"); },
     executeChatTurn: async () => { throw new Error("not implemented"); },
     cancel: () => {},
     listModels: async () => [],
-    compactTask: async () => {},
-    compactConversation: async () => {},
     listCommands: async () => [],
   };
 }
@@ -133,7 +129,7 @@ describe("tasks.create", () => {
     expect(ctx!.git_root_path).toBe(gitDir);
   });
 
-  it("seeds system message with task description", async () => {
+  it("writes zero conversation_messages rows on task create (07-01 D-05 frozen-table guarantee)", async () => {
     const { projectKey, boardId } = seedProjectAndTask(db, gitDir);
     const { handlers } = makeHandlers();
 
@@ -150,10 +146,7 @@ describe("tasks.create", () => {
       )
       .all(task.id);
 
-    expect(msgs.length).toBeGreaterThan(0);
-    expect(msgs[0].type).toBe("system");
-    expect(msgs[0].content).toContain("My task");
-    expect(msgs[0].content).toContain("My description");
+    expect(msgs.length).toBe(0);
   });
 
 // TC-1: defaultModel is set → conversation.model IS automatically seeded
@@ -369,15 +362,14 @@ describe("tasks.transition / worktree failure", () => {
 
     expect(result.task.executionState).toBe("failed");
 
-    // Error message should appear in conversation
+    // 07-01: worktree-failure messages no longer persist to conversation_messages
     const errMsg = db
       .query<{ content: string }, [number]>(
         "SELECT content FROM conversation_messages WHERE task_id = ? AND content LIKE '%Worktree setup failed%' LIMIT 1",
       )
       .get(taskId);
 
-    expect(errMsg).not.toBeNull();
-    expect(errMsg!.content).toMatch(/Worktree setup failed/i);
+    expect(errMsg).toBeNull();
   });
 });
 
@@ -428,11 +420,11 @@ describe("tasks.transition / running task deferred", () => {
     // needs_column_prompt flag was set (plan column has on_enter_prompt)
     const dbRow = db.query<{ needs_column_prompt: number }, [number]>("SELECT needs_column_prompt FROM tasks WHERE id = ?").get(taskId);
     expect(dbRow?.needs_column_prompt).toBe(1);
-    // transition_event was appended to the conversation
+    // 07-01: transition_event rows no longer persist (frozen-table guarantee)
     const msg = db.query<{ type: string }, [number]>(
       "SELECT type FROM conversation_messages WHERE task_id = ? AND type = 'transition_event' LIMIT 1",
     ).get(taskId);
-    expect(msg).not.toBeNull();
+    expect(msg).toBeNull();
     // onTaskUpdated was called
     expect(taskUpdates.length).toBeGreaterThan(0);
   });
@@ -476,7 +468,15 @@ describe("tasks.delete", () => {
         "SELECT COUNT(*) AS count FROM conversation_messages WHERE task_id = ?",
       )
       .get(task.id);
-    expect(beforeMsgs!.count).toBeGreaterThan(0); // seeded system message exists
+    // 07-01: task create writes zero conversation_messages rows (D-05); the
+    // delete cascade still clears any rows that exist (e.g. from fixtures).
+    expect(beforeMsgs!.count).toBe(0);
+
+    // Seed a message row manually so the cascade-delete path is exercised.
+    db.run(
+      "INSERT INTO conversation_messages (task_id, conversation_id, type, role, content) VALUES (?, ?, 'system', NULL, 'seed')",
+      [task.id, task.conversationId],
+    );
 
     const result = await handlers["tasks.delete"]({ taskId: task.id });
     expect(result.success).toBe(true);
@@ -576,44 +576,6 @@ describe("conversations handlers", () => {
     expect(result.messages.map((message) => message.content)).toEqual(["hello", "hi there"]);
     expect(result.messages.every((message) => message.conversationId === conversationId)).toBe(true);
   });
-
-  it("loads stream events by conversationId", async () => {
-    const { taskId, conversationId } = seedProjectAndTask(db, gitDir);
-    db.run(
-      "INSERT INTO executions (id, task_id, conversation_id, from_state, to_state, status, attempt) VALUES (?, ?, ?, 'plan', 'plan', 'running', 1)",
-      [10, taskId, conversationId],
-    );
-    db.run(
-      "INSERT INTO stream_events (id, conversation_id, execution_id, seq, block_id, type, content, metadata, parent_block_id, subagent_id) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL), (?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL)",
-      [1, conversationId, 10, 0, "root-1", "assistant", "alpha", 2, conversationId, 10, 1, "root-2", "assistant", "beta"],
-    );
-
-    const handlers = conversationHandlers(db, null);
-    const canonical = await handlers["conversations.getStreamEvents"]({ conversationId, afterSeq: 0 });
-
-    expect(canonical).toHaveLength(1);
-    expect(canonical[0]?.content).toBe("beta");
-  });
-
-  it("computes context usage for session conversations without a task", async () => {
-    db.run("INSERT INTO conversations (task_id) VALUES (NULL)");
-    const conversationId = (db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!).id;
-    db.run(
-      "INSERT INTO chat_sessions (workspace_key, title, status, conversation_id) VALUES ('default', 'Session', 'idle', ?)",
-      [conversationId],
-    );
-    db.run(
-      "INSERT INTO conversation_messages (task_id, conversation_id, type, role, content) VALUES (NULL, ?, 'user', 'user', ?)",
-      [conversationId, "session message"],
-    );
-
-    const handlers = conversationHandlers(db, null);
-    const usage = await handlers["conversations.contextUsage"]({ conversationId });
-
-    expect(usage.maxTokens).toBe(128_000);
-    expect(usage.usedTokens).toBeGreaterThan(0);
-    expect(usage.fraction).toBeGreaterThan(0);
-  });
 });
 
 describe("chat session parity handlers", () => {
@@ -669,8 +631,7 @@ describe("chat session parity handlers", () => {
             executionId: 7,
           };
         },
-        compactConversation: async () => {},
-      } as unknown as ExecutionCoordinator,
+          } as unknown as ExecutionCoordinator,
     );
 
     const attachments: Attachment[] = [
@@ -812,8 +773,7 @@ describe("chat session parity handlers", () => {
           capturedContent.push(engineContent as string);
           return { message: { id: 1, taskId: null, conversationId, type: "user" as const, role: "user" as const, content: "", metadata: null, createdAt: "" }, executionId: 1 };
         },
-        compactConversation: async () => {},
-      } as unknown as ExecutionCoordinator,
+          } as unknown as ExecutionCoordinator,
     );
 
     await handlers["chatSessions.sendMessage"]({
@@ -847,8 +807,7 @@ describe("chat session parity handlers", () => {
           capturedContent.push(engineContent as string);
           return { message: { id: 1, taskId: null, conversationId, type: "user" as const, role: "user" as const, content: "", metadata: null, createdAt: "" }, executionId: 1 };
         },
-        compactConversation: async () => {},
-      } as unknown as ExecutionCoordinator,
+          } as unknown as ExecutionCoordinator,
     );
 
     await handlers["chatSessions.submitDecisions"]({
@@ -891,9 +850,7 @@ describe("prepareMessageForEngine — AR unit tests", () => {
   });
 });
 
-// ─── resolveContextWindow (via tasks.contextUsage) ────────────────────────────
-// Tests the engine-agnostic context window resolution introduced in task 1.1.
-// resolveContextWindow is private; tested through the tasks.contextUsage handler.
+// ─── resolveContextWindow mock orchestrator (models.listEnabled tests) ─────────
 
 function makeMockOrchestrator(models: Array<{ qualifiedId: string | null; contextWindow?: number }>): ExecutionCoordinator {
   return {
@@ -906,103 +863,11 @@ function makeMockOrchestrator(models: Array<{ qualifiedId: string | null; contex
     executeHumanTurn: async () => { throw new Error("not implemented"); },
     executeRetry: async () => { throw new Error("not implemented"); },
     executeCodeReview: async () => { throw new Error("not implemented"); },
-    respondShellApprovalByExecution: async () => { throw new Error("not implemented"); },
     executeChatTurn: async () => { throw new Error("not implemented"); },
     cancel: () => {},
-    compactTask: async () => {},
-    compactConversation: async () => {},
     listCommands: async () => [],
   };
 }
-
-describe("tasks.contextUsage — resolveContextWindow", () => {
-  it("uses contextWindow from orchestrator.listModels() when model is found", async () => {
-    const { taskId } = seedProjectAndTask(db, gitDir);
-    db.run("UPDATE conversations SET model = 'copilot/claude-sonnet-4.6' WHERE id = (SELECT conversation_id FROM tasks WHERE id = ?)", [taskId]);
-
-    const orchestrator = makeMockOrchestrator([
-      { qualifiedId: "copilot/claude-sonnet-4.6", contextWindow: 200_000 },
-    ]);
-    const handlers = taskHandlers(db, wsRepo, orchestrator, () => {}, worktreeManager);
-
-    const result = await handlers["tasks.contextUsage"]({ taskId });
-    expect(result.maxTokens).toBe(200_000);
-  });
-
-  it("falls back to 128_000 when orchestrator returns no matching model", async () => {
-    const { taskId } = seedProjectAndTask(db, gitDir);
-    db.run("UPDATE conversations SET model = 'copilot/unknown-model' WHERE id = (SELECT conversation_id FROM tasks WHERE id = ?)", [taskId]);
-
-    // Orchestrator returns a different model — no match
-    const orchestrator = makeMockOrchestrator([
-      { qualifiedId: "copilot/other-model", contextWindow: 64_000 },
-    ]);
-    const handlers = taskHandlers(db, wsRepo, orchestrator, () => {}, worktreeManager);
-
-    const result = await handlers["tasks.contextUsage"]({ taskId });
-    // No matching model in orchestrator; resolveModelContextWindow also won't find
-    // a provider for "copilot" in the test config — final fallback is 128_000.
-    expect(result.maxTokens).toBe(128_000);
-  });
-
-  it("falls back to 128_000 when no model is set on the task", async () => {
-    const { taskId } = seedProjectAndTask(db, gitDir);
-    db.run("UPDATE conversations SET model = NULL WHERE id = (SELECT conversation_id FROM tasks WHERE id = ?)", [taskId]);
-
-    const handlers = taskHandlers(db, wsRepo, null, () => {}, worktreeManager);
-
-    const result = await handlers["tasks.contextUsage"]({ taskId });
-    expect(result.maxTokens).toBe(128_000);
-  });
-
-  it("uses contextWindow = null entry but still falls back to 128_000", async () => {
-    const { taskId } = seedProjectAndTask(db, gitDir);
-    db.run("UPDATE conversations SET model = 'copilot/claude-opus' WHERE id = (SELECT conversation_id FROM tasks WHERE id = ?)", [taskId]);
-
-    // Model found but contextWindow is null/undefined
-    const orchestrator = makeMockOrchestrator([
-      { qualifiedId: "copilot/claude-opus", contextWindow: undefined },
-    ]);
-    const handlers = taskHandlers(db, wsRepo, orchestrator, () => {}, worktreeManager);
-
-    const result = await handlers["tasks.contextUsage"]({ taskId });
-    expect(result.maxTokens).toBe(128_000);
-  });
-
-  it("DB override from modelSettingsRepo wins over orchestrator-reported value", async () => {
-    const { taskId } = seedProjectAndTask(db, gitDir);
-    db.run("UPDATE conversations SET model = 'pi-local/lmstudio/qwen/qwen3-27b' WHERE id = (SELECT conversation_id FROM tasks WHERE id = ?)", [taskId]);
-
-    // Orchestrator reports 32_768 for this model
-    const orchestrator = makeMockOrchestrator([
-      { qualifiedId: "pi-local/lmstudio/qwen/qwen3-27b", contextWindow: 32_768 },
-    ]);
-
-    // User overrode it to 65_536 via the Models screen
-    const repo = new SqliteModelSettingsRepository(db);
-    repo.setContextWindow("default", "pi-local/lmstudio/qwen/qwen3-27b", 65_536);
-
-    const handlers = taskHandlers(db, wsRepo, orchestrator, () => {}, worktreeManager, repo);
-
-    const result = await handlers["tasks.contextUsage"]({ taskId });
-    expect(result.maxTokens).toBe(65_536);
-  });
-
-  it("resolves a Cursor model's real window even with no orchestrator match (not 128k)", async () => {
-    const { taskId } = seedProjectAndTask(db, gitDir);
-    db.run("UPDATE conversations SET model = 'cursor/claude-sonnet-4-6' WHERE id = (SELECT conversation_id FROM tasks WHERE id = ?)", [taskId]);
-
-    // Orchestrator returns a different model — the context-usage fallback must
-    // still resolve the Cursor window from the model id (200k) instead of 128k.
-    const orchestrator = makeMockOrchestrator([
-      { qualifiedId: "copilot/other-model", contextWindow: 64_000 },
-    ]);
-    const handlers = taskHandlers(db, wsRepo, orchestrator, () => {}, worktreeManager);
-
-    const result = await handlers["tasks.contextUsage"]({ taskId });
-    expect(result.maxTokens).toBe(200_000);
-  });
-});
 
 describe("models.listEnabled — Copilot Auto option", () => {
   it("always returns Auto first with null id", async () => {

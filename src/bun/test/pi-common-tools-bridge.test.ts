@@ -58,7 +58,6 @@ describe("Pi common-tools bridge (PCB)", () => {
     const fakeResult: ToolExecutionResult = {
       type: "result",
       text: "Renamed foo → bar in 1 file",
-      writtenFiles: [],
       beforeFiles: { "/a.ts": "old content" },
     };
     mockExecutor.mockResolvedValueOnce(fakeResult);
@@ -107,13 +106,12 @@ describe("Pi common-tools bridge (PCB)", () => {
     expect((result.content[0] as { text: string }).text).toBe("Renamed");
   });
 
-  it("PCB-4: writtenFiles are forwarded in tool details", async () => {
+  it("PCB-4: writtenFiles are no longer forwarded in tool details (trimmed in 07-02)", async () => {
     const harness = makeHarness(dir);
 
     const fakeResult: ToolExecutionResult = {
       type: "result",
       text: "Done",
-      writtenFiles: [{ path: "a.ts", operation: "write_file" as const, added: 1, removed: 0, hunks: [] }],
       beforeFiles: { "/a.ts": "old" },
     };
     mockExecutor.mockResolvedValueOnce(fakeResult);
@@ -122,8 +120,10 @@ describe("Pi common-tools bridge (PCB)", () => {
     const lspRename = tools.find((t) => t.name === "lsp_rename")!;
     const result = await lspRename.execute("id", {});
 
-    expect(result.details.writtenFiles).toBeDefined();
-    expect(result.details.writtenFiles).toHaveLength(1);
-    expect(result.details.writtenFiles[0].path).toBe("a.ts");
+    // The writtenFiles envelope was removed with the EngineEvent trim; the
+    // renderer derives diffs from tool args (buildDiffPayloadsFromArgs).
+    expect(result.details).not.toHaveProperty("writtenFiles");
+    // Details keep the toolName marker.
+    expect(result.details.toolName).toBe("lsp_rename");
   });
 });

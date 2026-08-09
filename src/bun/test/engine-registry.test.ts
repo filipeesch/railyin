@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { EngineRegistry } from "../engine/engine-registry.ts";
 import { QualifiedModelId } from "../engine/qualified-model-id.ts";
-import type { ExecutionEngine, ExecutionParams, EngineEvent, EngineResumeInput, EngineShutdownOptions } from "../engine/types.ts";
+import type { ExecutionEngine, ExecutionParams, EngineEvent, EngineShutdownOptions } from "../engine/types.ts";
 import type { LoadedConfig } from "../config/index.ts";
 import { CopilotEngine } from "../engine/copilot/engine.ts";
 import { PiEngine } from "../engine/pi/engine.ts";
@@ -17,7 +17,7 @@ function makeEngine(overrides: Partial<ExecutionEngine> = {}): ExecutionEngine &
     shutdownCalled: false,
     type: "pi" as const,
     async *execute(_params: ExecutionParams): AsyncIterable<EngineEvent> { yield { type: "done" }; },
-    async resume(_id: number, _input: EngineResumeInput): Promise<void> {},
+    async resume(_id: number, _input: never): Promise<void> {},
     cancel(executionId: number): void { obj.cancelCalls.push(executionId); },
     async shutdown(_options?: EngineShutdownOptions): Promise<void> { obj.shutdownCalled = true; },
     async listModels() { return []; },
@@ -162,7 +162,7 @@ describe("EngineRegistry.shutdown", () => {
     const noShutdown: ExecutionEngine = {
       type: "pi" as const,
       async *execute(_p: ExecutionParams): AsyncIterable<EngineEvent> { yield { type: "done" }; },
-      async resume(_id: number, _input: EngineResumeInput): Promise<void> {},
+      async resume(_id: number, _input: never): Promise<void> {},
       cancel(_id: number): void {},
       async listModels() { return []; },
       async listCommands() { return []; },
@@ -210,26 +210,26 @@ describe("EngineRegistry — additional routing coverage", () => {
 
 describe("EngineRegistry — dialect injection (ER-DI)", () => {
   it("ER-DI-1: CopilotEngine default constructor uses CopilotDialect", () => {
-    const engine = new CopilotEngine(() => {}, () => {});
+    const engine = new CopilotEngine(() => {});
     expect((engine as any).dialect).toBeInstanceOf(CopilotDialect);
   });
 
   it("ER-DI-2: PiEngine with dialect:'copilot' config gets CopilotDialect via registry", () => {
     const registry = createDefaultDialectRegistry();
     const dialect = registry.create("copilot");
-    const engine = new PiEngine("test-pi", { type: "pi", model: "local/q3" }, () => {}, () => {}, dialect, new NullModelSettingsRepository());
+    const engine = new PiEngine("test-pi", { type: "pi", model: "local/q3" }, () => {}, dialect, new NullModelSettingsRepository());
     expect((engine as any).dialect).toBeInstanceOf(CopilotDialect);
   });
 
   it("ER-DI-3: PiEngine with dialect:'claude' config gets ClaudeDialect via registry", () => {
     const registry = createDefaultDialectRegistry();
     const dialect = registry.create("claude");
-    const engine = new PiEngine("test-pi", { type: "pi", model: "local/q3" }, () => {}, () => {}, dialect, new NullModelSettingsRepository());
+    const engine = new PiEngine("test-pi", { type: "pi", model: "local/q3" }, () => {}, dialect, new NullModelSettingsRepository());
     expect((engine as any).dialect).toBeInstanceOf(ClaudeDialect);
   });
 
   it("ER-DI-4: PiEngine with no dialect config gets NullDialect (default)", () => {
-    const engine = new PiEngine("test-pi", { type: "pi", model: "local/q3" }, () => {}, () => {}, undefined, new NullModelSettingsRepository());
+    const engine = new PiEngine("test-pi", { type: "pi", model: "local/q3" }, () => {}, undefined, new NullModelSettingsRepository());
     expect((engine as any).dialect).toBeInstanceOf(NullDialect);
   });
 });

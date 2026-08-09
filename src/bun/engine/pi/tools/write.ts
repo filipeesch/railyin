@@ -3,7 +3,6 @@ import type { HarnessContext } from "../harness/context.ts";
 import { Type } from "@earendil-works/pi-ai";
 import { existsSync, readFileSync, writeFileSync, unlinkSync, renameSync, mkdirSync } from "./fs-ops.ts";
 import { join, resolve, relative, dirname, isAbsolute } from "node:path";
-import type { FileDiffPayload } from "../../../../shared/rpc-types.ts";
 import { computeFileDiff, splitLines } from "../../../utils/diff.ts";
 import { safePath } from "./read.ts";
 
@@ -77,7 +76,7 @@ Use patch_file for targeted edits to existing files; use write_file only when re
         : `(+${diff.added} -${diff.removed})`;
       return {
         content: [{ type: "text", text: `OK: wrote ${rel} ${summary} [${opId}]` }],
-        details: { writtenFiles: [diff] },
+        details: null,
       };
     },
   };
@@ -199,7 +198,7 @@ ALWAYS save the op:XXXX to undo_write if needed.`,
       const summary = `(+${diff.added} -${diff.removed} at line ${anchorLine})`;
       return {
         content: [{ type: "text", text: `OK: patched ${rel} ${summary} [${opId}]` }],
-        details: { writtenFiles: [diff] },
+        details: null,
       };
     },
   };
@@ -250,7 +249,7 @@ NEVER delete files outside the worktree.`,
 
       return {
         content: [{ type: "text", text: `OK: deleted ${rel} (-${diff.removed}) [${opId}]` }],
-        details: { writtenFiles: [diff] },
+        details: null,
       };
     },
   };
@@ -305,17 +304,9 @@ NEVER rename files to paths outside the worktree.`,
       mkdirSync(dirname(toAbs), { recursive: true });
       renameSync(fromAbs, toAbs);
 
-      const diff: FileDiffPayload = {
-        operation: "rename_file",
-        path: fromRel,
-        to_path: toRel,
-        added: 0,
-        removed: 0,
-      };
-
       return {
         content: [{ type: "text", text: `OK: renamed ${fromRel} → ${toRel} [${opId}]` }],
-        details: { writtenFiles: [diff] },
+        details: null,
       };
     },
   };

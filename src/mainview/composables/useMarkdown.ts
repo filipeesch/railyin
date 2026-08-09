@@ -1,4 +1,5 @@
 import { marked } from "marked";
+import { sanitizeHtml } from "../utils/sanitizeHtml";
 
 const CHIP_RE = /\[([#@/][^\]|]+)\|([^\]]+)\]/g;
 
@@ -12,13 +13,15 @@ function chipHtml(ref: string, label: string): string {
 
 export function useMarkdown() {
     function renderMd(content: string): string {
-        return marked.parse(content, { async: false, breaks: true, gfm: true }) as string;
+        // CR-01: marked passes raw HTML through — sanitize before v-html.
+        return sanitizeHtml(marked.parse(content, { async: false, breaks: true, gfm: true }) as string);
     }
 
     /** Like renderMd but also renders chip tokens ([#path|label], [@srv:tool|@name], [/cmd|/cmd]). */
     function renderUserMd(content: string): string {
         const withChips = content.replace(CHIP_RE, (_, ref: string, label: string) => chipHtml(ref, label));
-        return marked.parse(withChips, { async: false, breaks: true, gfm: true }) as string;
+        // CR-01: sanitize the full render (the chip spans are allow-listed by DOMPurify).
+        return sanitizeHtml(marked.parse(withChips, { async: false, breaks: true, gfm: true }) as string);
     }
 
     return { renderMd, renderUserMd };

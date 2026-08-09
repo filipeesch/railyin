@@ -5,7 +5,7 @@ import type {
   AITurnResult,
   AIToolCall,
   AIToolDefinition,
-  StreamEvent,
+  AIEvent,
   UsageStats,
 } from "./types.ts";
 import { ProviderError } from "./retry.ts";
@@ -570,7 +570,7 @@ export class AnthropicProvider implements AIProvider {
 
   // ─── Streaming ──────────────────────────────────────────────────────────────
 
-  async *stream(messages: AIMessage[], options: AICallOptions = {}): AsyncIterable<StreamEvent> {
+  async *stream(messages: AIMessage[], options: AICallOptions = {}): AsyncIterable<AIEvent> {
     const { system: systemBlocks, messages: adaptedMessages } = adaptMessages(messages, this.cacheTtl);
     const adaptedTools = options.tools?.length ? adaptTools(options.tools, this.cacheTtl) : undefined;
 

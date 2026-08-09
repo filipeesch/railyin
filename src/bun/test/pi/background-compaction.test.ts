@@ -16,7 +16,7 @@ import type { ExecutionParams } from "../../engine/types.ts";
 
 // ─── MockBgSession ─────────────────────────────────────────────────────────────
 
-interface ContextUsage {
+interface SessionUsage {
   tokens: number;
   contextWindow: number;
   maxTokens: number;
@@ -34,7 +34,7 @@ class MockBgSession {
   compactResult: CompactResult | null = { summary: "bg compaction summary" };
   compactError: Error | null = null;
   isCompacting = false;
-  contextUsage: ContextUsage = {
+  sessionUsage: SessionUsage = {
     tokens: 0,
     contextWindow: 128_000,
     maxTokens: 128_000,
@@ -42,7 +42,7 @@ class MockBgSession {
     percent: 0,
   };
   /** If set, agent.continue() uses this context usage for its turn_end event. */
-  continueContextUsage: ContextUsage | null = null;
+  continueContextUsage: SessionUsage | null = null;
   /** Number of turn_end events to fire per prompt() call. */
   turnEndCount = 1;
 
@@ -61,10 +61,10 @@ class MockBgSession {
       this.continueCallCount++;
       // Optionally fire a turn_end with a per-continue context usage override (for BC-7).
       if (this.continueContextUsage) {
-        const prev = this.contextUsage;
-        this.contextUsage = this.continueContextUsage;
+        const prev = this.sessionUsage;
+        this.sessionUsage = this.continueContextUsage;
         this.callback?.({ type: "turn_end" });
-        this.contextUsage = prev;
+        this.sessionUsage = prev;
       }
       // Add an assistant message so the resume loop's post-bgCompaction break condition fires.
       this.agent.state.messages.push({ role: "assistant", stopReason: "stop", usage: { input: 100, output: 50, cacheRead: 0 }, content: [] });
@@ -102,8 +102,8 @@ class MockBgSession {
     return this.compactResult;
   }
 
-  getContextUsage(): ContextUsage {
-    return this.contextUsage;
+  getContextUsage(): SessionUsage {
+    return this.sessionUsage;
   }
 
   abort(): Promise<void> { return Promise.resolve(); }
@@ -128,9 +128,8 @@ function makePiEngine(session: MockBgSession, config: PiEngineConfig): PiEngine 
   return new PiEngine(
     "test-pi",
     config,
-    () => {},
-    () => {},
-    undefined,
+            () => {},
+            undefined,
     new StubModelSettingsRepository(128_000),
     async () => session as any,
   );
@@ -186,7 +185,7 @@ describe("PiEngine background compaction", () => {
     // soft threshold = 128_000 - (16384 + 8192) = 103_424
     // tokens = 1000 < 103_424 → no compaction
     const session = new MockBgSession();
-    session.contextUsage = { tokens: 1_000, contextWindow: 128_000, maxTokens: 128_000, fraction: 0.008, percent: 0.8 };
+    session.sessionUsage = { tokens: 1_000, contextWindow: 128_000, maxTokens: 128_000, fraction: 0.008, percent: 0.8 };
 
     const config: PiEngineConfig = { type: "pi" };
     const engine = makePiEngine(session, config);
@@ -200,7 +199,7 @@ describe("PiEngine background compaction", () => {
   test("BC-2: tokens above soft threshold — compact() called once", async () => {
     // tokens = 110_000 > 103_424 → compaction triggered
     const session = new MockBgSession();
-    session.contextUsage = { tokens: 110_000, contextWindow: 128_000, maxTokens: 128_000, fraction: 0.86, percent: 86 };
+    session.sessionUsage = { tokens: 110_000, contextWindow: 128_000, maxTokens: 128_000, fraction: 0.86, percent: 86 };
 
     const config: PiEngineConfig = {
       type: "pi",
@@ -216,7 +215,7 @@ describe("PiEngine background compaction", () => {
 
   test("BC-3: double-trigger prevention — two turn_end events in same execution → compact() called only once", async () => {
     const session = new MockBgSession();
-    session.contextUsage = { tokens: 110_000, contextWindow: 128_000, maxTokens: 128_000, fraction: 0.86, percent: 86 };
+    session.sessionUsage = { tokens: 110_000, contextWindow: 128_000, maxTokens: 128_000, fraction: 0.86, percent: 86 };
     session.turnEndCount = 2; // fires two turn_end events per prompt
 
     const config: PiEngineConfig = {
@@ -235,7 +234,7 @@ describe("PiEngine background compaction", () => {
     // With max_inflight: 1, runWithLimiter holds the single slot for the prompt.
     // When turn_end fires inside prompt(), tryAcquire returns null.
     const session = new MockBgSession();
-    session.contextUsage = { tokens: 110_000, contextWindow: 128_000, maxTokens: 128_000, fraction: 0.86, percent: 86 };
+    session.sessionUsage = { tokens: 110_000, contextWindow: 128_000, maxTokens: 128_000, fraction: 0.86, percent: 86 };
 
     const config: PiEngineConfig = {
       type: "pi",
@@ -250,9 +249,9 @@ describe("PiEngine background compaction", () => {
     expect(session.compactCallCount).toBe(0);
   });
 
-  test("BC-5: compact() result.summary is persisted as compaction_summary message", async () => {
+  test("BC-5: compact() result.summary is NOT persisted as compaction_summary message (07-01 D-05)", async () => {
     const session = new MockBgSession();
-    session.contextUsage = { tokens: 110_000, contextWindow: 128_000, maxTokens: 128_000, fraction: 0.86, percent: 86 };
+    session.sessionUsage = { tokens: 110_000, contextWindow: 128_000, maxTokens: 128_000, fraction: 0.86, percent: 86 };
     session.compactResult = { summary: "the background summary" };
 
     const config: PiEngineConfig = {
@@ -266,19 +265,21 @@ describe("PiEngine background compaction", () => {
 
     expect(session.compactCallCount).toBe(1);
 
+    // 07-01: the compaction_summary conversation_messages row no longer
+    // persists — background compaction itself stays live, only the persisted
+    // summary row goes away (frozen-table guarantee).
     const row = db.query<{ content: string }, [number]>(
       "SELECT content FROM conversation_messages WHERE conversation_id = ? AND type = 'compaction_summary' ORDER BY id DESC LIMIT 1",
     ).get(conversationId);
 
-    expect(row).toBeDefined();
-    expect(row!.content).toBe("the background summary");
+    expect(row).toBeNull();
   });
 
   test("BC-6: BG compaction fires mid-execution → queue stays open until agent.continue() completes", async () => {
     // Verify the fix: execution must not terminate prematurely (before agent.continue() runs).
     // soft threshold = 128_000 - (16384 + 8192) = 103_424; tokens = 110_000 > 103_424
     const session = new MockBgSession();
-    session.contextUsage = { tokens: 110_000, contextWindow: 128_000, maxTokens: 128_000, fraction: 0.86, percent: 86 };
+    session.sessionUsage = { tokens: 110_000, contextWindow: 128_000, maxTokens: 128_000, fraction: 0.86, percent: 86 };
 
     const config: PiEngineConfig = {
       type: "pi",
@@ -299,7 +300,7 @@ describe("PiEngine background compaction", () => {
     // After BG compact + agent.continue(), the continue() fires a second turn_end
     // with low token count → must not trigger a second compact.
     const session = new MockBgSession();
-    session.contextUsage = { tokens: 110_000, contextWindow: 128_000, maxTokens: 128_000, fraction: 0.86, percent: 86 };
+    session.sessionUsage = { tokens: 110_000, contextWindow: 128_000, maxTokens: 128_000, fraction: 0.86, percent: 86 };
     // continue() fires turn_end with this low usage: 1_000 tokens < 103_424 threshold
     session.continueContextUsage = { tokens: 1_000, contextWindow: 128_000, maxTokens: 128_000, fraction: 0.008, percent: 0.8 };
 

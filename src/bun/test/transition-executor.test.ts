@@ -4,7 +4,6 @@ import { execSync } from "child_process";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import type { TransitionEventMetadata } from "../../shared/rpc-types.ts";
 import { resetConfig } from "../config/index.ts";
 import { TransitionExecutor } from "../engine/execution/transition-executor.ts";
 import { CrossEngineContextInjector } from "../conversation/cross-engine-context.ts";
@@ -18,16 +17,11 @@ import { BoardToolExecutor } from "../workflow/tools/board-tool-executor.ts";
 import { ExecutionParamsBuilder } from "../engine/execution/execution-params-builder.ts";
 import { IWorkingDirectoryResolver } from "../engine/execution/working-directory-resolver.ts";
 import { StreamProcessor } from "../engine/stream/stream-processor.ts";
-import { WriteBuffer } from "../pipeline/write-buffer.ts";
-import type { RawMessageItem } from "../engine/stream/raw-message-buffer.ts";
-import type { ExecutionEngine, ExecutionParams, EngineEvent, EngineResumeInput, RawModelMessage } from "../engine/types.ts";
+import type { ExecutionEngine, ExecutionParams, EngineEvent } from "../engine/types.ts";
 import type { TaskRow } from "../db/row-types.ts";
 import { initDb, seedProjectAndTask, setupTestConfig, makeTestRegistry, makeTestRegistryWith } from "./helpers.ts";
-import { appendMessage } from "../conversation/messages.ts";
 import type { EngineRegistry } from "../engine/engine-registry.ts";
 import { ExecutionParamsEnricher } from "../engine/execution/execution-params-enricher.ts";
-
-const fakeRawBuffer = new WriteBuffer<RawMessageItem>({ flushFn: () => {} });
 
 let db: Database;
 let gitDir: string;
@@ -43,7 +37,7 @@ class TestEngine implements ExecutionEngine {
   async *execute(_params: ExecutionParams): AsyncIterable<EngineEvent> {
     yield { type: "done" };
   }
-  async resume(_executionId: number, _input: EngineResumeInput): Promise<void> {}
+  async resume(_executionId: number, _input: never): Promise<void> {}
   cancel(_executionId: number): void {}
   async listModels() { return []; }
   async listCommands(_taskId: number) { return []; }
@@ -60,7 +54,6 @@ class CapturingParamsBuilder extends ExecutionParamsBuilder {
     systemInstructions: string | undefined,
     workingDirectory: string,
     signal: AbortSignal,
-    onRawModelMessage: (raw: RawModelMessage) => void,
     attachments?: import("../../shared/rpc-types.ts").Attachment[],
     model?: string,
     projectPath?: string,
@@ -74,7 +67,6 @@ class CapturingParamsBuilder extends ExecutionParamsBuilder {
       systemInstructions,
       workingDirectory,
       signal,
-      onRawModelMessage,
       attachments,
       model,
       projectPath,
@@ -97,15 +89,11 @@ class StubStreamProcessor extends StreamProcessor {
   lastRun: { taskId: number | null; conversationId: number; executionId: number; params: ExecutionParams } | null = null;
 
   constructor() {
-    super(null as never, fakeRawBuffer, () => {}, () => {}, () => {}, () => {});
+    super(null as never, () => {}, () => {}, () => {}, () => {}, () => {});
   }
 
   override createSignal(): AbortSignal {
     return new AbortController().signal;
-  }
-
-  override makePersistCallback(): (raw: RawModelMessage) => void {
-    return (_raw) => {};
   }
 
   override runNonNative(
@@ -119,14 +107,13 @@ class StubStreamProcessor extends StreamProcessor {
   }
 }
 
-function readLatestTransitionMetadata(taskId: number): TransitionEventMetadata {
+function countTransitionEventRows(taskId: number): number {
   const row = db
-    .query<{ metadata: string | null }, [number]>(
-      "SELECT metadata FROM conversation_messages WHERE task_id = ? AND type = 'transition_event' ORDER BY id DESC LIMIT 1",
+    .query<{ count: number }, [number]>(
+      "SELECT count(*) AS count FROM conversation_messages WHERE task_id = ? AND type = 'transition_event'",
     )
     .get(taskId);
-
-  return JSON.parse(row?.metadata ?? "{}") as TransitionEventMetadata;
+  return row?.count ?? 0;
 }
 
 beforeEach(() => {
@@ -147,7 +134,7 @@ afterEach(() => {
 });
 
 describe("TransitionExecutor", () => {
-  it("keeps non-prompted transitions as basic transition events and idle tasks", async () => {
+  it("keeps non-prompted transitions as idle tasks with zero conversation_messages writes", async () => {
     const cfg = setupTestConfig("", gitDir);
     configCleanup = cfg.cleanup;
     const { taskId } = seedProjectAndTask(db, gitDir);
@@ -175,8 +162,8 @@ describe("TransitionExecutor", () => {
     expect(builder.lastBuilt).toBeNull();
     expect(streamProcessor.lastRun).toBeNull();
 
-    const metadata = readLatestTransitionMetadata(taskId);
-    expect(metadata).toEqual({ from: "plan", to: "done" });
+    // 07-01: transition_event rows no longer persist (frozen-table guarantee)
+    expect(countTransitionEventRows(taskId)).toBe(0);
 
     const promptRows = db
       .query<{ count: number }, [number]>(
@@ -293,17 +280,8 @@ columns:
     );
     expect(builder.lastBuilt?.workingDirectory).toBe(gitDir);
 
-    const metadata = readLatestTransitionMetadata(taskId);
-    expect(metadata).toEqual({
-      from: "backlog",
-      to: "plan",
-      instructionDetail: {
-        displayText: "/opsx-propose transition card",
-        sourceText: "/opsx-propose transition card",
-        sourceKind: "slash",
-        sourceRef: "/opsx-propose",
-      },
-    });
+    // 07-01: transition_event rows no longer persist (frozen-table guarantee)
+    expect(countTransitionEventRows(taskId)).toBe(0);
 
     const promptRows = db
       .query<{ count: number }, [number]>(
@@ -722,7 +700,7 @@ describe("TE-CE-1..2: cross-engine context injection on transitions", () => {
     const { taskId, conversationId } = seedProjectAndTask(db, gitDir);
     db.run("UPDATE tasks SET workflow_state = 'backlog' WHERE id = ?", [taskId]);
     db.run("UPDATE conversations SET model = 'claude/opus', last_engine_type = 'copilot' WHERE id = ?", [conversationId]);
-    appendMessage(db, taskId, conversationId, "assistant", null, "Copilot assistant response");
+    db.run("INSERT INTO conversation_messages (task_id, conversation_id, role, content, type) VALUES (?, ?, 'assistant', 'Copilot assistant response', 'assistant')", [taskId, conversationId]);
 
     const registry = makeTestRegistryWith(new Map([
       ["copilot", new TestEngine("copilot")],
@@ -743,7 +721,7 @@ describe("TE-CE-1..2: cross-engine context injection on transitions", () => {
     const { taskId, conversationId } = seedProjectAndTask(db, gitDir);
     db.run("UPDATE tasks SET workflow_state = 'plan' WHERE id = ?", [taskId]);
     db.run("UPDATE conversations SET model = 'claude/opus', last_engine_type = NULL WHERE id = ?", [conversationId]);
-    appendMessage(db, taskId, conversationId, "assistant", null, "Some prior response");
+    db.run("INSERT INTO conversation_messages (task_id, conversation_id, role, content, type) VALUES (?, ?, 'assistant', 'Some prior response', 'assistant')", [taskId, conversationId]);
 
     const engine = new TestEngine();
     const registry = makeTestRegistryWith(new Map([["copilot", engine]]));

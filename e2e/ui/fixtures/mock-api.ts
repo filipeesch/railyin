@@ -11,6 +11,10 @@
  * replaces the previous handler and applies immediately (page.unroute + re-route).
  *
  * Every unhandled /api/* call returns a 501 so tests fail loudly on missing stubs.
+ *
+ * EXCEPTION — /api/copilotkit/* is owned by mock-agui.ts (MockAgui), not
+ * ApiMock: this dispatcher hands those requests to the next registered route
+ * via route.fallback() so the SSE mock can answer (D-07 route-conflict fix).
  */
 
 import type { Page, Route } from "@playwright/test";
@@ -83,6 +87,15 @@ export class ApiMock {
         await this._page.route("/api/**", async (route: Route) => {
             const url = new URL(route.request().url());
             const method = url.pathname.replace(/^\/api\//, "");
+
+            // /api/copilotkit/* is the CopilotRuntime AG-UI prefix, owned by
+            // mock-agui.ts (MockAgui). Hand the request to that route instead
+            // of 501-ing it here (D-07); the loud-501 fail-fast for every
+            // other unhandled /api/* path stays.
+            if (url.pathname.startsWith("/api/copilotkit/")) {
+                await route.fallback();
+                return;
+            }
 
             const handler = this._handlers.get(method);
             if (!handler) {

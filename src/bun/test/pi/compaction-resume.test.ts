@@ -18,7 +18,7 @@ import type { ExecutionParams, EngineEvent } from "../../engine/types.ts";
 
 // ─── Shared interfaces ────────────────────────────────────────────────────────
 
-interface ContextUsage {
+interface SessionUsage {
   tokens: number;
   contextWindow: number;
   maxTokens: number;
@@ -38,7 +38,7 @@ class MockResumingSession {
   compactResult: CompactResult | null = { summary: "bg compaction summary" };
   compactError: Error | null = null;
   continueError: Error | null = null;
-  contextUsage: ContextUsage = {
+  sessionUsage: SessionUsage = {
     tokens: 110_000,
     contextWindow: 128_000,
     maxTokens: 128_000,
@@ -118,8 +118,8 @@ class MockResumingSession {
     return this.compactResult;
   }
 
-  getContextUsage(): ContextUsage {
-    return this.contextUsage;
+  getContextUsage(): SessionUsage {
+    return this.sessionUsage;
   }
 
   abort(): Promise<void> {
@@ -156,9 +156,8 @@ function makePiEngine(session: MockResumingSession, config: PiEngineConfig): PiE
   return new PiEngine(
     "test-pi",
     config,
-    () => {},
-    () => {},
-    undefined,
+            () => {},
+            undefined,
     new StubModelSettingsRepository(128_000),
     async () => session as any,
   );
@@ -172,9 +171,8 @@ function makePiEngineWithRegistry(
   return new PiEngine(
     "test-pi",
     config,
-    () => {},
-    () => {},
-    undefined,
+            () => {},
+            undefined,
     new StubModelSettingsRepository(128_000),
     async () => session as any,
     registry,
@@ -331,7 +329,7 @@ describe("PiEngine compaction resume", () => {
     const session = new MockResumingSession();
     session.abortMidTurn = true;
     session.emitSdkWillRetry = true;
-    session.contextUsage = {
+    session.sessionUsage = {
       tokens: 1_000,
       contextWindow: 128_000,
       maxTokens: 128_000,
@@ -354,7 +352,7 @@ describe("PiEngine compaction resume", () => {
     const session = new MockResumingSession();
     session.abortMidTurn = false;
     session.emitSdkNoRetry = true;
-    session.contextUsage = {
+    session.sessionUsage = {
       tokens: 1_000,
       contextWindow: 128_000,
       maxTokens: 128_000,

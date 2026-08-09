@@ -1,7 +1,6 @@
-import type { Task, TransitionEventMetadata } from "../../../shared/rpc-types";
+import type { Task } from "../../../shared/rpc-types";
 import type { Database } from "bun:sqlite";
 import { fetchTaskWithModel } from "../../db/task-queries.ts";
-import { appendMessage } from "../../conversation/messages";
 import { getWorkspaceConfig } from "../../workspace-context";
 import { getColumnConfig } from "../../workflow/column-config";
 import type { EngineRegistry } from "../engine-registry";
@@ -20,6 +19,7 @@ import { PromptAssemblyService } from "./prompt-assembly-service.ts";
 import type { PromptFilterContext } from "./custom-prompt-injector.ts";
 import type { ExecutionParamsEnricher } from "./execution-params-enricher.ts";
 import { SlashCommandResolver } from "./slash-command-resolver.ts";
+import type { BoardRunLogger } from "../../copilotkit/board-run-logger.ts";
 
 
 export class TransitionExecutor {
@@ -38,6 +38,8 @@ export class TransitionExecutor {
     private readonly onTransitionCallback?: (taskId: number, toState: string) => void,
     private readonly onHumanTurnCallback?: (taskId: number, message: string) => void,
     private readonly paramsEnricher?: ExecutionParamsEnricher,
+    /** WR-01: taps board-driven runs' engine events into the AG-UI/JSONL flow. */
+    private readonly boardRunLogger?: BoardRunLogger,
   ) {}
 
   async execute(
@@ -73,7 +75,6 @@ export class TransitionExecutor {
     const engine = this.engineRegistry.resolveEngineForModel(workspaceKey, effectiveModel);
 
     if (!column?.on_enter_prompt) {
-      appendMessage(db, taskId, conversationId, "transition_event", null, "", { from: fromState, to: toState });
       db.run("UPDATE tasks SET execution_state = 'idle' WHERE id = ?", [taskId]);
       return { task: fetchTaskWithModel(db, taskId)!, executionId: null };
     }
@@ -87,14 +88,6 @@ export class TransitionExecutor {
     ).get(taskId)!;
     const workingDirectory = this.workdirResolver.resolve(updatedRow);
     const targetEngineId = QualifiedModelId.tryParse(effectiveModel)?.engineId ?? config.engines[0]?.id ?? "copilot";
-    const transitionMetadata = this.buildTransitionMetadata(
-      targetEngineId,
-      fromState,
-      toState,
-      resolvedPrompt,
-      workingDirectory,
-    );
-    appendMessage(db, taskId, conversationId, "transition_event", null, "", transitionMetadata as unknown as Record<string, unknown>);
 
     const execResult = db.run(
       `INSERT INTO executions (task_id, conversation_id, from_state, to_state, prompt_id, status, attempt)
@@ -154,7 +147,6 @@ export class TransitionExecutor {
         systemInstructions,
         workingDirectory,
         signal,
-        this.streamProcessor.makePersistCallback(taskId, conversationId, executionId),
         undefined,
         effectiveModel ?? undefined,
         config.projects.find((p) => p.key === task.project_key)?.projectPath,
@@ -175,29 +167,11 @@ export class TransitionExecutor {
         })
       : baseParams;
 
-    this.streamProcessor.runNonNative(taskId, conversationId, executionId, engine, execParams);
+    // WR-01: board-driven runs have no AG-UI run in flight — the logger's tap
+    // translates engine events into AG-UI events and appends them to the
+    // conversation's JSONL thread so the task-drawer chat shows the output.
+    this.streamProcessor.runNonNative(taskId, conversationId, executionId, engine, execParams, this.boardRunLogger?.buildOpts(conversationId, executionId));
     db.run("UPDATE conversations SET last_engine_type = ? WHERE id = ?", [targetEngineId, conversationId]);
     return { task: fetchTaskWithModel(db, taskId)!, executionId };
-  }
-
-  private buildTransitionMetadata(
-    _engineId: string,
-    fromState: string,
-    toState: string,
-    prompt: string,
-    _workingDirectory: string,
-  ): TransitionEventMetadata {
-    const sourceKind = prompt.trimStart().startsWith("/") ? "slash" : "inline";
-
-    return {
-      from: fromState,
-      to: toState,
-      instructionDetail: {
-        displayText: prompt,
-        sourceText: prompt,
-        sourceKind,
-        ...(sourceKind === "slash" ? { sourceRef: prompt.trim().split(/\s+/, 1)[0] } : {}),
-      },
-    };
   }
 }

@@ -1,521 +1,130 @@
 /**
  * extended-chat.spec.ts — Edge-case and advanced chat UI tests.
  *
- * Suites:
- *   P — execution cancellation
- *   Q — model switching
- *   R — context compaction
+ * Migrated onto the agui fixture (Phase 6, plan 06-06):
+ *   P-12/13/14 (stop/cancel) → C-1 pattern: agui.script = "slow" + stop-btn
+ *          click + chat-stopped "Stopped" + deterministic agui.stopRequests
+ *          asserts (Pitfall 5 — never timing asserts on the slow script).
+ *
+ * Retired in-file (P-15, Q-16..20, R-20..25+23, S-1..3 — model selector,
+ * compaction, and the legacy decision_request_prompt ws flow): see the
+ * retire block at the bottom.
  */
 
 import { test, expect } from "./fixtures";
-import { openTaskDrawer, sendMessage } from "./fixtures";
-import { makeUserMessage, makeAssistantMessage } from "./fixtures/mock-data";
-import type { Task, ConversationMessage, StreamEvent } from "@shared/rpc-types";
-
-const EXEC_ID = 2001;
-
-function textChunk(taskId: number, seq: number, content: string): StreamEvent {
-    return {
-        taskId,
-        conversationId: taskId,
-        executionId: EXEC_ID,
-        seq,
-        blockId: `${EXEC_ID}-text`,
-        type: "text_chunk",
-        content,
-        metadata: null,
-        parentBlockId: null,
-        subagentId: null,
-        done: false,
-    };
-}
+import { openTaskDrawer, chatTextarea, submitChatMessage } from "./fixtures";
+import { makeTask } from "./fixtures/mock-data";
+import type { Task } from "@shared/rpc-types";
 
 // ─── Suite P — Execution cancellation ─────────────────────────────────────────
 
 test.describe("P — Execution cancellation", () => {
-    test("P-12: stop button hidden when idle, visible when running", async ({ page, api, ws, task }) => {
-        api.handle("tasks.sendMessage", async () => {
-            setTimeout(() => {
-                ws.push({ type: "task.updated", payload: { ...task, executionState: "running" } });
-                ws.pushStreamEvent(textChunk(task.id, 0, "streaming long job..."));
-            }, 50);
-            return { message: makeUserMessage(task.id, "P-12"), executionId: EXEC_ID };
-        });
+    test("P-12: stop button hidden when idle, visible when running", async ({ page, api, agui }) => {
+        const t = makeTask({ id: 4301, conversationId: 4301, title: "P-12 Task" });
+        api.handle("tasks.list", () => [t]);
 
         await page.goto("/");
-        await openTaskDrawer(page, task.id);
+        await openTaskDrawer(page, t.id);
+        await expect(chatTextarea(page)).toBeEnabled({ timeout: 10_000 });
 
-        // Idle: stop button not present
-        await expect(page.locator(".task-detail__input .pi-stop-circle")).not.toBeVisible();
+        // Idle: stop button not present.
+        const stopBtn = page.locator('[data-testid="stop-btn"]');
+        await expect(stopBtn).not.toBeVisible();
 
-        await sendMessage(page, "P-12 msg");
+        // Slow run: the fixture holds /run open — stop appears while running.
+        agui.script = "slow";
+        await submitChatMessage(page, "P-12 msg");
+        await expect(stopBtn).toBeVisible({ timeout: 5_000 });
 
-        // Running: stop button visible
-        await expect(page.locator(".task-detail__input .pi-stop-circle")).toBeVisible({ timeout: 5_000 });
+        // Stop ends the run — the "Stopped" marker renders and the button
+        // disappears (the run is no longer running).
+        await stopBtn.click();
+        const stopped = page.locator('[data-testid="chat-stopped"]');
+        await expect(stopped).toBeVisible({ timeout: 10_000 });
+        await expect(stopped).toContainText("Stopped");
+        await expect(stopBtn).not.toBeVisible({ timeout: 5_000 });
 
-        // Settle
-        ws.push({ type: "task.updated", payload: { ...task, executionState: "completed" } });
-        ws.pushDone(task.id, EXEC_ID);
-
-        // Completed: stop button gone again
-        await expect(page.locator(".task-detail__input .pi-stop-circle")).not.toBeVisible({ timeout: 5_000 });
+        // The /stop round-trip hit the fixture for this thread (deterministic
+        // assertion, not timing). The POST is recorded by the route handler
+        // asynchronously — poll for it (IN-02).
+        await expect
+            .poll(() => agui.stopRequests.includes(String(t.conversationId)), { timeout: 3_000 })
+            .toBe(true);
     });
 
-    test("P-13: cancel transitions execution to waiting_user", async ({ page, api, ws, task }) => {
-        const cancelledTask: Task = { ...task, executionState: "waiting_user" };
-
-        api.handle("tasks.sendMessage", async () => {
-            setTimeout(() => {
-                ws.push({ type: "task.updated", payload: { ...task, executionState: "running" } });
-                ws.pushStreamEvent(textChunk(task.id, 0, "processing..."));
-            }, 50);
-            return { message: makeUserMessage(task.id, "P-13"), executionId: EXEC_ID };
-        });
-        api.handle("tasks.cancel", () => {
-            setTimeout(() => ws.push({ type: "task.updated", payload: cancelledTask }), 30);
-            return cancelledTask;
-        });
+    test("P-13: cancel transitions execution to waiting_user", async ({ page, api, ws, agui }) => {
+        const t = makeTask({ id: 4302, conversationId: 4302, title: "P-13 Task" });
+        const cancelledTask: Task = { ...t, executionState: "waiting_user" };
+        api.handle("tasks.list", () => [t]);
+        agui.script = "slow";
 
         await page.goto("/");
-        await openTaskDrawer(page, task.id);
-        await sendMessage(page, "P-13 msg");
+        await openTaskDrawer(page, t.id);
+        await expect(chatTextarea(page)).toBeEnabled({ timeout: 10_000 });
 
-        // Wait until running
-        await expect(page.locator(".task-detail__input .pi-stop-circle")).toBeVisible({ timeout: 5_000 });
+        await submitChatMessage(page, "P-13 msg");
 
-        // Click stop
-        await page.locator(".task-detail__input .pi-stop-circle").click();
+        // Running: stop visible; click it (C-1 pattern).
+        const stopBtn = page.locator('[data-testid="stop-btn"]');
+        await expect(stopBtn).toBeVisible({ timeout: 5_000 });
+        await stopBtn.click();
 
-        // Task card should reflect waiting_user
-        await expect(page.locator(`[data-task-id="${task.id}"]`)).toHaveClass(/exec-waiting/, { timeout: 5_000 });
+        const stopped = page.locator('[data-testid="chat-stopped"]');
+        await expect(stopped).toBeVisible({ timeout: 10_000 });
+        await expect(stopped).toContainText("Stopped");
+        await expect
+            .poll(() => agui.stopRequests.includes(String(t.conversationId)), { timeout: 3_000 })
+            .toBe(true);
+
+        // The task card reflects the cancelled execution (board surface —
+        // ws-driven task.updated, untouched by the chat swap).
+        ws.push({ type: "task.updated", payload: cancelledTask });
+        await expect(page.locator(`[data-task-id="${t.id}"]`)).toHaveClass(/exec-waiting/, { timeout: 5_000 });
     });
 
-    test("P-14: can send a new message after cancel (task recovers)", async ({ page, api, ws, task }) => {
-        const cancelledTask: Task = { ...task, executionState: "waiting_user" };
-        const recoveredMsg = makeUserMessage(task.id, "Recovery P-14");
-
-        api.handle("tasks.sendMessage", async () => {
-            setTimeout(() => {
-                ws.push({ type: "task.updated", payload: cancelledTask });
-            }, 30);
-            return { message: recoveredMsg, executionId: EXEC_ID };
-        });
-        api.handle("tasks.cancel", () => cancelledTask);
-        api.handle("conversations.getMessages", () => ({ messages: [], hasMore: false }));
+    test("P-14: can send a new message after cancel (task recovers)", async ({ page, api, agui }) => {
+        const t = makeTask({ id: 4303, conversationId: 4303, title: "P-14 Task" });
+        api.handle("tasks.list", () => [t]);
+        agui.script = "slow";
 
         await page.goto("/");
-        await openTaskDrawer(page, task.id);
+        await openTaskDrawer(page, t.id);
+        await expect(chatTextarea(page)).toBeEnabled({ timeout: 10_000 });
 
-        await sendMessage(page, "Recovery P-14");
+        await submitChatMessage(page, "Recovery P-14");
 
-        await expect(page.locator(".msg--user")).toHaveCount(1);
-        await expect(page.locator(".msg--user")).toContainText("Recovery P-14");
-    });
+        // Stop the long run.
+        const stopBtn = page.locator('[data-testid="stop-btn"]');
+        await expect(stopBtn).toBeVisible({ timeout: 5_000 });
+        await stopBtn.click();
+        await expect(page.locator('[data-testid="chat-stopped"]')).toBeVisible({ timeout: 10_000 });
 
-    test("P-15: compact button in popover is disabled while execution is running", async ({ page, api, ws, task }) => {
-        // Provide a model that supports manual compact
-        api.handle("models.listEnabled", () => [
-            { id: "fake/test", displayName: "Fake/Test", contextWindow: 8192, supportsManualCompact: true },
-        ]);
-        api.handle("conversations.contextUsage", () => ({ usedTokens: 4096, maxTokens: 8192, fraction: 0.5 }));
+        // The task recovers: a follow-up message after the stop completes
+        // normally (flip to the quick script so the resumed run finishes).
+        agui.script = "quick";
+        await submitChatMessage(page, "Recovery P-14 again");
 
-        api.handle("tasks.sendMessage", async () => {
-            setTimeout(() => {
-                ws.push({ type: "task.updated", payload: { ...task, executionState: "running" } });
-                ws.pushStreamEvent(textChunk(task.id, 0, "working..."));
-            }, 50);
-            return { message: makeUserMessage(task.id, "P-15"), executionId: EXEC_ID };
-        });
-
-        await page.goto("/");
-        await openTaskDrawer(page, task.id);
-        await sendMessage(page, "P-15 msg");
-
-        await expect(page.locator(".task-detail__input .pi-stop-circle")).toBeVisible({ timeout: 5_000 });
-
-        // Open context popover via ring click
-        await page.locator("button.context-ring-btn").click();
-
-        // Compact button inside popover must be disabled during execution
-        const compactBtn = page.locator(".ctx-popover button:has-text('Compact')");
-        await expect(compactBtn).toBeDisabled({ timeout: 2_000 });
+        const chat = page.locator('[data-testid="copilot-chat-view"]');
+        await expect(chat).toContainText("Recovery P-14 again", { timeout: 10_000 });
+        await expect(chat).toContainText("hello", { timeout: 10_000 });
     });
 });
 
-// ─── Suite Q — Model switching ────────────────────────────────────────────────
-
-test.describe("Q — Model switching", () => {
-    test("Q-16: model selector shows the task's current model", async ({ page, api, ws, task }) => {
-        await page.goto("/");
-        await openTaskDrawer(page, task.id);
-
-        // Model selector should display the task model's displayName ("Fake/Test" for id "fake/test")
-        await expect(page.locator(".model-select__value")).toBeVisible({ timeout: 3_000 });
-        await expect(page.locator(".task-detail__model-row")).toContainText("Fake/Test");
-    });
-
-    test("Q-17: after setModel, task reflects new model", async ({ page, api, ws, task }) => {
-        const updatedTask: Task = { ...task, model: "fake/v2" };
-        api.handle("tasks.setModel", () => updatedTask);
-        api.handle("models.listEnabled", () => [
-            { id: "fake/test", displayName: "Fake/Test", contextWindow: 8192 },
-            { id: "fake/v2", displayName: "Fake/V2", contextWindow: 8192 },
-        ]);
-
-        await page.goto("/");
-        await openTaskDrawer(page, task.id);
-
-        // Simulate model change via task.updated push (as the backend would do)
-        ws.push({ type: "task.updated", payload: updatedTask });
-
-        await expect(page.locator(".task-detail__model-row")).toContainText("Fake/V2", { timeout: 3_000 });
-    });
-
-    test("Q-18: model selector label updates after switch", async ({ page, api, ws, task }) => {
-        const updatedTask: Task = { ...task, model: "fake/v2" };
-        api.handle("tasks.setModel", () => updatedTask);
-        api.handle("models.listEnabled", () => [
-            { id: "fake/test", displayName: "Fake/Test", contextWindow: 8192 },
-            { id: "fake/v2", displayName: "Fake/V2", contextWindow: 8192 },
-        ]);
-
-        await page.goto("/");
-        await openTaskDrawer(page, task.id);
-
-        // Push the model update via WS (as the backend would do after tasks.setModel)
-        ws.push({ type: "task.updated", payload: updatedTask });
-
-        await expect(page.locator(".task-detail__model-row")).toContainText("Fake/V2", { timeout: 3_000 });
-    });
-
-    test("Q-19: message completes successfully after model switch", async ({ page, api, ws, task }) => {
-        const v2Task: Task = { ...task, model: "fake/v2" };
-        const reply = makeAssistantMessage(task.id, "Reply on fake/v2");
-
-        api.handle("tasks.setModel", () => v2Task);
-        api.handle("tasks.sendMessage", async () => {
-            setTimeout(() => {
-                ws.pushStreamEvent(textChunk(task.id, 0, "Reply on fake/v2"));
-                ws.pushDone(task.id, EXEC_ID);
-            }, 50);
-            return { message: makeUserMessage(task.id, "Q-19 msg"), executionId: EXEC_ID };
-        });
-        api.handle("conversations.getMessages", () => ({ messages: [reply], hasMore: false }));
-
-        ws.push({ type: "task.updated", payload: v2Task });
-
-        await page.goto("/");
-        await openTaskDrawer(page, task.id);
-        await sendMessage(page, "Q-19 msg");
-
-        await expect(page.locator(".msg__bubble.streaming")).not.toBeVisible({ timeout: 10_000 });
-        await expect(page.locator(".msg--assistant")).toHaveCount(1);
-    });
-
-    // Q-20: task.model seeded from engine.model → model selector shows engine-seeded model
-    test("Q-20: model selector shows engine-seeded model when task.model was seeded at creation", async ({ page, api, ws, task }) => {
-        // Simulate a task whose model was seeded from engine.model at creation time
-        const engineSeededTask = { ...task, model: "copilot/gpt-4.1" };
-        api.handle("tasks.list", () => [engineSeededTask]);
-        api.handle("models.listEnabled", () => [
-            { id: "copilot/gpt-4.1", displayName: "GPT-4.1", contextWindow: 1_047_576 },
-        ]);
-
-        await page.goto("/");
-        await openTaskDrawer(page, engineSeededTask.id);
-
-        await expect(page.locator(".model-select__value")).toBeVisible({ timeout: 3_000 });
-        await expect(page.locator(".task-detail__model-row")).toContainText("GPT-4.1");
-    });
-});
-
-// ─── Suite R — Context compaction ────────────────────────────────────────────
-
-test.describe("R — Context compaction", () => {
-    test("R-20: context ring button opens popover with compact button (supportsManualCompact)", async ({ page, api, ws, task }) => {
-        api.handle("models.listEnabled", () => [
-            { id: "fake/test", displayName: "Fake/Test", contextWindow: 128_000, supportsManualCompact: true },
-        ]);
-        api.handle("conversations.contextUsage", () => ({ usedTokens: 92_160, maxTokens: 128_000, fraction: 0.72 }));
-
-        await page.goto("/");
-        await openTaskDrawer(page, task.id);
-
-        // Ring button should be visible
-        const ringBtn = page.locator("button.context-ring-btn");
-        await expect(ringBtn).toBeVisible({ timeout: 3_000 });
-
-        // Click ring to open popover
-        await ringBtn.click();
-
-        // Popover body should show model name and gauge
-        await expect(page.locator(".ctx-popover__model-name")).toContainText("Fake/Test", { timeout: 3_000 });
-        await expect(page.locator(".ctx-popover__bar-fill")).toBeVisible();
-        await expect(page.locator(".ctx-popover__pct")).toContainText("72%");
-
-        // Compact button visible because supportsManualCompact = true
-        await expect(page.locator(".ctx-popover button:has-text('Compact')")).toBeVisible();
-    });
-
-    test("R-20b: compact button hidden when supportsManualCompact is false", async ({ page, api, task }) => {
-        // Default fixture has models.listEnabled without supportsManualCompact
-        api.handle("conversations.contextUsage", () => ({ usedTokens: 4096, maxTokens: 8192, fraction: 0.5 }));
-
-        await page.goto("/");
-        await openTaskDrawer(page, task.id);
-
-        const ringBtn = page.locator("button.context-ring-btn");
-        await expect(ringBtn).toBeVisible({ timeout: 3_000 });
-        await ringBtn.click();
-
-        // Compact button should NOT be visible
-        await expect(page.locator(".ctx-popover button:has-text('Compact')")).not.toBeVisible();
-    });
-
-    test("R-21: manual compact via popover shows .msg--compaction divider", async ({ page, api, ws, task }) => {
-        const compactionMsg: ConversationMessage = {
-            id: 9001,
-            taskId: task.id,
-            conversationId: task.id,
-            type: "compaction_summary",
-            role: null,
-            content: JSON.stringify({ summary: "Context compacted." }),
-            metadata: null,
-            createdAt: new Date().toISOString(),
-        };
-
-        api.handle("models.listEnabled", () => [
-            { id: "fake/test", displayName: "Fake/Test", contextWindow: 128_000, supportsManualCompact: true },
-        ]);
-        api.handle("conversations.contextUsage", () => ({ usedTokens: 4096, maxTokens: 8192, fraction: 0.5 }));
-        api.handle("tasks.compact", async () => {
-            setTimeout(() => ws.push({ type: "message.new", payload: compactionMsg }), 50);
-        });
-
-        await page.goto("/");
-        await openTaskDrawer(page, task.id);
-
-        // Open popover and click Compact
-        await page.locator("button.context-ring-btn").click();
-        await page.locator(".ctx-popover button:has-text('Compact')").click();
-
-        await expect(page.locator(".msg--compaction")).toBeVisible({ timeout: 5_000 });
-    });
-
-    test("R-22: compaction divider contains no expandable summary", async ({ page, api, ws, task }) => {
-        const compactionMsg: ConversationMessage = {
-            id: 9002,
-            taskId: task.id,
-            conversationId: task.id,
-            type: "compaction_summary",
-            role: null,
-            content: JSON.stringify({ summary: "Context compacted." }),
-            metadata: null,
-            createdAt: new Date().toISOString(),
-        };
-        api.handle("conversations.getMessages", () => ({ messages: [compactionMsg], hasMore: false }));
-
-        await page.goto("/");
-        await openTaskDrawer(page, task.id);
-
-        await expect(page.locator(".msg--compaction")).toBeVisible({ timeout: 3_000 });
-        // No expandable details element — divider-only rendering
-        await expect(page.locator(".msg--compaction__details")).not.toBeAttached();
-    });
-
-    test("R-24: compact success → context gauge drops from 90% to 20%", async ({ page, api, ws, task }) => {
-        let contextUsageCallCount = 0;
-        const compactionMsg: ConversationMessage = {
-            id: 9010,
-            taskId: task.id,
-            conversationId: task.id,
-            type: "compaction_summary",
-            role: null,
-            content: "Compacted successfully.",
-            metadata: null,
-            createdAt: new Date().toISOString(),
-        };
-
-        api.handle("models.listEnabled", () => [
-            { id: "fake/test", displayName: "Fake/Test", contextWindow: 128_000, supportsManualCompact: true },
-        ]);
-        api.handle("conversations.contextUsage", () => {
-            contextUsageCallCount++;
-            // First call → 90%, subsequent calls (after compaction) → 20%
-            return contextUsageCallCount === 1
-                ? { usedTokens: 115_200, maxTokens: 128_000, fraction: 0.9 }
-                : { usedTokens: 25_600, maxTokens: 128_000, fraction: 0.2 };
-        });
-        api.handle("tasks.compact", async () => {
-            setTimeout(() => ws.push({ type: "message.new", payload: compactionMsg }), 50);
-        });
-
-        await page.goto("/");
-        await openTaskDrawer(page, task.id);
-
-        // Open popover and verify initial 90%
-        await page.locator("button.context-ring-btn").click();
-        await expect(page.locator(".ctx-popover__pct")).toContainText("90%", { timeout: 3_000 });
-
-        // Click compact
-        await page.locator(".ctx-popover button:has-text('Compact')").click();
-
-        // Gauge should update to 20% after compaction message triggers fetchContextUsage
-        await expect(page.locator("button.context-ring-btn")).toBeVisible({ timeout: 5_000 });
-        await page.locator("button.context-ring-btn").click();
-        await expect(page.locator(".ctx-popover__pct")).toContainText("20%", { timeout: 5_000 });
-    });
-
-    test("R-25: compact error → error notification visible", async ({ page, api, task }) => {
-        api.handle("models.listEnabled", () => [
-            { id: "fake/test", displayName: "Fake/Test", contextWindow: 128_000, supportsManualCompact: true },
-        ]);
-        api.handle("conversations.contextUsage", () => ({ usedTokens: 92_160, maxTokens: 128_000, fraction: 0.72 }));
-        api.handle("tasks.compact", async () => {
-            throw Object.assign(new Error("Compaction already in progress"), { status: 500 });
-        });
-
-        await page.goto("/");
-        await openTaskDrawer(page, task.id);
-
-        await page.locator("button.context-ring-btn").click();
-        await page.locator(".ctx-popover button:has-text('Compact')").click();
-
-        // Error notification should appear
-        await expect(page.locator(".notification--error, [data-type='error'], .toast--error, [role='alert']")).toBeVisible({ timeout: 3_000 });
-    });
-
-    test("R-23: context gauge appears after execution completes", async ({ page, api, ws, task }) => {
-        const completedTask: Task = { ...task, executionState: "completed" };
-
-        api.handle("tasks.sendMessage", async () => {
-            setTimeout(() => {
-                ws.pushStreamEvent(textChunk(task.id, 0, "done"));
-                ws.pushDone(task.id, EXEC_ID);
-                setTimeout(() => ws.push({ type: "task.updated", payload: completedTask }), 30);
-            }, 50);
-            return { message: makeUserMessage(task.id, "R-23"), executionId: EXEC_ID };
-        });
-        api.handle("conversations.contextUsage", () => ({ usedTokens: 1024, maxTokens: 8192, fraction: 0.125 }));
-
-        await page.goto("/");
-        await openTaskDrawer(page, task.id);
-        await sendMessage(page, "R-23 msg");
-
-        await expect(page.locator(".msg__bubble.streaming")).not.toBeVisible({ timeout: 10_000 });
-        await expect(page.locator("button.context-ring-btn svg.context-ring")).toBeVisible({ timeout: 5_000 });
-    });
-});
-
-// ─── Suite S — Decision request edge cases ─────────────────────────────────────
-
-test.describe("S — Decision request edge cases", () => {
-    test("S-1: decision_request_prompt during streaming sets task to waiting_user", async ({ page, api, ws, task }) => {
-        api.handle("tasks.sendMessage", async () => {
-            // Simulate decision_request event arriving mid-stream
-            setTimeout(() => {
-                ws.push({
-                    type: "task.updated",
-                    payload: { ...task, executionState: "waiting_user" },
-                });
-                ws.push({
-                    type: "message",
-                    payload: {
-                        id: 9001,
-                        taskId: null,
-                        conversationId: task.conversationId,
-                        type: "decision_request_prompt",
-                        role: null,
-                        content: "Please answer this question",
-                        metadata: null,
-                        createdAt: new Date().toISOString(),
-                    },
-                });
-                ws.push({ type: "task.updated", payload: { ...task, executionState: "completed" } });
-                ws.pushDone(task.id, EXEC_ID);
-            }, 100);
-
-            return { message: makeUserMessage(task.id, "S-1"), executionId: EXEC_ID };
-        });
-
-        await page.goto("/");
-        await openTaskDrawer(page, task.id);
-        await sendMessage(page, "S-1 msg");
-
-        // Wait for the decision_request event and task state change
-        await page.waitForTimeout(500);
-
-        // Task should transition through waiting_user state (visible via execution indicator)
-        // The decision_request_prompt message is rendered in the conversation body
-        // Verify the task drawer is still open and messages are loading
-        await expect(page.locator(".task-detail__input")).toBeVisible({ timeout: 5_000 });
-    });
-
-    test("S-2: decision_request_prompt during task execution sets waiting_user state", async ({ page, api, ws, task }) => {
-        api.handle("tasks.sendMessage", async () => {
-            setTimeout(() => {
-                // Simulate decision_request event arriving
-                ws.push({
-                    type: "message",
-                    payload: {
-                        id: 100,
-                        taskId: null,
-                        conversationId: task.conversationId,
-                        type: "decision_request_prompt",
-                        role: null,
-                        content: "Please answer this question",
-                        metadata: null,
-                        createdAt: new Date().toISOString(),
-                    },
-                });
-                ws.push({ type: "task.updated", payload: { ...task, executionState: "waiting_user" } });
-                ws.push({ type: "task.updated", payload: { ...task, executionState: "completed" } });
-                ws.pushDone(task.id, EXEC_ID);
-            }, 50);
-
-            return { message: makeUserMessage(task.id, "S-2"), executionId: EXEC_ID };
-        });
-
-        await page.goto("/");
-        await openTaskDrawer(page, task.id);
-
-        await sendMessage(page, "S-2 msg");
-
-        // Allow time for events
-        await page.waitForTimeout(500);
-
-        // Task should be visible and ready for interaction
-        await expect(page.locator(".task-detail__input")).toBeVisible({ timeout: 5_000 });
-    });
-
-    test("S-3: WebSocket disconnect during interview — UI state persists on reconnect", async ({ page, api, ws, task }) => {
-        api.handle("tasks.sendMessage", async () => {
-            // Push a decision_request_prompt message
-            ws.push({
-                type: "message",
-                payload: {
-                    id: 9001,
-                    taskId: null,
-                    conversationId: task.conversationId,
-                    type: "decision_request_prompt",
-                    role: null,
-                    content: "Interview prompt",
-                    metadata: null,
-                    createdAt: new Date().toISOString(),
-                },
-            });
-            ws.push({ type: "task.updated", payload: { ...task, executionState: "waiting_user" } });
-            return { message: makeUserMessage(task.id, "S-3"), executionId: EXEC_ID };
-        });
-
-        await page.goto("/");
-        await openTaskDrawer(page, task.id);
-        await sendMessage(page, "S-3 msg");
-
-        // Allow time for message to arrive
-        await page.waitForTimeout(300);
-
-        // Task state should reflect the decision_request flow
-        await expect(page.locator(".task-detail__input")).toBeVisible({ timeout: 5_000 });
-    });
-});
+// ─── Retired tests (in-file rationale, plan 06-06) ───────────────────────────
+//
+// P-15 — compact button in popover disabled while running: the context ring
+//        + manual compact popover are removed (compaction is a trimmed
+//        feature; compaction_summary is in the FEATURES.md trim list;
+//        .ctx-popover only existed in the dead ConversationInput).
+// Q-16..Q-20 — model selector shows/updates the task's model: the in-chat
+//        model selector is removed with the legacy input (.model-select__value
+//        only existed in the dead ConversationInput; per-model config now
+//        lives in engines.yaml).
+// R-20, R-20b, R-21, R-22, R-23, R-24, R-25 — context ring popover, manual
+//        compact, .msg--compaction divider, and context gauge: removed
+//        (compaction trimmed; context-ring-btn only existed in the dead
+//        ConversationInput).
+// S-1..S-3 — decision_request_prompt during streaming and WebSocket
+//        disconnect persistence: the legacy ws decision flow is removed; the
+//        decision intents are covered by the canonical C-4/C-5 interrupt
+//        pattern (decision-card + resume payload via the interrupt script).

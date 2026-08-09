@@ -98,14 +98,33 @@ export type MessageType =
   | "system"
   | "tool_call"
   | "tool_result"
-  | "transition_event"
-  | "ask_user_prompt"
   | "decision_request_prompt"
-  | "file_diff"
-  | "reasoning"
-  | "compaction_summary"
-  | "code_review"
-  | "status";
+  | "reasoning";
+
+/** One JSONL-backed thread as surfaced by the thread-index RPC (CHAT-08, D-01). */
+export interface ThreadSummary {
+  threadId: string;
+  /** Display name: tasks.title for card threads, chat_sessions.title for sessions; null when unknown (orphan file). */
+  name: string | null;
+  /** "card" = task conversation (conversations.task_id set); "session" = standalone chat session. */
+  kind: "card" | "session";
+  /** ISO string — tasks.created_at / chat_sessions.created_at, falling back to file birthtime/mtime. */
+  createdAt: string;
+  /** ISO string — chat_sessions.last_activity_at, falling back to file mtime. */
+  updatedAt: string;
+}
+
+/** Result of a legacy-import run (IMPR-01, D-06/D-07): per-conversation counts.
+ * total = conversations that HAVE messages; skipped = already-imported (D-07
+ * existence marker) or empty after mapping; failed = per-conversation errors
+ * that never abort the loop (T-04-06). */
+export interface ImportSummary {
+  total: number;
+  imported: number;
+  skipped: number;
+  failed: number;
+  errors: string[];
+}
 
 export interface ModelInfo {
   id: string | null;
@@ -232,31 +251,6 @@ export interface TransitionInstructionDetail {
   sourceKind?: "inline" | "slash";
   /** Original slash reference, when the source was slash-based. */
   sourceRef?: string;
-}
-
-export interface TransitionEventMetadata {
-  from?: string | null;
-  to: string;
-  instructionDetail?: TransitionInstructionDetail;
-}
-
-// ─── Ask user prompt types ───────────────────────────────────────────────────
-
-export interface AskUserOption {
-  label: string;
-  description?: string;
-  recommended?: boolean;
-  preview?: string;
-}
-
-export interface AskUserQuestion {
-  question: string;
-  selection_mode: "single" | "multi";
-  options: AskUserOption[];
-}
-
-export interface AskUserPromptContent {
-  questions: AskUserQuestion[];
 }
 
 // ─── Decision request prompt types ───────────────────────────────────────────
@@ -589,45 +583,6 @@ export interface LspDetectedLanguage {
   installOptions: LspInstallOption[];
 }
 
-// ─── Unified stream event (new pipeline) ─────────────────────────────────────
-
-export type StreamEventType =
-  | "text_chunk"       // live token — not persisted
-  | "reasoning_chunk"  // live reasoning token — not persisted
-  | "status_chunk"     // ephemeral status — not persisted
-  | "user"             // persisted: user message
-  | "assistant"        // persisted: finalized assistant text
-  | "reasoning"        // persisted: finalized reasoning block
-  | "tool_call"        // persisted: tool call
-  | "tool_result"      // persisted: tool result
-  | "file_diff"        // persisted: file diff
-  | "system"           // persisted: system/error message
-  | "usage"            // ephemeral: context usage update — not persisted
-  | "done";            // terminal event — closes all state for this execution
-
-export interface StreamEvent {
-  taskId: number | null;
-  conversationId: number;
-  executionId: number;
-  seq: number;
-  blockId: string;
-  type: StreamEventType;
-  content: string;
-  metadata: string | null;
-  parentBlockId?: string | null;
-  subagentId: string | null;
-  done: boolean;
-}
-
-export interface StreamError {
-  taskId: number | null;
-  conversationId: number;
-  executionId: number;
-  error: string;
-}
-
-// ─── RPC schema ──────────────────────────────────────────────────────────────
-
 // ─── RPC schema ──────────────────────────────────────────────────────────────
 // RailynAPI maps every method name to its { params, response } types.
 // Used by api() in rpc.ts for type-safe fetch calls.
@@ -739,29 +694,21 @@ export type RailynAPI = {
   };
   "tasks.retry": {
     params: { taskId: number };
-    response: { task: Task; executionId: number };
+    response: { executionId: number };
   };
   "tasks.sendMessage": {
     params: { taskId: number; content: string; engineContent?: string; attachments?: Attachment[] };
-    response: { message: ConversationMessage; executionId: number };
+    response: { executionId: number };
   };
   "tasks.submitDecisions": {
     params: { taskId: number; answers: DecisionAnswer[]; generalNotes?: string; recordAsDecisions?: boolean };
-    response: { message: ConversationMessage; executionId: number };
+    response: { executionId: number };
   };
 
   // Conversations
   "conversations.getMessages": {
     params: { conversationId?: number; taskId?: number; beforeMessageId?: number; limit?: number };
     response: { messages: ConversationMessage[]; hasMore: boolean };
-  };
-  "conversations.getStreamEvents": {
-    params: { conversationId: number; afterSeq?: number };
-    response: import("../bun/db/stream-events").PersistedStreamEvent[];
-  };
-  "conversations.contextUsage": {
-    params: { conversationId: number };
-    response: { usedTokens: number; maxTokens: number; fraction: number };
   };
   "conversations.setSamplingPreset": {
     params: { conversationId: number; presetName: string | null };
@@ -788,18 +735,6 @@ export type RailynAPI = {
   "models.setContextWindow": {
     params: { workspaceKey?: string; qualifiedModelId: string; contextWindow: number | null };
     response: Record<string, never>;
-  };
-
-  // Context usage
-  "tasks.contextUsage": {
-    params: { taskId: number };
-    response: { usedTokens: number; maxTokens: number; fraction: number };
-  };
-
-  // Conversation compaction
-  "tasks.compact": {
-    params: { taskId: number };
-    response: void;
   };
 
   // Task management
@@ -934,10 +869,6 @@ export type RailynAPI = {
   "tasks.setShellAutoApprove": {
     params: { taskId: number; enabled: boolean };
     response: Task;
-  };
-  "executions.respondShellApproval": {
-    params: { executionId: number; decision: "approve_once" | "approve_all" | "deny" };
-    response: { ok: boolean };
   };
   "chatSessions.setShellAutoApprove": {
     params: { sessionId: number; enabled: boolean };
@@ -1077,9 +1008,25 @@ export type RailynAPI = {
     params: { sessionId: number };
     response: void;
   };
-  "chatSessions.compact": {
-    params: { sessionId: number };
-    response: void;
+
+  // Thread index (JSONL-backed — the log IS the index; D-01/D-04/D-05)
+  "threads.list": {
+    params: Record<string, never>;
+    response: ThreadSummary[];
+  };
+  // Legacy import (IMPR-01, D-06) — converts frozen conversation_messages
+  // rows into JSONL threads; idempotent (D-07), SELECT-only w.r.t. legacy
+  // tables (IMPR-02, D-08). `legacyImport.run` is registered ONLY when the
+  // server was started with RAILYN_LEGACY_IMPORT=1 (absent → 404); the
+  // unconditional `legacyImport.enabled` is the frontend visibility channel
+  // that hides the import button when the flag is off.
+  "legacyImport.run": {
+    params: Record<string, never>;
+    response: ImportSummary;
+  };
+  "legacyImport.enabled": {
+    params: Record<string, never>;
+    response: { enabled: boolean };
   };
   "mcp.getStatus": {
     params: Record<string, never>;
@@ -1158,10 +1105,7 @@ export type RailynAPI = {
 // ─── Push message types (WebSocket server → browser) ─────────────────────────
 
 export type PushMessage =
-  | { type: "stream.event"; payload: StreamEvent }
-  | { type: "stream.error"; payload: StreamError }
   | { type: "task.updated"; payload: Task }
-  | { type: "message.new"; payload: ConversationMessage }
   | { type: "workflow.reloaded"; payload: Record<string, never> }
   | { type: "code.ref"; payload: CodeRef }
   | { type: "chatSession.updated"; payload: ChatSession }

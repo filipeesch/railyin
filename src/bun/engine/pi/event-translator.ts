@@ -4,7 +4,6 @@
 
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import type { EngineEvent } from "../types.ts";
-import type { FileDiffPayload } from "../../../shared/rpc-types.ts";
 import { buildPiToolDisplay } from "./tools/display.ts";
 
 /**
@@ -43,15 +42,12 @@ export function translateEvent(event: AgentSessionEvent, worktreePath?: string):
     case "tool_execution_end": {
       const result = event.result as {
         content?: Array<{ type: string; text?: string }>;
-        details?: { writtenFiles?: FileDiffPayload[] };
       } | undefined;
 
       const text = result?.content
         ?.filter((c) => c.type === "text")
         .map((c) => c.text ?? "")
         .join("") ?? (event.isError ? "Tool execution failed" : "");
-
-      const writtenFiles = result?.details?.writtenFiles;
 
       return [
         {
@@ -60,18 +56,13 @@ export function translateEvent(event: AgentSessionEvent, worktreePath?: string):
           result: text,
           callId: event.toolCallId,
           isError: event.isError,
-          ...(writtenFiles ? { writtenFiles } : {}),
         },
       ];
     }
 
-    case "compaction_start":
-      return [{ type: "compaction_start" }];
-
-    case "compaction_end": {
-      if (event.aborted || !event.result?.summary) return [];
-      return [{ type: "compaction_done", summary: event.result.summary }];
-    }
+    // compaction_start / compaction_end — compaction_summary display trimmed
+    // (07-02); the EngineEvent members were removed. The SDK's auto-compaction
+    // behavior itself still runs (execution-controller handles willRetry).
 
     // agent_start, agent_end, turn_start, turn_end, message_start, message_end,
     // tool_execution_update, queue_update, session_info_changed,

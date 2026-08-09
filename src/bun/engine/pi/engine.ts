@@ -4,10 +4,8 @@ import type {
   ExecutionParams,
   EngineEvent,
   EngineModelInfo,
-  EngineResumeInput,
   CommandInfo,
   OnTaskUpdated,
-  OnNewMessage,
 } from "../types.ts";
 import type { PiEngineConfig, PiModelConfig } from "../../config/index.ts";
 import type { ModelSettingAxis, ModelParamValue } from "../../../shared/rpc-types.ts";
@@ -28,7 +26,6 @@ import type { ModelSettingsRepository } from "../../db/repositories/model-settin
 import type { Model } from "@earendil-works/pi-ai";
 import { buildAllTools } from "./tools/index.ts";
 import { getDb } from "../../db/index.ts";
-import { appendMessage } from "../../conversation/messages.ts";
 import { ProviderLimiterRegistry, PROVIDER_LIMITER_DEFAULTS } from "./provider-limiter.ts";
 import { formatPiError } from "./pi-error.ts";
 import { validatePiEngineConfig } from "./pi-config-validation.ts";
@@ -132,10 +129,6 @@ export class PiEngine implements ExecutionEngine {
   private readonly modelSettingsRepo: ModelSettingsRepository;
   /** Map<executionId, conversationId> — lets cancel() find the right session. */
   private readonly executionToConversation = new Map<number, number>();
-  private readonly pendingResumes = new Map<
-    number,
-    { resolve: (input: EngineResumeInput) => void; reject: (error: Error) => void }
-  >();
   /** Map<conversationId, SuspendRef> */
   private readonly suspendRefs = new Map<number, { onSuspend?: (event: EngineEvent) => void }>();
 
@@ -162,7 +155,6 @@ export class PiEngine implements ExecutionEngine {
     engineId: string,
     config: PiEngineConfig,
     onTaskUpdated: OnTaskUpdated,
-    _onNewMessage: OnNewMessage,
     dialect: SlashCommandDialect = new NullDialect(),
     modelSettingsRepo: ModelSettingsRepository,
     sessionFactory: SessionFactory = defaultSessionFactory,
@@ -233,7 +225,6 @@ export class PiEngine implements ExecutionEngine {
       signal,
       systemInstructions,
       taskContext,
-      onRawModelMessage,
       onTransition,
       onHumanTurn,
       boardTools,
@@ -327,7 +318,6 @@ export class PiEngine implements ExecutionEngine {
       workingDirectory,
       signal,
       suspendRef,
-      onRawModelMessage,
       runDriver: this.runDriver,
       compactionCoordinator: this.compactionCoordinator,
     });
@@ -338,7 +328,6 @@ export class PiEngine implements ExecutionEngine {
       }
     } finally {
       cleanup();
-      this.pendingResumes.delete(executionId);
       this.executionToConversation.delete(executionId);
     }
 
@@ -381,19 +370,14 @@ export class PiEngine implements ExecutionEngine {
     yield { type: "done" };
   }
 
-  async resume(executionId: number, input: EngineResumeInput): Promise<void> {
-    const pending = this.pendingResumes.get(executionId);
-    if (!pending) throw new Error(`Execution ${executionId} is not waiting for resume input`);
-    this.pendingResumes.delete(executionId);
-    pending.resolve(input);
+  async resume(_executionId: number, _input: never): Promise<void> {
+    // All engine-level resume channels were trimmed with ask_user/shell_approval
+    // (EngineResumeInput deleted). Decision interrupts resume via a NEW turn —
+    // executeChatTurn/executeHumanTurn deliver the answer as engineContent —
+    // never through engine.resume().
   }
 
   cancel(executionId: number): void {
-    const pending = this.pendingResumes.get(executionId);
-    if (pending) {
-      this.pendingResumes.delete(executionId);
-      pending.reject(new Error(`Execution ${executionId} cancelled`));
-    }
     const conversationId = this.executionToConversation.get(executionId);
     if (conversationId !== undefined) {
       const session = this.sessionManager.get(conversationId);
@@ -522,10 +506,11 @@ export class PiEngine implements ExecutionEngine {
 
     try {
       const result = await session.compact();
-      if (result?.summary) {
-        const db = getDb();
-        appendMessage(db, null, conversationId, "compaction_summary", null, result.summary);
-      }
+      // 07-01 (D-05): the compaction_summary conversation_messages row no
+      // longer persists — conversation_messages is a frozen table. The pi
+      // engine's compact() itself stays live; only the persisted summary row
+      // goes away.
+      void result;
     } catch (err) {
       console.error(`[pi] compact(): session.compact() failed for conversation ${conversationId}:`, err);
       throw err;

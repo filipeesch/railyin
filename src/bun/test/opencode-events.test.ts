@@ -1,12 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   translatePart,
-  translatePermissionAsked,
   translateSessionError,
-  translateSessionStatus,
 } from "../engine/opencode/event-translator.ts";
 import type { Part } from "@opencode-ai/sdk/v2";
-import type { EventPermissionAsked, EventSessionError, EventSessionStatus } from "@opencode-ai/sdk/v2";
+import type { EventSessionError } from "@opencode-ai/sdk/v2";
 
 // Helper to cast partial test fixtures to SDK types
 function part(p: Record<string, unknown>): Part {
@@ -127,29 +125,6 @@ describe("translatePart — ToolPart", () => {
   });
 });
 
-describe("translatePart — StepFinishPart (usage)", () => {
-  it("maps token counts to usage event", () => {
-    const events = translatePart(part({
-      type: "step-finish",
-      tokens: { input: 100, output: 50, reasoning: 0, cache: { read: 0, write: 0 } },
-      reason: "stop",
-      cost: 0,
-    }));
-    expect(events).toHaveLength(1);
-    expect(events[0]).toEqual({ type: "usage", inputTokens: 100, outputTokens: 50 });
-  });
-
-  it("returns empty array when both token counts are zero", () => {
-    const events = translatePart(part({
-      type: "step-finish",
-      tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
-      reason: "stop",
-      cost: 0,
-    }));
-    expect(events).toHaveLength(0);
-  });
-});
-
 describe("translatePart — unknown type", () => {
   it("returns empty array without throwing", () => {
     const p = part({ type: "unknown-future-type", data: "whatever" });
@@ -158,36 +133,15 @@ describe("translatePart — unknown type", () => {
   });
 });
 
-// ── translatePermissionAsked ──────────────────────────────────────────────────
-
-describe("translatePermissionAsked", () => {
-  it("maps permission.asked with patterns to shell_approval", () => {
-    const event = {
-      type: "permission.asked",
-      properties: {
-        id: "p1", sessionID: "s1", permission: "bash",
-        patterns: ["rm -rf /", "sudo *"],
-        metadata: {}, always: [],
-      },
-    } as unknown as EventPermissionAsked;
-
-    const result = translatePermissionAsked(event, 42);
-    expect(result).toEqual({ type: "shell_approval", command: "rm -rf /, sudo *", executionId: 42 });
-  });
-
-  it("falls back to permission field when no patterns", () => {
-    const event = {
-      type: "permission.asked",
-      properties: {
-        id: "p2", sessionID: "s1", permission: "network",
-        patterns: [],
-        metadata: {}, always: [],
-      },
-    } as unknown as EventPermissionAsked;
-
-    const result = translatePermissionAsked(event, 7);
-    expect(result.type).toBe("shell_approval");
-    expect((result as { type: "shell_approval"; command: string; executionId: number }).command).toBe("network");
+describe("translatePart — trimmed event sources", () => {
+  it("maps step-finish (usage tokens) to no events — usage display trimmed", () => {
+    const events = translatePart(part({
+      type: "step-finish",
+      tokens: { input: 100, output: 50, reasoning: 0, cache: { read: 0, write: 0 } },
+      reason: "stop",
+      cost: 0,
+    }));
+    expect(events).toEqual([]);
   });
 });
 
@@ -213,29 +167,5 @@ describe("translateSessionError", () => {
     const result = translateSessionError(event);
     expect(result.type).toBe("error");
     expect((result as { message: string }).message).toBeTruthy();
-  });
-});
-
-// ── translateSessionStatus ────────────────────────────────────────────────────
-
-describe("translateSessionStatus", () => {
-  it("maps status field to status event", () => {
-    const event = {
-      type: "session.status",
-      properties: { sessionID: "s1", status: { type: "retry", attempt: 1, message: "retrying", next: 5 } },
-    } as unknown as EventSessionStatus;
-
-    const result = translateSessionStatus(event);
-    expect(result).not.toBeNull();
-    expect(result!.type).toBe("status");
-  });
-
-  it("returns null when status property is absent", () => {
-    const event = {
-      type: "session.status",
-      properties: { sessionID: "s1" },
-    } as unknown as EventSessionStatus;
-
-    expect(translateSessionStatus(event)).toBeNull();
   });
 });

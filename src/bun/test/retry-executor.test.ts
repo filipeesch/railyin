@@ -11,7 +11,7 @@ import { IWorkingDirectoryResolver } from "../engine/execution/working-directory
 import { StreamProcessor } from "../engine/stream/stream-processor.ts";
 import { WorkspaceRepository } from "../db/workspace-repository.ts";
 import { BoardToolExecutor } from "../workflow/tools/board-tool-executor.ts";
-import type { ExecutionEngine, ExecutionParams, EngineEvent, EngineResumeInput, RawModelMessage } from "../engine/types.ts";
+import type { ExecutionEngine, ExecutionParams, EngineEvent } from "../engine/types.ts";
 import type { TaskRow } from "../db/row-types.ts";
 import { initDb, seedProjectAndTask, setupTestConfig, makeTestRegistry } from "./helpers.ts";
 import { CustomPromptInjector } from "../engine/execution/custom-prompt-injector.ts";
@@ -30,7 +30,7 @@ class TestEngine implements ExecutionEngine {
   async *execute(_params: ExecutionParams): AsyncIterable<EngineEvent> {
     yield { type: "done" };
   }
-  async resume(_executionId: number, _input: EngineResumeInput): Promise<void> {}
+  async resume(_executionId: number, _input: never): Promise<void> {}
   cancel(_executionId: number): void {}
   async listModels() { return []; }
   async listCommands(_taskId: number) { return []; }
@@ -40,11 +40,11 @@ class CapturingParamsBuilder extends ExecutionParamsBuilder {
   lastBuilt: ExecutionParams | null = null;
 
   override build(
-    task: TaskRow, conversationId: number, executionId: number, prompt: string, systemInstructions: string | undefined, workingDirectory: string, signal: AbortSignal, onRawModelMessage: (raw: RawModelMessage) => void, attachments?: import("../../shared/rpc-types.ts").Attachment[],
+    task: TaskRow, conversationId: number, executionId: number, prompt: string, systemInstructions: string | undefined, workingDirectory: string, signal: AbortSignal, attachments?: import("../../shared/rpc-types.ts").Attachment[],
     model?: string, projectPath?: string, workspaceKey?: string,
   ) {
     const params = super.build(
-      task, conversationId, executionId, prompt, systemInstructions, workingDirectory, signal, onRawModelMessage, attachments, model, projectPath, workspaceKey,
+      task, conversationId, executionId, prompt, systemInstructions, workingDirectory, signal, attachments, model, projectPath, workspaceKey,
     );
     this.lastBuilt = params;
     return params;
@@ -60,17 +60,11 @@ class StubStreamProcessor extends StreamProcessor {
   lastRun: { taskId: number | null; params: ExecutionParams } | null = null;
 
   constructor() {
-    const _db = initDb();
-    const _rawBuf = { enqueue() {}, flush: async () => {} } as unknown as import("../pipeline/write-buffer.ts").WriteBuffer<import("../engine/stream/raw-message-buffer.ts").RawMessageItem>;
-    super(_db, _rawBuf, () => {}, () => {}, () => {}, () => {});
+    super(null as never, () => {}, () => {}, () => {}, () => {}, () => {});
   }
 
   override createSignal(_executionId: number): AbortSignal {
     return new AbortController().signal;
-  }
-
-  override makePersistCallback(_taskId: number | null, _conversationId: number, _executionId: number): (raw: RawModelMessage) => void {
-    return (_raw) => {};
   }
 
   override runNonNative(taskId: number | null, _conversationId: number, _executionId: number, _engine: ExecutionEngine, params: ExecutionParams): void {
@@ -172,7 +166,9 @@ describe("RetryExecutor — git context propagation", () => {
     const { executor } = makeExecutor();
     const result = await executor.execute(taskId);
 
-    expect(result.task.worktreePath).toBe("/wt/1");
+    // 07-01: retry returns { executionId } only — no task object
+    expect(result.executionId).toBeGreaterThan(0);
+    expect(result).not.toHaveProperty("task");
   });
 });
 

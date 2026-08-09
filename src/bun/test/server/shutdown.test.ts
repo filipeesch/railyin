@@ -17,7 +17,6 @@ const makeOrchestrator = () => {
   return {
     orchestrator: {
       shutdownNonNativeEngines: async (params: object) => { shutdownCalls.push(params); },
-      markClaudeExecution: () => {},
     } as any,
     shutdownCalls,
   };

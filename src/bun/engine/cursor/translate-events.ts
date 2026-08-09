@@ -4,7 +4,7 @@
  * Contains the canonical implementations of:
  *   - translateCursorMessage() — SDKMessage → EngineEvent[]
  *   - normalizeCursorToolResult() — raw result → plain string
- *   - extractStructuredResult() — raw result → { detailedResult, writtenFiles }
+ *   - extractStructuredResult() — raw result → { detailedResult }
  *   - unwrapCursorToolName() — unwrap MCP envelope
  *   - buildCursorToolDisplay() — tool name + args → ToolCallDisplay
  *
@@ -14,10 +14,9 @@
  */
 
 import type { EngineEvent } from "../types.ts";
-import type { ToolCallDisplay, FileDiffPayload, Hunk } from "../../../shared/rpc-types.ts";
+import type { ToolCallDisplay } from "../../../shared/rpc-types.ts";
 import { COMMON_TOOL_NAMES, buildCommonToolDisplay } from "../common-tools.ts";
 import { canonicalToolDisplayLabel, humanizeToolName, stripWorktreePath } from "../tool-display.ts";
-import { parseUnifiedDiff } from "../diff-utils.ts";export { parseUnifiedDiff } from "../diff-utils.ts";
 
 /* ─── SDK Message Type (minimal) ─── */
 
@@ -42,7 +41,6 @@ export interface CursorSDKMessage {
 
 export interface StructuredResult {
   detailedResult?: string;
-  writtenFiles?: FileDiffPayload[];
 }
 
 /**
@@ -50,7 +48,9 @@ export interface StructuredResult {
  *
  * Handles:
  *   - Shell: extracts stdout/stderr into detailedResult
- *   - Edit/Write: parses diffString into writtenFiles with hunks
+ *   - Edit/Write: surfaces the diff text as detailedResult (the file-diff
+ *     extraction was trimmed with the EngineEvent surface — the
+ *     renderer derives diffs from tool ARGS via buildDiffPayloadsFromArgs)
  *   - Delete: handles empty result gracefully
  *   - Read: passes through content as detailedResult
  *   - Unknown: falls back to JSON stringify
@@ -75,19 +75,10 @@ export function extractStructuredResult(rawResult: unknown): StructuredResult {
     return { detailedResult: stdout + stderr };
   }
 
-  // Edit/Write: { linesAdded, linesRemoved, diffString }
+  // Edit/Write: { linesAdded, linesRemoved, diffString } — keep the diff text
+  // as detailedResult (the file-diff extraction was trimmed).
   if (typeof value.diffString === "string" && value.diffString.includes("@@")) {
-    const diffPath = extractPathFromDiff(value.diffString);
-    const diffPayload = parseUnifiedDiff(value.diffString, diffPath || "unknown", "edit_file");
-    return {
-      writtenFiles: [{
-        operation: diffPayload.operation,
-        path: diffPayload.path,
-        added: diffPayload.added,
-        removed: diffPayload.removed,
-        hunks: diffPayload.hunks,
-      }],
-    };
+    return { detailedResult: value.diffString };
   }
 
   // Delete: { } (empty value)
@@ -106,20 +97,6 @@ export function extractStructuredResult(rawResult: unknown): StructuredResult {
   } catch {
     return {};
   }
-}
-
-/**
- * Extract file path from unified diff headers (--- a/path, +++ b/path).
- */
-function extractPathFromDiff(diffString: string): string | undefined {
-  const lines = diffString.split("\n");
-  for (const line of lines) {
-    if (line.startsWith("--- ")) {
-      const raw = line.slice(4).trim().replace(/^[ab]\//, "");
-      if (raw !== "/dev/null") return raw;
-    }
-  }
-  return undefined;
 }
 
 /* ─── Normalize Cursor Tool Result ─── */
@@ -310,8 +287,8 @@ export function buildCursorToolDisplay(
  * Converts Cursor SDK message types to Railyin's unified EngineEvent format:
  *   assistant - transforms text deltas to "token" events
  *   thinking - converts reasoning to "reasoning" events
- *   tool_call - handles tool_start and tool_result (with display, detailedResult, writtenFiles)
- *   status - handles status updates
+ *   tool_call - handles tool_start and tool_result (with display, detailedResult)
+ *   status - informational, not translated (status display trimmed)
  */
 export function translateCursorMessage(message: CursorSDKMessage): EngineEvent[] {
   const events: EngineEvent[] = [];
@@ -376,19 +353,13 @@ export function translateCursorMessage(message: CursorSDKMessage): EngineEvent[]
       break;
     }
 
-    case "status": {
-      events.push({
-        type: "status",
-        message: typeof message.status === "string" ? message.status : String(message.status ?? ""),
-      });
-      break;
-    }
-
     case "user":
     case "system":
     case "request":
     case "task":
-      // These are informational and don't need translation
+    case "status":
+      // These are informational and don't need translation (status events were
+      // trimmed with the status/status_chunk display surface).
       break;
   }
 

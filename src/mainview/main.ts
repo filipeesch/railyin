@@ -6,6 +6,7 @@ import ToastService from "primevue/toastservice";
 import ConfirmationService from "primevue/confirmationservice";
 import "primeicons/primeicons.css";
 import "@xterm/xterm/css/xterm.css";
+import "@copilotkit/vue/styles.css";
 import App from "./App.vue";
 import router from "./router";
 

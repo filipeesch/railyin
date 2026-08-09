@@ -2,7 +2,6 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import type { Database } from "bun:sqlite";
 import { initDb, seedProjectAndTask, setupTestConfig, makeTestRegistryWith } from "./helpers.ts";
 import { CrossEngineContextInjector } from "../conversation/cross-engine-context.ts";
-import { appendMessage } from "../conversation/messages.ts";
 import type { ExecutionEngine, EngineModelInfo, EngineType } from "../engine/types.ts";
 
 let db: Database;
@@ -61,8 +60,8 @@ describe("CrossEngineContextInjector", () => {
 
   it("CEC-3: copilot→claude switch → returns context block", async () => {
     seedConversation("copilot");
-    appendMessage(db, taskId, conversationId, "user", "user", "Hello from copilot session");
-    appendMessage(db, taskId, conversationId, "assistant", null, "Copilot response here");
+    db.run("INSERT INTO conversation_messages (task_id, conversation_id, type, role, content) VALUES (?, ?, ?, ?, ?)", [taskId, conversationId, "user", "user", "Hello from copilot session"]);
+    db.run("INSERT INTO conversation_messages (task_id, conversation_id, type, role, content) VALUES (?, ?, ?, ?, ?)", [taskId, conversationId, "assistant", null, "Copilot response here"]);
 
     const injector = new CrossEngineContextInjector(db);
     const { historyBlock } = await injector.prepareSwitch(conversationId, "claude", undefined, "/tmp", "test-workspace", "claude");
@@ -75,9 +74,9 @@ describe("CrossEngineContextInjector", () => {
 
   it("CEC-4: compaction_summary anchor row is included in history block (id >= anchor)", async () => {
     seedConversation("copilot");
-    appendMessage(db, taskId, conversationId, "user", "user", "Old message before compaction");
-    appendMessage(db, taskId, conversationId, "compaction_summary", null, "Summary text");
-    appendMessage(db, taskId, conversationId, "user", "user", "New message after compaction");
+    db.run("INSERT INTO conversation_messages (task_id, conversation_id, type, role, content) VALUES (?, ?, ?, ?, ?)", [taskId, conversationId, "user", "user", "Old message before compaction"]);
+    db.run("INSERT INTO conversation_messages (task_id, conversation_id, type, role, content) VALUES (?, ?, ?, ?, ?)", [taskId, conversationId, "compaction_summary", null, "Summary text"]);
+    db.run("INSERT INTO conversation_messages (task_id, conversation_id, type, role, content) VALUES (?, ?, ?, ?, ?)", [taskId, conversationId, "user", "user", "New message after compaction"]);
 
     const injector = new CrossEngineContextInjector(db);
     const { historyBlock } = await injector.prepareSwitch(conversationId, "claude", undefined, "/tmp", "test-workspace", "claude");
@@ -91,7 +90,7 @@ describe("CrossEngineContextInjector", () => {
 
   it("CEC-5: no contextWindow on target model → compaction skipped, injection proceeds", async () => {
     seedConversation("copilot");
-    appendMessage(db, taskId, conversationId, "user", "user", "Some content");
+    db.run("INSERT INTO conversation_messages (task_id, conversation_id, type, role, content) VALUES (?, ?, ?, ?, ?)", [taskId, conversationId, "user", "user", "Some content"]);
 
     const compactFn = vi.fn();
     const source = makeSourceEngine({ compact: compactFn } as any);
@@ -107,7 +106,7 @@ describe("CrossEngineContextInjector", () => {
 
   it("CEC-6: tokens < 75% → sourceEngine.compact NOT called", async () => {
     seedConversation("copilot");
-    appendMessage(db, taskId, conversationId, "user", "user", "small message");
+    db.run("INSERT INTO conversation_messages (task_id, conversation_id, type, role, content) VALUES (?, ?, ?, ?, ?)", [taskId, conversationId, "user", "user", "small message"]);
 
     const compactFn = vi.fn();
     const source = makeSourceEngine({ compact: compactFn } as any);
@@ -126,8 +125,8 @@ describe("CrossEngineContextInjector", () => {
     seedConversation("copilot");
     // Insert a large block of messages to push token estimate above 75% of a tiny context window
     for (let i = 0; i < 20; i++) {
-      appendMessage(db, taskId, conversationId, "user", "user", "A".repeat(500));
-      appendMessage(db, taskId, conversationId, "assistant", null, "B".repeat(500));
+      db.run("INSERT INTO conversation_messages (task_id, conversation_id, type, role, content) VALUES (?, ?, ?, ?, ?)", [taskId, conversationId, "user", "user", "A".repeat(500)]);
+      db.run("INSERT INTO conversation_messages (task_id, conversation_id, type, role, content) VALUES (?, ?, ?, ?, ?)", [taskId, conversationId, "assistant", null, "B".repeat(500)]);
     }
 
     const compactFn = vi.fn().mockResolvedValue(undefined);
@@ -145,7 +144,7 @@ describe("CrossEngineContextInjector", () => {
   it("CEC-8: tokens > 75%, source has NO compact (Claude sim) → proceeds without compact", async () => {
     seedConversation("copilot");
     for (let i = 0; i < 20; i++) {
-      appendMessage(db, taskId, conversationId, "user", "user", "A".repeat(500));
+      db.run("INSERT INTO conversation_messages (task_id, conversation_id, type, role, content) VALUES (?, ?, ?, ?, ?)", [taskId, conversationId, "user", "user", "A".repeat(500)]);
     }
 
     // Engine with no compact method
@@ -162,11 +161,11 @@ describe("CrossEngineContextInjector", () => {
 
   it("CEC-9: messages before last compaction_summary anchor are excluded; summary row is included", async () => {
     seedConversation("copilot");
-    appendMessage(db, taskId, conversationId, "user", "user", "Very old message");
-    appendMessage(db, taskId, conversationId, "assistant", null, "Old assistant reply");
-    appendMessage(db, taskId, conversationId, "compaction_summary", null, "Summary of earlier work");
-    appendMessage(db, taskId, conversationId, "user", "user", "Recent question");
-    appendMessage(db, taskId, conversationId, "assistant", null, "Recent answer");
+    db.run("INSERT INTO conversation_messages (task_id, conversation_id, type, role, content) VALUES (?, ?, ?, ?, ?)", [taskId, conversationId, "user", "user", "Very old message"]);
+    db.run("INSERT INTO conversation_messages (task_id, conversation_id, type, role, content) VALUES (?, ?, ?, ?, ?)", [taskId, conversationId, "assistant", null, "Old assistant reply"]);
+    db.run("INSERT INTO conversation_messages (task_id, conversation_id, type, role, content) VALUES (?, ?, ?, ?, ?)", [taskId, conversationId, "compaction_summary", null, "Summary of earlier work"]);
+    db.run("INSERT INTO conversation_messages (task_id, conversation_id, type, role, content) VALUES (?, ?, ?, ?, ?)", [taskId, conversationId, "user", "user", "Recent question"]);
+    db.run("INSERT INTO conversation_messages (task_id, conversation_id, type, role, content) VALUES (?, ?, ?, ?, ?)", [taskId, conversationId, "assistant", null, "Recent answer"]);
 
     const injector = new CrossEngineContextInjector(db);
     const { historyBlock } = await injector.prepareSwitch(conversationId, "claude", undefined, "/tmp", "test-workspace", "claude");
@@ -181,10 +180,10 @@ describe("CrossEngineContextInjector", () => {
 
   it("CEC-10: tool_call and tool_result messages are NOT included in history block", async () => {
     seedConversation("copilot");
-    appendMessage(db, taskId, conversationId, "user", "user", "User turn");
-    appendMessage(db, taskId, conversationId, "tool_call", null, '{"tool":"run_command"}');
-    appendMessage(db, taskId, conversationId, "tool_result", null, "command output");
-    appendMessage(db, taskId, conversationId, "assistant", null, "Assistant reply");
+    db.run("INSERT INTO conversation_messages (task_id, conversation_id, type, role, content) VALUES (?, ?, ?, ?, ?)", [taskId, conversationId, "user", "user", "User turn"]);
+    db.run("INSERT INTO conversation_messages (task_id, conversation_id, type, role, content) VALUES (?, ?, ?, ?, ?)", [taskId, conversationId, "tool_call", null, '{"tool":"run_command"}']);
+    db.run("INSERT INTO conversation_messages (task_id, conversation_id, type, role, content) VALUES (?, ?, ?, ?, ?)", [taskId, conversationId, "tool_result", null, "command output"]);
+    db.run("INSERT INTO conversation_messages (task_id, conversation_id, type, role, content) VALUES (?, ?, ?, ?, ?)", [taskId, conversationId, "assistant", null, "Assistant reply"]);
 
     const injector = new CrossEngineContextInjector(db);
     const { historyBlock } = await injector.prepareSwitch(conversationId, "claude", undefined, "/tmp", "test-workspace", "claude");
@@ -211,8 +210,8 @@ describe("CrossEngineContextInjector", () => {
 
   it("CEC-15: pi→claude switch → historyBlock contains Pi turns inside <ASSISTANT> tags", async () => {
     seedConversation("pi");
-    appendMessage(db, taskId, conversationId, "user", "user", "Pi user message");
-    appendMessage(db, taskId, conversationId, "assistant", null, "Pi assistant response");
+    db.run("INSERT INTO conversation_messages (task_id, conversation_id, type, role, content) VALUES (?, ?, ?, ?, ?)", [taskId, conversationId, "user", "user", "Pi user message"]);
+    db.run("INSERT INTO conversation_messages (task_id, conversation_id, type, role, content) VALUES (?, ?, ?, ?, ?)", [taskId, conversationId, "assistant", null, "Pi assistant response"]);
 
     const injector = new CrossEngineContextInjector(db);
     const { historyBlock } = await injector.prepareSwitch(conversationId, "claude", undefined, "/tmp", "test-workspace", "claude");
@@ -224,8 +223,8 @@ describe("CrossEngineContextInjector", () => {
 
   it("CEC-16: compaction_summary + subsequent turns → historyBlock contains <SUMMARY> and post-compaction turns", async () => {
     seedConversation("pi");
-    appendMessage(db, taskId, conversationId, "compaction_summary", null, "Pi session summary");
-    appendMessage(db, taskId, conversationId, "assistant", null, "Post-compaction Pi turn");
+    db.run("INSERT INTO conversation_messages (task_id, conversation_id, type, role, content) VALUES (?, ?, ?, ?, ?)", [taskId, conversationId, "compaction_summary", null, "Pi session summary"]);
+    db.run("INSERT INTO conversation_messages (task_id, conversation_id, type, role, content) VALUES (?, ?, ?, ?, ?)", [taskId, conversationId, "assistant", null, "Post-compaction Pi turn"]);
 
     const injector = new CrossEngineContextInjector(db);
     const { historyBlock } = await injector.prepareSwitch(conversationId, "claude", undefined, "/tmp", "test-workspace", "claude");
@@ -238,8 +237,9 @@ describe("CrossEngineContextInjector", () => {
 
   it("CEC-17: excludeBeforeMsgId excludes the in-flight user message from historyBlock", async () => {
     seedConversation("copilot");
-    appendMessage(db, taskId, conversationId, "assistant", null, "Copilot prior response");
-    const msgId = appendMessage(db, taskId, conversationId, "user", "user", "current user question");
+    db.run("INSERT INTO conversation_messages (task_id, conversation_id, type, role, content) VALUES (?, ?, ?, ?, ?)", [taskId, conversationId, "assistant", null, "Copilot prior response"]);
+    const insertResult = db.run("INSERT INTO conversation_messages (task_id, conversation_id, type, role, content) VALUES (?, ?, ?, ?, ?)", [taskId, conversationId, "user", "user", "current user question"]);
+    const msgId = insertResult.lastInsertRowid as number;
 
     const injector = new CrossEngineContextInjector(db);
     const { historyBlock } = await injector.prepareSwitch(conversationId, "claude", undefined, "/tmp", "test-workspace", "claude", msgId);
@@ -251,7 +251,7 @@ describe("CrossEngineContextInjector", () => {
 
   it("CEC-18: source engine not in registry → no compact called, injection still proceeds", async () => {
     seedConversation("unknown-engine");
-    appendMessage(db, taskId, conversationId, "user", "user", "Some message");
+    db.run("INSERT INTO conversation_messages (task_id, conversation_id, type, role, content) VALUES (?, ?, ?, ?, ?)", [taskId, conversationId, "user", "user", "Some message"]);
 
     const registry = makeTestRegistryWith(new Map());
     const injector = new CrossEngineContextInjector(db, registry);
@@ -262,11 +262,11 @@ describe("CrossEngineContextInjector", () => {
 
   it("CEC-19: only messages at or after last compaction_summary appear in historyBlock", async () => {
     seedConversation("pi");
-    appendMessage(db, taskId, conversationId, "user", "user", "Engine A first message");
-    appendMessage(db, taskId, conversationId, "assistant", null, "Engine A response");
-    appendMessage(db, taskId, conversationId, "compaction_summary", null, "Compaction between engines");
-    appendMessage(db, taskId, conversationId, "user", "user", "Engine B question");
-    appendMessage(db, taskId, conversationId, "assistant", null, "Engine B answer");
+    db.run("INSERT INTO conversation_messages (task_id, conversation_id, type, role, content) VALUES (?, ?, ?, ?, ?)", [taskId, conversationId, "user", "user", "Engine A first message"]);
+    db.run("INSERT INTO conversation_messages (task_id, conversation_id, type, role, content) VALUES (?, ?, ?, ?, ?)", [taskId, conversationId, "assistant", null, "Engine A response"]);
+    db.run("INSERT INTO conversation_messages (task_id, conversation_id, type, role, content) VALUES (?, ?, ?, ?, ?)", [taskId, conversationId, "compaction_summary", null, "Compaction between engines"]);
+    db.run("INSERT INTO conversation_messages (task_id, conversation_id, type, role, content) VALUES (?, ?, ?, ?, ?)", [taskId, conversationId, "user", "user", "Engine B question"]);
+    db.run("INSERT INTO conversation_messages (task_id, conversation_id, type, role, content) VALUES (?, ?, ?, ?, ?)", [taskId, conversationId, "assistant", null, "Engine B answer"]);
 
     const injector = new CrossEngineContextInjector(db);
     const { historyBlock } = await injector.prepareSwitch(conversationId, "claude", undefined, "/tmp", "test-workspace", "claude");
@@ -281,7 +281,7 @@ describe("CrossEngineContextInjector", () => {
 
   it("CEC-20: only compaction_summary with no subsequent messages → historyBlock contains only <SUMMARY>", async () => {
     seedConversation("copilot");
-    appendMessage(db, taskId, conversationId, "compaction_summary", null, "Just the summary, no more messages");
+    db.run("INSERT INTO conversation_messages (task_id, conversation_id, type, role, content) VALUES (?, ?, ?, ?, ?)", [taskId, conversationId, "compaction_summary", null, "Just the summary, no more messages"]);
 
     const injector = new CrossEngineContextInjector(db);
     const { historyBlock } = await injector.prepareSwitch(conversationId, "claude", undefined, "/tmp", "test-workspace", "claude");
@@ -295,7 +295,7 @@ describe("CrossEngineContextInjector", () => {
 
   it("CEC-21: same engine type (different engine id) → no history block injected (pi→pi)", async () => {
     seedConversation("pi-local");
-    appendMessage(db, taskId, conversationId, "user", "user", "Hello from pi-local");
+    db.run("INSERT INTO conversation_messages (task_id, conversation_id, type, role, content) VALUES (?, ?, ?, ?, ?)", [taskId, conversationId, "user", "user", "Hello from pi-local"]);
     const source = makeSourceEngine({ type: "pi" as EngineType });
     const registry = makeTestRegistryWith(new Map([["pi-local", source]]));
     const injector = new CrossEngineContextInjector(db, registry);
@@ -307,7 +307,7 @@ describe("CrossEngineContextInjector", () => {
   it("CEC-22: same engine type skips pre-switch compact() even when context >75%", async () => {
     seedConversation("pi-local");
     for (let i = 0; i < 20; i++) {
-      appendMessage(db, taskId, conversationId, "user", "user", "A".repeat(500));
+      db.run("INSERT INTO conversation_messages (task_id, conversation_id, type, role, content) VALUES (?, ?, ?, ?, ?)", [taskId, conversationId, "user", "user", "A".repeat(500)]);
     }
     const compactFn = vi.fn().mockResolvedValue(undefined);
     const source = makeSourceEngine({ type: "pi" as EngineType, compact: compactFn } as any);
@@ -321,7 +321,7 @@ describe("CrossEngineContextInjector", () => {
 
   it("CEC-23: different engine type still injects historyBlock and compacts when >75% (pi→claude)", async () => {
     seedConversation("pi-local");
-    appendMessage(db, taskId, conversationId, "user", "user", "Pi content");
+    db.run("INSERT INTO conversation_messages (task_id, conversation_id, type, role, content) VALUES (?, ?, ?, ?, ?)", [taskId, conversationId, "user", "user", "Pi content"]);
     const compactFn = vi.fn().mockResolvedValue(undefined);
     const source = makeSourceEngine({ type: "pi" as EngineType, compact: compactFn } as any);
     const registry = makeTestRegistryWith(new Map([["pi-local", source]]));

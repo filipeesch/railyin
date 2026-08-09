@@ -6,7 +6,6 @@ import { tmpdir } from "node:os";
 import { UndoStack } from "../engine/pi/harness/undo-stack.ts";
 import { buildWriteTools } from "../engine/pi/tools/write.ts";
 import type { HarnessContext } from "../engine/pi/harness/context.ts";
-import type { FileDiffPayload } from "@shared/rpc-types";
 
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                            */
@@ -44,13 +43,6 @@ describe("write_file integration (WI)", () => {
 
 		const text = (result.content[0] as { text: string }).text;
 		expect(text).toContain("(+1)"); // "hello world\n" → 1 line per splitLines
-
-		const wf = (result.details as { writtenFiles?: FileDiffPayload[] }).writtenFiles;
-		expect(wf).toHaveLength(1);
-		expect(wf![0].operation).toBe("write_file");
-		expect(wf![0].is_new).toBe(true);
-		expect(wf![0].removed).toBe(0);
-		expect(wf![0].added).toBeGreaterThan(0);
 	});
 
 	it("WI-WF-2: overwrites existing file with correct added/removed counts", async () => {
@@ -63,10 +55,6 @@ describe("write_file integration (WI)", () => {
 		});
 
 		expect(readFileSync(join(dir, "over.txt"), "utf-8")).toBe("line1\nchanged\nline3\n");
-
-		const wf = (result.details as { writtenFiles?: FileDiffPayload[] }).writtenFiles!;
-		expect(wf[0].added).toBe(1);
-		expect(wf[0].removed).toBe(1);
 	});
 
 	it("WI-WF-3: returns error on path traversal", async () => {
@@ -109,11 +97,6 @@ describe("patch_file integration (WIP)", () => {
 
 		const text = (result.content[0] as { text: string }).text;
 		expect(text).toContain("(+1 -1"); // 1 added, 1 removed
-
-		const wf = (result.details as { writtenFiles?: FileDiffPayload[] }).writtenFiles!;
-		expect(wf[0].operation).toBe("patch_file");
-		expect(wf[0].added).toBe(1);
-		expect(wf[0].removed).toBe(1);
 	});
 
 	it("WI-PF-2: before position inserts content without removing", async () => {
@@ -127,10 +110,6 @@ describe("patch_file integration (WIP)", () => {
 		});
 
 		expect(readFileSync(join(dir, "before.txt"), "utf-8")).toBe("inserted\nanchor_text\n");
-
-		const wf = (result.details as { writtenFiles?: FileDiffPayload[] }).writtenFiles!;
-		expect(wf[0].added).toBeGreaterThan(0);
-		expect(wf[0].removed).toBe(0);
 	});
 
 	it("WI-PF-3: rejects duplicate anchor", async () => {
@@ -192,14 +171,6 @@ describe("delete_file integration (WID)", () => {
 
 		const text = (result.content[0] as { text: string }).text;
 		expect(text).toContain("(-"); // negative count format
-
-		const wf = (result.details as { writtenFiles?: FileDiffPayload[] }).writtenFiles!;
-		expect(wf[0].operation).toBe("delete_file");
-		expect(wf[0].added).toBe(0);
-		expect(wf[0].removed).toBe(3); // 3 lines in content
-		expect(wf[0].hunks).toHaveLength(1);
-		const allRemoved = wf[0].hunks![0].lines.filter((l: { type: string }) => l.type === "removed");
-		expect(allRemoved.length).toBe(3);
 	});
 
 	it("WI-DIF-2: non-existent file returns error", async () => {
@@ -237,13 +208,6 @@ describe("rename_file integration (WIN)", () => {
 		expect(existsSync(join(dir, "a.txt"))).toBe(false);
 		expect(existsSync(join(dir, "b.txt"))).toBe(true);
 		expect(readFileSync(join(dir, "b.txt"), "utf-8")).toBe("original content");
-
-		const wf = (result.details as { writtenFiles?: FileDiffPayload[] }).writtenFiles!;
-		expect(wf[0].operation).toBe("rename_file");
-		expect(wf[0].path).toBe("a.txt");
-		expect(wf[0].to_path).toBe("b.txt");
-		expect(wf[0].added).toBe(0);
-		expect(wf[0].removed).toBe(0);
 	});
 });
 

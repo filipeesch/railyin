@@ -5,12 +5,15 @@
  *   CS-A — toolbar button visibility
  *   CS-B — overlay lifecycle (open / loading / ready / close / stop)
  *   CS-C — z-index: overlay sits behind the chat drawer
- *   CS-D — CodeRef chips (receive via WS, dismiss, send with refs)
+ *
+ * (CS-D — CodeRef chips in the input area — retired in plan 06-02:
+ * .attachment-chip/.ln__* exist only in dead ConversationInput.vue;
+ * the live CopilotChat surface has no code-ref chip.)
  */
 
 import { test, expect } from "./fixtures";
 import { makeTask } from "./fixtures/mock-data";
-import type { Task, CodeRef } from "@shared/rpc-types";
+import type { Task } from "@shared/rpc-types";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -20,20 +23,6 @@ function makeTaskWithWorktree(overrides: Partial<Task> = {}): Task {
     worktreePath: "/tmp/worktrees/task-1",
     ...overrides,
   });
-}
-
-function makeCodeRef(overrides: Partial<CodeRef> = {}): CodeRef {
-  return {
-    taskId: 1,
-    file: "/tmp/worktrees/task-1/src/utils.ts",
-    startLine: 10,
-    startChar: 0,
-    endLine: 15,
-    endChar: 5,
-    text: "export function foo() {\n  return 42;\n}",
-    language: "typescript",
-    ...overrides,
-  };
 }
 
 async function openTaskDrawer(page: import("@playwright/test").Page, taskId: number) {
@@ -121,7 +110,10 @@ test.describe("CS-B — overlay lifecycle", () => {
     // Overlay should appear
     await expect(page.locator(".code-server-overlay")).toBeVisible({ timeout: 5_000 });
 
-    expect(startCalled).toBe(true);
+    // The overlay renders while the request is in flight — the mock handler
+    // sets startCalled only when Playwright's route dispatch executes, so
+    // poll instead of asserting a boolean that can lag the overlay (WR-06).
+    await expect.poll(() => startCalled, { timeout: 3_000 }).toBe(true);
   });
 
   test("CS-B-2: overlay shows loading spinner while status is 'starting'", async ({ page, api }) => {
@@ -207,7 +199,9 @@ test.describe("CS-B — overlay lifecycle", () => {
     await stopBtn.click();
 
     await expect(page.locator(".code-server-overlay")).not.toBeVisible({ timeout: 3_000 });
-    expect(stopCalled).toBe(true);
+    // Same race as CS-B-1: the handler flag is set by the route dispatch —
+    // poll for it (WR-06).
+    await expect.poll(() => stopCalled, { timeout: 3_000 }).toBe(true);
   });
 
   test("CS-B-6: overlay shows task title in header", async ({ page, api }) => {
@@ -246,99 +240,5 @@ test.describe("CS-C — z-index: overlay sits below the chat drawer", () => {
 
     // Drawer should be visible on top of the overlay
     await expect(page.locator(".task-detail")).toBeVisible();
-  });
-});
-
-// ─── Suite CS-D — CodeRef chips ───────────────────────────────────────────────
-
-test.describe("CS-D — CodeRef chips in chat input", () => {
-  test("CS-D-1: CodeRef chip appears in input area after code.ref WS push", async ({ page, api, ws, task }) => {
-    const readyTask = makeTaskWithWorktree({ id: task.id });
-    api.handle("tasks.list", () => [readyTask]);
-
-    await page.goto("/");
-    await openTaskDrawer(page, task.id);
-
-    const ref = makeCodeRef({ taskId: task.id });
-    ws.push({ type: "code.ref", payload: ref });
-
-    await expect(page.locator(".code-ref-chip")).toBeVisible({ timeout: 5_000 });
-    await expect(page.locator(".code-ref-chip__label")).toContainText("utils.ts");
-    await expect(page.locator(".code-ref-chip__label")).toContainText("L10");
-  });
-
-  test("CS-D-2: dismiss button removes the CodeRef chip", async ({ page, api, ws, task }) => {
-    const readyTask = makeTaskWithWorktree({ id: task.id });
-    api.handle("tasks.list", () => [readyTask]);
-
-    await page.goto("/");
-    await openTaskDrawer(page, task.id);
-
-    ws.push({ type: "code.ref", payload: makeCodeRef({ taskId: task.id }) });
-    await expect(page.locator(".code-ref-chip")).toBeVisible({ timeout: 5_000 });
-
-    await page.locator(".code-ref-chip__dismiss").click();
-    await expect(page.locator(".code-ref-chip")).not.toBeVisible({ timeout: 3_000 });
-  });
-
-  test("CS-D-3: multiple refs from same task all appear as chips", async ({ page, api, ws, task }) => {
-    const readyTask = makeTaskWithWorktree({ id: task.id });
-    api.handle("tasks.list", () => [readyTask]);
-
-    await page.goto("/");
-    await openTaskDrawer(page, task.id);
-
-    ws.push({ type: "code.ref", payload: makeCodeRef({ taskId: task.id, file: "/tmp/worktrees/task-1/src/a.ts", startLine: 1, endLine: 3 }) });
-    ws.push({ type: "code.ref", payload: makeCodeRef({ taskId: task.id, file: "/tmp/worktrees/task-1/src/b.ts", startLine: 5, endLine: 8 }) });
-
-    await expect(page.locator(".code-ref-chip")).toHaveCount(2, { timeout: 5_000 });
-  });
-
-  test("CS-D-4: send button is enabled when pending refs exist (even with empty text)", async ({ page, api, ws, task }) => {
-    const readyTask = makeTaskWithWorktree({ id: task.id });
-    api.handle("tasks.list", () => [readyTask]);
-
-    await page.goto("/");
-    await openTaskDrawer(page, task.id);
-
-    // Before ref: send button should be disabled (no text)
-    const sendBtn = page.locator(".task-detail button:has(.pi-send), .task-detail button[aria-label='Send'], .task-detail button:has(.pi-angle-right)").first();
-
-    ws.push({ type: "code.ref", payload: makeCodeRef({ taskId: task.id }) });
-    await expect(page.locator(".code-ref-chip")).toBeVisible({ timeout: 5_000 });
-
-    // Send button should now be enabled (ref pending)
-    await expect(sendBtn).not.toBeDisabled({ timeout: 3_000 });
-  });
-
-  test("CS-D-5: sending message with pending refs calls sendMessage and clears chips", async ({ page, api, ws, task }) => {
-    const readyTask = makeTaskWithWorktree({ id: task.id });
-    api.handle("tasks.list", () => [readyTask]);
-
-    let capturedContent = "";
-    api.handle("tasks.sendMessage", (params: { taskId: number; content: string }) => {
-      capturedContent = params.content;
-      return { message: null, executionId: null };
-    });
-
-    await page.goto("/");
-    await openTaskDrawer(page, task.id);
-
-    ws.push({ type: "code.ref", payload: makeCodeRef({ taskId: task.id, file: "/tmp/worktrees/task-1/src/utils.ts", startLine: 10, endLine: 15 }) });
-    await expect(page.locator(".code-ref-chip")).toBeVisible({ timeout: 5_000 });
-
-    // Type a message and send
-    const editor = page.locator(".task-detail__input .cm-content");
-    await editor.click();
-    await editor.pressSequentially("What does this do?");
-    await page.keyboard.press("Enter");
-
-    await expect(page.locator(".code-ref-chip")).not.toBeVisible({ timeout: 3_000 });
-
-    // Content should include the fenced code ref block
-    expect(capturedContent).toContain("```typescript");
-    expect(capturedContent).toContain("// ref:");
-    expect(capturedContent).toContain("utils.ts");
-    expect(capturedContent).toContain("What does this do?");
   });
 });

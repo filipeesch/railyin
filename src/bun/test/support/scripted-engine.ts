@@ -89,7 +89,7 @@ export class ScriptedEngine implements ExecutionEngine {
 
     cancel(_executionId: number): void { /* AbortSignal handles this */ }
 
-    async resume(_executionId: number, _input: import("../../engine/types.ts").EngineResumeInput): Promise<void> { /* no-op */ }
+    async resume(_executionId: number, _input: never): Promise<void> { /* no-op */ }
 
     async listModels(): Promise<import("../../engine/types.ts").EngineModelInfo[]> { return []; }
 
@@ -128,10 +128,6 @@ export function scriptReasoning(content: string): EngineEvent {
     return { type: "reasoning", content };
 }
 
-export function scriptStatus(message: string): EngineEvent {
-    return { type: "status", message };
-}
-
 export function scriptToolStart(callId: string, name: string, args: Record<string, unknown> = {}, opts: { parentCallId?: string; isInternal?: boolean } = {}): EngineEvent {
     return { type: "tool_start", callId, name, arguments: JSON.stringify(args), ...opts };
 }
@@ -146,7 +142,6 @@ export function scriptToolResultWithOptions(
     result: string,
     options: {
         isError?: boolean;
-        writtenFiles?: Array<import("../../../shared/rpc-types.ts").FileDiffPayload>;
         parentCallId?: string;
         isInternal?: boolean;
     } = {},
@@ -157,7 +152,6 @@ export function scriptToolResultWithOptions(
         name,
         result,
         isError: options.isError ?? false,
-        writtenFiles: options.writtenFiles,
         ...(options.parentCallId !== undefined ? { parentCallId: options.parentCallId } : {}),
         ...(options.isInternal !== undefined ? { isInternal: options.isInternal } : {}),
     };

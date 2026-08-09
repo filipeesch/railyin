@@ -201,6 +201,10 @@ describe("conversations", () => {
         expect(initialByTask.messages.map((message) => message.id)).toEqual(initialByConversation.messages.map((message) => message.id));
         expect(initialByTask.messages.every((message) => message.conversationId === conversationId)).toBe(true);
 
+        // Frozen-table proof: capture the row count BEFORE the run — the run
+        // must write ZERO rows to conversation_messages (07-01 D-05).
+        const beforeCount = initialByTask.messages.length;
+
         await server.request("tasks.setModel", {
             taskId,
             model: "copilot/mock-model",
@@ -209,23 +213,21 @@ describe("conversations", () => {
             taskId,
             content: "Hello from the task conversation",
         });
-        expect(sent.message.role).toBe("user");
+        expect(sent).not.toHaveProperty("message");
         expect(sent.executionId).toBeGreaterThan(0);
-
-        const canonical = await waitFor(
-            async () => (await server.request("conversations.getMessages", { conversationId })).messages,
-            (messages) => messages.some((message) => message.type === "assistant"),
-        );
-        const aliased = await server.request("conversations.getMessages", { taskId });
-        expect(aliased.messages.map((message) => message.id)).toEqual(canonical.map((message) => message.id));
-        expect(canonical.some((message) => message.role === "user" && message.content === "Hello from the task conversation")).toBe(true);
-        expect(canonical.every((message) => message.conversationId === conversationId)).toBe(true);
 
         const task = await waitFor(
             () => getTask(boardId, taskId),
             (entry) => entry.executionState !== "running",
         );
         expect(["waiting_user", "completed"]).toContain(task.executionState);
+
+        // Frozen-table proof: zero new rows after the run
+        const after = await server.request("conversations.getMessages", { conversationId });
+        expect(after.messages.length).toBe(beforeCount);
+
+        const aliased = await server.request("conversations.getMessages", { taskId });
+        expect(aliased.messages.map((message) => message.id)).toEqual(after.messages.map((message) => message.id));
     });
 
     test("conversations.setModelParams persists override on task conversation", async () => {
@@ -247,48 +249,44 @@ describe("conversations", () => {
     test("tasks.sendMessage with slash chip engineContent delivers raw command to engine", async () => {
         await server.request("tasks.setModel", { taskId, model: "copilot/mock-model" });
         const baseline = await server.request("conversations.getMessages", { conversationId });
-        const baselineAssistantCount = baseline.messages.filter((m) => m.type === "assistant").length;
+        const baselineCount = baseline.messages.length;
 
         const sent = await server.request("tasks.sendMessage", {
             taskId,
             content: "[/opsx:propose|/opsx:propose] my feature",
             engineContent: "/opsx:propose my feature",
         });
-        expect(sent.message.role).toBe("user");
+        expect(sent).not.toHaveProperty("message");
+        expect(sent.executionId).toBeGreaterThan(0);
 
         await waitFor(
             () => getTask(boardId, taskId),
             (t) => t.executionState !== "running",
         );
+        // Frozen-table proof: zero new conversation_messages rows
         const messages = await server.request("conversations.getMessages", { conversationId });
-        const userMsg = [...messages.messages].reverse().find((m) => m.role === "user" && m.type === "user");
-        expect(userMsg?.content).toContain("[/opsx:propose|/opsx:propose]");
-        const assistantMessages = messages.messages.filter((m) => m.type === "assistant");
-        expect(assistantMessages.length).toBe(baselineAssistantCount + 1);
-        const lastAssistant = assistantMessages[assistantMessages.length - 1];
-        expect(lastAssistant?.content).toBe("Mock response: /opsx:propose my feature");
+        expect(messages.messages.length).toBe(baselineCount);
     });
 
     test("tasks.sendMessage with slash chip content (no engineContent) falls back to extractChips", async () => {
         await server.request("tasks.setModel", { taskId, model: "copilot/mock-model" });
         const baseline = await server.request("conversations.getMessages", { conversationId });
-        const baselineAssistantCount = baseline.messages.filter((m) => m.type === "assistant").length;
+        const baselineCount = baseline.messages.length;
 
         const sent = await server.request("tasks.sendMessage", {
             taskId,
             content: "[/opsx:propose|/opsx:propose] my feature",
         });
-        expect(sent.message.role).toBe("user");
+        expect(sent).not.toHaveProperty("message");
+        expect(sent.executionId).toBeGreaterThan(0);
 
         await waitFor(
             () => getTask(boardId, taskId),
             (t) => t.executionState !== "running",
         );
+        // Frozen-table proof: zero new conversation_messages rows
         const messages = await server.request("conversations.getMessages", { conversationId });
-        const assistantMessages = messages.messages.filter((m) => m.type === "assistant");
-        expect(assistantMessages.length).toBe(baselineAssistantCount + 1);
-        const lastAssistant = assistantMessages[assistantMessages.length - 1];
-        expect(lastAssistant?.content).toBe("Mock response: /opsx:propose my feature");
+        expect(messages.messages.length).toBe(baselineCount);
     });
 });
 
@@ -316,29 +314,32 @@ describe("chatSessions", () => {
         const renamed = await getSession(created.id);
         expect(renamed.title).toBe("Renamed Session");
 
+        // Frozen-table proof: capture row count BEFORE the run — the run must
+        // write ZERO rows to conversation_messages (07-01 D-05).
+        const beforeCount = (await server.request("conversations.getMessages", { conversationId: created.conversationId })).messages.length;
+
         const sent = await server.request("chatSessions.sendMessage", {
             sessionId: created.id,
             content: "Hello from the standalone session",
             model: "copilot/mock-model",
         });
-        expect(sent.messageId).toBeGreaterThan(0);
+        // 07-01: chatSessions.sendMessage keeps { messageId, executionId };
+        // messageId is a sentinel 0 (no message row is persisted anymore).
+        expect(sent.messageId).toBe(0);
         expect(sent.executionId).toBeGreaterThan(0);
-
-        const canonical = await waitFor(
-            async () => (await server.request("conversations.getMessages", { conversationId: created.conversationId })).messages,
-            (messages) => messages.some((message) => message.type === "assistant"),
-        );
-        const sessionMessages = await server.request("chatSessions.getMessages", { sessionId: created.id });
-        expect(sessionMessages.messages.map((message) => message.id)).toEqual(canonical.map((message) => message.id));
-        expect(canonical.some((message) => message.role === "user" && message.content === "Hello from the standalone session")).toBe(true);
-        expect(canonical.some((message) => message.type === "assistant" && message.content.length > 0)).toBe(true);
-        expect(canonical.every((message) => message.conversationId === created.conversationId)).toBe(true);
 
         const idleSession = await waitFor(
             () => getSession(created.id),
             (session) => session.status === "idle",
         );
         expect(idleSession.status).toBe("idle");
+
+        // Frozen-table proof: zero new conversation_messages rows after the run
+        const canonical = await server.request("conversations.getMessages", { conversationId: created.conversationId });
+        expect(canonical.messages.length).toBe(beforeCount);
+        const sessionMessages = await server.request("chatSessions.getMessages", { sessionId: created.id });
+        expect(sessionMessages.messages.map((message) => message.id)).toEqual(canonical.messages.map((message) => message.id));
+        expect(canonical.messages.every((message) => message.conversationId === created.conversationId)).toBe(true);
 
         await server.request("chatSessions.markRead", { sessionId: created.id });
         const readSession = await waitFor(
@@ -364,20 +365,26 @@ describe("chatSessions", () => {
             title: "Slash Command Test Session",
         });
 
+        const beforeCount = (await server.request("conversations.getMessages", { conversationId: session.conversationId })).messages.length;
+
         const sent = await server.request("chatSessions.sendMessage", {
             sessionId: session.id,
             content: "[/opsx:propose|/opsx:propose] my feature",
             engineContent: "/opsx:propose my feature",
             model: "copilot/mock-model",
         });
+        expect(sent.messageId).toBe(0);
         expect(sent.executionId).toBeGreaterThan(0);
 
-        const result = await waitFor(
-            () => server.request("conversations.getMessages", { conversationId: session.conversationId }),
-            (res) => res.messages.some((m) => m.type === "assistant"),
+        // Session flips back to idle on completion (chatSession.updated push)
+        await waitFor(
+            () => getSession(session.id),
+            (s) => s.status === "idle",
         );
-        const assistant = result.messages.find((m) => m.type === "assistant");
-        expect(assistant?.content).toBe("Mock response: /opsx:propose my feature");
+
+        // Frozen-table proof: zero new conversation_messages rows
+        const result = await server.request("conversations.getMessages", { conversationId: session.conversationId });
+        expect(result.messages.length).toBe(beforeCount);
     });
 
     test("chatSessions.sendMessage with slash chip content (no engineContent) falls back to extractChips", async () => {
@@ -386,19 +393,24 @@ describe("chatSessions", () => {
             title: "Slash Fallback Test Session",
         });
 
+        const beforeCount = (await server.request("conversations.getMessages", { conversationId: session.conversationId })).messages.length;
+
         const sent = await server.request("chatSessions.sendMessage", {
             sessionId: session.id,
             content: "[/opsx:propose|/opsx:propose] my feature",
             model: "copilot/mock-model",
         });
+        expect(sent.messageId).toBe(0);
         expect(sent.executionId).toBeGreaterThan(0);
 
-        const result = await waitFor(
-            () => server.request("conversations.getMessages", { conversationId: session.conversationId }),
-            (res) => res.messages.some((m) => m.type === "assistant"),
+        await waitFor(
+            () => getSession(session.id),
+            (s) => s.status === "idle",
         );
-        const assistant = result.messages.find((m) => m.type === "assistant");
-        expect(assistant?.content).toBe("Mock response: /opsx:propose my feature");
+
+        // Frozen-table proof: zero new conversation_messages rows
+        const result = await server.request("conversations.getMessages", { conversationId: session.conversationId });
+        expect(result.messages.length).toBe(beforeCount);
     });
 });
 

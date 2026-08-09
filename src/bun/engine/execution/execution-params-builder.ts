@@ -1,4 +1,4 @@
-import type { ExecutionParams, RawModelMessage } from "../types.ts";
+import type { ExecutionParams } from "../types.ts";
 import type { TaskRow } from "../../db/row-types.ts";
 import type { Attachment } from "../../../shared/rpc-types.ts";
 import type { McpRegistryPool } from "../../mcp/registry-pool.ts";
@@ -22,7 +22,6 @@ export class ExecutionParamsBuilder {
     systemInstructions: string | undefined,
     workingDirectory: string,
     signal: AbortSignal,
-    onRawModelMessage: (raw: RawModelMessage) => void,
     attachments?: Attachment[],
   ) {
     return {
@@ -32,7 +31,6 @@ export class ExecutionParamsBuilder {
       systemInstructions,
       workingDirectory,
       signal,
-      onRawModelMessage,
       ...(attachments?.length ? { attachments } : {}),
     };
   }
@@ -45,7 +43,6 @@ export class ExecutionParamsBuilder {
     systemInstructions: string | undefined,
     workingDirectory: string,
     signal: AbortSignal,
-    onRawModelMessage: (raw: RawModelMessage) => void,
     attachments?: Attachment[],
     model?: string,
     projectPath?: string,
@@ -56,7 +53,7 @@ export class ExecutionParamsBuilder {
       ...(task.description?.trim() ? { description: task.description.trim() } : {}),
     };
 
-    const base = this._buildBase(conversationId, executionId, prompt, systemInstructions, workingDirectory, signal, onRawModelMessage, attachments);
+    const base = this._buildBase(conversationId, executionId, prompt, systemInstructions, workingDirectory, signal, attachments);
 
     const enabledMcpTools: string[] | null = (() => {
       if (!task.enabled_mcp_tools) return null;
@@ -75,7 +72,6 @@ export class ExecutionParamsBuilder {
       workingDirectory,
       model: model ?? task.conversation_model ?? "",
       signal,
-      onRawModelMessage,
       enabledMcpTools,
       mcpRegistry,
       ...(workspaceKey !== undefined ? { workspaceKey } : {}),
@@ -90,12 +86,11 @@ export class ExecutionParamsBuilder {
     model: string,
     workspaceKey: string,
     signal: AbortSignal,
-    onRawModelMessage: (raw: RawModelMessage) => void,
     enabledMcpTools: string[] | null,
     attachments?: Attachment[],
     taskContext?: ExecutionParams["taskContext"],
   ): ExecutionParams {
-    const base = this._buildBase(conversationId, executionId, prompt, undefined, workingDirectory, signal, onRawModelMessage, attachments);
+    const base = this._buildBase(conversationId, executionId, prompt, undefined, workingDirectory, signal, attachments);
 
     const mcpRegistry: McpClientRegistry | null = this.pool ? this.pool.getGlobalRegistry() : null;
 

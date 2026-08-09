@@ -45,7 +45,7 @@ describe("BroadcastChannel", () => {
     channel.clients.add(throwing.ws as never);
     channel.clients.add(healthy.ws as never);
 
-    const msg = { event: "stream.event" };
+    const msg = { event: "test.event" };
     channel.broadcast(msg);
 
     expect(healthy.calls).toEqual([JSON.stringify(msg)]);

@@ -2,216 +2,119 @@
  * delegate-rendering.spec.ts — UI tests for delegate tool call rendering.
  *
  * Suite S-D — delegate tool rendering:
- *   S-D1: delegate badge shows child count
- *   S-D2: expand → nested child tool call cards with correct tool names
- *   S-D3: digest assistant message renders job heading
- *   S-D4: children are hidden before expand
+ *   S-D1: delegate tool call renders the DelegateSummaryRenderer card
+ *   S-D2: card header shows the delegate intent label
+ *   S-D3: expanding the card reveals the markdown result
+ *   S-D4: exactly one delegate card renders (no duplicated nesting)
+ *   S-D5: every emitted tool call renders its own standalone card
+ *
+ * Migrated onto the agui fixture (Phase 6, plan 06-03): the delegate
+ * (subagent family) tool call renders through the DelegateSummaryRenderer
+ * via [data-testid="tool-card-tc-sub"] — the T-2 pattern (agui.script =
+ * "toolcall"): the card header shows the intent ("Write the auth module"),
+ * expanding via the header button reveals the result markdown.
+ *
+ * The legacy makeDelegateMessages seed, the .delegate-divider /
+ * .msg--assistant / .tc selectors, and test.describe.configure({ mode:
+ * "serial" }) are all deleted: per-test agui fixtures make parallel workers
+ * safe (Pitfall 4 — the page.route clobbering that forced serial mode is
+ * gone, since all chat traffic now routes through the auto-installed
+ * /api/copilotkit/** handler).
  */
 
 import { test, expect } from "./fixtures";
+import { openTaskDrawer, chatTextarea, submitChatMessage } from "./fixtures";
 import { makeTask } from "./fixtures/mock-data";
-import type { ConversationMessage } from "@shared/rpc-types";
 
-// Tests in this file share the same conversation state and use page.route()
-// which is global to the page. Running them in parallel causes route clobbering
-// where one test's install() unroutes another test's handler.
-test.describe.configure({ mode: "serial" });
+test.describe("S-D — delegate tool rendering", () => {
+    test("S-D1: delegate tool call renders the DelegateSummaryRenderer card", async ({ page, api, agui }) => {
+        const t = makeTask({ id: 201, conversationId: 201, title: "Delegate Task" });
+        api.handle("tasks.list", () => [t]);
+        agui.script = "toolcall";
 
-async function openTaskDrawer(page: import("@playwright/test").Page, taskId: number) {
-    await page.locator(`[data-task-id="${taskId}"]`).click();
-    await expect(page.locator(".task-detail")).toBeVisible();
-}
+        await page.goto("/");
+        await openTaskDrawer(page, t.id);
+        await expect(chatTextarea(page)).toBeEnabled({ timeout: 10_000 });
 
-// ─── Seed helpers ─────────────────────────────────────────────────────────────
+        await submitChatMessage(page, "delegate this");
 
-function makeDelegateMessages(taskId: number): ConversationMessage[] {
-    const delegateCallId = "tc-delegate-1";
-    const intent = "read auth and config in parallel";
+        // The subagent tool call renders the delegate card (T-2 pattern) —
+        // the legacy divider-with-count intent.
+        await expect(page.locator('[data-testid="tool-card-tc-sub"]')).toBeVisible({ timeout: 10_000 });
+    });
 
-    const delegateCall: ConversationMessage = {
-        id: 1,
-        taskId,
-        conversationId: taskId,
-        type: "tool_call",
-        role: "assistant",
-        content: JSON.stringify({
-            type: "function",
-            function: {
-                name: "delegate",
-                arguments: JSON.stringify({
-                    intent,
-                    tasks: [
-                        { id: "auth", prompt: "Read src/auth.ts" },
-                        { id: "config", prompt: "Read src/config.ts" },
-                    ],
-                }),
-            },
-            id: delegateCallId,
-            display: { label: "", subject: intent },
-        }),
-        metadata: null,
-        createdAt: new Date().toISOString(),
-    };
+    test("S-D2: delegate card header shows the intent label", async ({ page, api, agui }) => {
+        const t = makeTask({ id: 202, conversationId: 202, title: "Delegate Label Task" });
+        api.handle("tasks.list", () => [t]);
+        agui.script = "toolcall";
 
-    function makeChildToolCall(id: number, toolCallId: string, toolName: string, path: string): ConversationMessage[] {
-        const call: ConversationMessage = {
-            id,
-            taskId,
-            conversationId: taskId,
-            type: "tool_call",
-            role: "assistant",
-            content: JSON.stringify({
-                type: "function",
-                function: {
-                    name: toolName,
-                    arguments: JSON.stringify({ path }),
-                },
-                id: toolCallId,
-                display: { label: toolName, subject: path },
-            }),
-            metadata: { parent_tool_call_id: delegateCallId },
-            createdAt: new Date().toISOString(),
-        };
-        const result: ConversationMessage = {
-            id: id + 1,
-            taskId,
-            conversationId: taskId,
-            type: "tool_result",
-            role: "user",
-            content: JSON.stringify({ tool_use_id: toolCallId, content: `contents of ${path}` }),
-            metadata: null,
-            createdAt: new Date().toISOString(),
-        };
-        return [call, result];
-    }
+        await page.goto("/");
+        await openTaskDrawer(page, t.id);
+        await expect(chatTextarea(page)).toBeEnabled({ timeout: 10_000 });
 
-    const delegateResult: ConversationMessage = {
-        id: 6,
-        taskId,
-        conversationId: taskId,
-        type: "tool_result",
-        role: "user",
-        content: JSON.stringify({
-            tool_use_id: delegateCallId,
-            content: "## Delegate Results\n\n### Job: auth\nauth contents\n\n### Job: config\nconfig contents",
-        }),
-        metadata: null,
-        createdAt: new Date().toISOString(),
-    };
+        await submitChatMessage(page, "run the delegate");
 
-    const digestMessage: ConversationMessage = {
-        id: 7,
-        taskId,
-        conversationId: taskId,
-        type: "assistant",
-        role: "assistant",
-        content: "## Delegate Results\n\n### Job: auth\nauth contents\n\n### Job: config\nconfig contents",
-        metadata: null,
-        createdAt: new Date().toISOString(),
-    };
+        // The card header carries the delegate intent verbatim (the legacy
+        // plural-label intent — the header labels the delegation).
+        const subCard = page.locator('[data-testid="tool-card-tc-sub"]');
+        await expect(subCard).toBeVisible({ timeout: 10_000 });
+        await expect(subCard).toContainText("Write the auth module");
+    });
 
-    return [
-        delegateCall,
-        ...makeChildToolCall(2, "tc-child-auth", "read_file", "src/auth.ts"),
-        ...makeChildToolCall(4, "tc-child-config", "list_dir", "src/config.ts"),
-        delegateResult,
-        digestMessage,
-    ];
-}
+    test("S-D3: expanding the delegate card reveals the markdown result", async ({ page, api, agui }) => {
+        const t = makeTask({ id: 203, conversationId: 203, title: "Delegate Result Task" });
+        api.handle("tasks.list", () => [t]);
+        agui.script = "toolcall";
 
-// ─── Tests ────────────────────────────────────────────────────────────────────
+        await page.goto("/");
+        await openTaskDrawer(page, t.id);
+        await expect(chatTextarea(page)).toBeEnabled({ timeout: 10_000 });
 
-test("S-D1: delegate renders a divider showing the agent count", async ({ page, api, task }) => {
-    api.handle("conversations.getMessages", () => ({ messages: makeDelegateMessages(task.id), hasMore: false }));
+        await submitChatMessage(page, "summarize the delegate");
 
-    await page.goto("/");
-    await openTaskDrawer(page, task.id);
+        // Expanding the card reveals the delegate's result markdown (the
+        // legacy digest-message intent).
+        const subCard = page.locator('[data-testid="tool-card-tc-sub"]');
+        await expect(subCard).toBeVisible({ timeout: 10_000 });
+        await expect(subCard).toContainText("Write the auth module");
+        await subCard.locator("button").first().click();
+        await expect(subCard).toContainText("Auth module implemented with refresh rotation");
+    });
 
-    const divider = page.locator(".conversation-inner .delegate-divider");
-    await expect(divider).toBeVisible({ timeout: 3_000 });
-    await expect(divider).toContainText("2");
-    await expect(divider).toContainText("agent");
-});
+    test("S-D4: exactly one delegate card renders — no duplicated nesting", async ({ page, api, agui }) => {
+        const t = makeTask({ id: 204, conversationId: 204, title: "Delegate Single Task" });
+        api.handle("tasks.list", () => [t]);
+        agui.script = "toolcall";
 
-test("S-D2: delegate divider shows correct plural label for multiple agents", async ({ page, api, task }) => {
-    api.handle("conversations.getMessages", () => ({ messages: makeDelegateMessages(task.id), hasMore: false }));
+        await page.goto("/");
+        await openTaskDrawer(page, t.id);
+        await expect(chatTextarea(page)).toBeEnabled({ timeout: 10_000 });
 
-    await page.goto("/");
-    await openTaskDrawer(page, task.id);
+        await submitChatMessage(page, "delegate once");
 
-    const label = page.locator(".conversation-inner .delegate-divider__label");
-    await expect(label).toBeVisible({ timeout: 3_000 });
-    await expect(label).toContainText("agents");
-});
+        // The single delegation emits exactly one card — no nested or
+        // duplicated delegate rendering (the legacy no-nested-cards intent).
+        const subCards = page.locator('[data-testid="tool-card-tc-sub"]');
+        await expect(subCards).toHaveCount(1, { timeout: 10_000 });
+    });
 
-test("S-D3: digest assistant message renders job heading", async ({ page, api, task }) => {
-    api.handle("conversations.getMessages", () => ({ messages: makeDelegateMessages(task.id), hasMore: false }));
+    test("S-D5: every emitted tool call renders its own standalone card", async ({ page, api, agui }) => {
+        const t = makeTask({ id: 205, conversationId: 205, title: "Delegate All Task" });
+        api.handle("tasks.list", () => [t]);
+        agui.script = "toolcall";
 
-    await page.goto("/");
-    await openTaskDrawer(page, task.id);
+        await page.goto("/");
+        await openTaskDrawer(page, t.id);
+        await expect(chatTextarea(page)).toBeEnabled({ timeout: 10_000 });
 
-    const assistantBlock = page.locator(".conversation-inner .msg--assistant").last();
-    await expect(assistantBlock).toBeVisible({ timeout: 3_000 });
-    await expect(assistantBlock).toContainText("Job: auth");
-});
+        await submitChatMessage(page, "run all the tools");
 
-test("S-D4: delegate divider does not render any nested tool call cards", async ({ page, api, task }) => {
-    api.handle("conversations.getMessages", () => ({ messages: makeDelegateMessages(task.id), hasMore: false }));
-
-    await page.goto("/");
-    await openTaskDrawer(page, task.id);
-
-    await expect(page.locator(".conversation-inner .delegate-divider")).toBeVisible({ timeout: 3_000 });
-    // Child tool calls are not rendered as top-level .tc cards
-    await expect(page.locator(".conversation-inner > * > .tc")).toHaveCount(0);
-});
-
-// ─── Suite S-D5 — orphaned children (parent on older page) ────────────────────
-
-test("S-D5: orphaned delegate children render as standalone tool entries when parent is on an older page", async ({ page, api, task }) => {
-    const delegateCallId = "tc-delegate-orphan";
-
-    function makeOrphanChild(id: number, toolCallId: string, toolName: string): ConversationMessage[] {
-        const call: ConversationMessage = {
-            id,
-            taskId: task.id,
-            conversationId: task.id,
-            type: "tool_call",
-            role: "assistant",
-            content: JSON.stringify({
-                type: "function",
-                function: { name: toolName, arguments: JSON.stringify({ path: "src/foo.ts" }) },
-                id: toolCallId,
-                display: { label: toolName, subject: "src/foo.ts" },
-            }),
-            metadata: { parent_tool_call_id: delegateCallId },
-            createdAt: new Date().toISOString(),
-        };
-        const result: ConversationMessage = {
-            id: id + 1,
-            taskId: task.id,
-            conversationId: task.id,
-            type: "tool_result",
-            role: "user",
-            content: JSON.stringify({ tool_use_id: toolCallId, content: "ok" }),
-            metadata: null,
-            createdAt: new Date().toISOString(),
-        };
-        return [call, result];
-    }
-
-    // Return only children — parent (delegateCallId) is absent (as if on an older page)
-    const messages: ConversationMessage[] = [
-        ...makeOrphanChild(1, "tc-child-1", "read_file"),
-        ...makeOrphanChild(3, "tc-child-2", "list_dir"),
-        ...makeOrphanChild(5, "tc-child-3", "write_file"),
-    ];
-
-    api.handle("conversations.getMessages", () => ({ messages, hasMore: true }));
-
-    await page.goto("/");
-    await openTaskDrawer(page, task.id);
-
-    // All three orphaned children must render as standalone tool call cards
-    await expect(page.locator(".conversation-inner .tc")).toHaveCount(3, { timeout: 3_000 });
+        // The toolcall script emits bash / subagent / write_file — each tool
+        // call renders its own card keyed by toolCallId (the legacy
+        // orphaned-children intent: nothing gets grouped away; the new
+        // surface is flat per-toolCallId).
+        await expect(page.locator('[data-testid="tool-card-tc-bash"]')).toBeVisible({ timeout: 10_000 });
+        await expect(page.locator('[data-testid="tool-card-tc-sub"]')).toBeVisible();
+        await expect(page.locator('[data-testid="tool-card-tc-write"]')).toBeVisible();
+    });
 });

@@ -139,7 +139,6 @@ export async function executeLspRename(
   return {
     type: "result",
     text,
-    writtenFiles: applyResult.diffs,
     beforeFiles: applyResult.beforeContents,
   };
 }

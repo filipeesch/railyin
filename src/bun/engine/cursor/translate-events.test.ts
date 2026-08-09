@@ -119,7 +119,7 @@ describe("extractStructuredResult", () => {
     expect(r.detailedResult).toBe("out\nerr");
   });
 
-  it("edit: parses diffString into writtenFiles with hunks", () => {
+  it("edit: surfaces diffString as detailedResult (file-diff extraction trimmed)", () => {
     const r = extractStructuredResult({
       status: "success",
       value: {
@@ -128,15 +128,11 @@ describe("extractStructuredResult", () => {
         diffString: "--- a/src/foo.ts\n+++ b/src/foo.ts\n@@ -1,3 +1,4 @@\n-old\n+new\n+added\n",
       },
     });
-    expect(r.writtenFiles).toHaveLength(1);
-    expect(r.writtenFiles![0].path).toBe("src/foo.ts");
-    expect(r.writtenFiles![0].operation).toBe("edit_file");
-    expect(r.writtenFiles![0].hunks).toBeDefined();
-    expect(r.writtenFiles![0].added).toBe(2);
-    expect(r.writtenFiles![0].removed).toBe(1);
+    expect(r.detailedResult).toContain("@@");
+    expect(r.detailedResult).toContain("src/foo.ts");
   });
 
-  it("write: parses diffString into writtenFiles", () => {
+  it("write: surfaces diffString as detailedResult", () => {
     const r = extractStructuredResult({
       status: "success",
       value: {
@@ -145,7 +141,7 @@ describe("extractStructuredResult", () => {
         diffString: "--- /dev/null\n+++ b/src/new.ts\n@@ -0,0 +1,5 @@\n+line1\n+line2\n",
       },
     });
-    expect(r.writtenFiles![0].operation).toBe("edit_file");
+    expect(r.detailedResult).toContain("src/new.ts");
   });
 
   it("delete: handles empty result gracefully", () => {
@@ -227,7 +223,7 @@ describe("translateCursorMessage", () => {
     });
   });
 
-  it("tool_call completed edit → tool_result WITH writtenFiles", () => {
+  it("tool_call completed edit → tool_result WITH detailedResult (file-diff extraction trimmed)", () => {
     const events = translateCursorMessage({
       type: "tool_call",
       call_id: "tc-2",
@@ -244,9 +240,7 @@ describe("translateCursorMessage", () => {
       type: "tool_result",
       name: "edit",
       callId: "tc-2",
-      writtenFiles: expect.arrayContaining([
-        expect.objectContaining({ operation: "edit_file", path: "src/foo.ts" }),
-      ]),
+      detailedResult: expect.stringContaining("@@"),
     });
   });
 
@@ -299,23 +293,11 @@ describe("translateCursorMessage", () => {
     });
   });
 
-  it("status message reads the real SDK `status` field (regression: previously read non-existent message.message)", () => {
-    const events = translateCursorMessage({ type: "status", status: "RUNNING" } as CursorSDKMessage);
-    expect(events).toEqual([{ type: "status", message: "RUNNING" }]);
-  });
-
-  it("status message: FINISHED and ERROR values pass through unchanged", () => {
-    expect(translateCursorMessage({ type: "status", status: "FINISHED" } as CursorSDKMessage)).toEqual([
-      { type: "status", message: "FINISHED" },
-    ]);
-    expect(translateCursorMessage({ type: "status", status: "ERROR" } as CursorSDKMessage)).toEqual([
-      { type: "status", message: "ERROR" },
-    ]);
-  });
-
-  it("status message falls back to an empty string when `status` is absent, without throwing", () => {
-    const events = translateCursorMessage({ type: "status" } as CursorSDKMessage);
-    expect(events).toEqual([{ type: "status", message: "" }]);
+  it("status messages produce no events (status display trimmed)", () => {
+    expect(translateCursorMessage({ type: "status", status: "RUNNING" } as CursorSDKMessage)).toEqual([]);
+    expect(translateCursorMessage({ type: "status", status: "FINISHED" } as CursorSDKMessage)).toEqual([]);
+    expect(translateCursorMessage({ type: "status", status: "ERROR" } as CursorSDKMessage)).toEqual([]);
+    expect(translateCursorMessage({ type: "status" } as CursorSDKMessage)).toEqual([]);
   });
 });
 

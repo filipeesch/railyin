@@ -4,15 +4,19 @@
  * Maps @github/copilot-sdk streaming events to our unified EngineEvent format:
  *   assistant.message_delta  → { type: "token" }
  *   assistant.reasoning_delta → { type: "reasoning" }
- *   assistant.usage          → { type: "usage" }
  *   session.task_complete    → { type: "done" }
  *   session.idle             → { type: "done" }
  *   session.error            → { type: "error", fatal: true }
+ *
+ * Trimmed (07-02): assistant.usage (usage display), session.ask_user,
+ * session.compaction_* (compaction_summary), report_intent status, and the
+ * file-diff extraction on tool_result — the EngineEvent union members were
+ * removed; the bridge no longer consumes them.
  */
 
 import type { CopilotSdkEvent, CopilotSdkSession } from "./session.ts";
 import type { EngineEvent } from "../types.ts";
-import type { FileDiffPayload, ToolCallDisplay } from "../../../shared/rpc-types.ts";import { parseUnifiedDiff } from "../diff-utils.ts";
+import type { ToolCallDisplay } from "../../../shared/rpc-types.ts";
 import { COMMON_TOOL_NAMES, buildCommonToolDisplay } from "../common-tools.ts";
 import { canonicalToolDisplayLabel, humanizeToolName, stripWorktreePath } from "../tool-display.ts";
 
@@ -239,11 +243,6 @@ function translateEvent(
 
     case "tool.execution_start": {
       const data = event.data as { toolName: string; arguments?: Record<string, unknown>; toolCallId: string; parentToolCallId?: string };
-      // report_intent is the model declaring its current intent — surface as status
-      if (data.toolName === "report_intent") {
-        const intent = typeof data.arguments?.intent === "string" ? data.arguments.intent : null;
-        return intent ? { type: "status", message: intent } : null;
-      }
       const meta = toolMetaByCallId.get(data.toolCallId);
       return {
         type: "tool_start",
@@ -291,32 +290,8 @@ function translateEvent(
         isInternal: meta?.isInternal ?? false,
         detailedResult,
         contentBlocks: data.result?.contents,
-        writtenFiles: extractWrittenFilesFromCopilotTool(meta?.name, meta?.arguments, detailedResult),
       };
     }
-
-    case "assistant.usage": {
-      const data = event.data as { inputTokens?: number; outputTokens?: number };
-      return {
-        type: "usage",
-        inputTokens: data.inputTokens ?? 0,
-        outputTokens: data.outputTokens ?? 0,
-      };
-    }
-
-    case "session.ask_user": {
-      const data = event.data as { payload: string };
-      return {
-        type: "ask_user",
-        payload: data.payload,
-      };
-    }
-
-    case "session.compaction_start":
-      return { type: "compaction_start" };
-
-    case "session.compaction_complete":
-      return { type: "compaction_done" };
 
     case "session.task_complete":
       return { type: "done" };
@@ -406,68 +381,4 @@ function isInternalCopilotEvent(
   if (!toolName) return false;
   if (toolName === "report_intent") return true;
   return toolName.startsWith("internal_") || toolName.startsWith("copilot_");
-}
-
-function extractWrittenFilesFromCopilotTool(
-  toolName?: string,
-  rawArguments?: unknown,
-  detailedContent?: string,
-): FileDiffPayload[] | undefined {
-  if (!toolName) return undefined;
-  if (toolName === "create" || toolName === "edit") {
-    if (!rawArguments || typeof rawArguments !== "object") return undefined;
-    const args = rawArguments as Record<string, unknown>;
-    const path = typeof args.path === "string" ? args.path : null;
-    if (!path) return undefined;
-    const operation: FileDiffPayload["operation"] = toolName === "edit" ? "edit_file" : "write_file";
-    // Parse the unified diff from detailedContent to get real hunk data.
-    if (detailedContent && detailedContent.includes("@@")) {
-      return [parseUnifiedDiff(detailedContent, path, operation)];
-    }
-    return [{ operation, path, added: 0, removed: 0 }];
-  }
-
-  if (toolName === "apply_patch") {
-    const patchText = normalizeApplyPatchText(rawArguments);
-    if (!patchText) return undefined;
-    const files: FileDiffPayload[] = [];
-    for (const line of patchText.split("\n")) {
-      if (!line.startsWith("*** ")) continue;
-      const addMatch = line.match(/^\*\*\* Add File: (.+)$/);
-      if (addMatch) {
-        files.push({ operation: "write_file", path: addMatch[1].trim(), added: 0, removed: 0, is_new: true });
-        continue;
-      }
-      const delMatch = line.match(/^\*\*\* Delete File: (.+)$/);
-      if (delMatch) {
-        files.push({ operation: "delete_file", path: delMatch[1].trim(), added: 0, removed: 0 });
-        continue;
-      }
-      const updMatch = line.match(/^\*\*\* Update File: (.+)$/);
-      if (updMatch) {
-        const rawPath = updMatch[1].trim();
-        const renameParts = rawPath.split(" -> ").map((v) => v.trim()).filter(Boolean);
-        if (renameParts.length === 2 && renameParts[0] !== renameParts[1]) {
-          files.push({ operation: "rename_file", path: renameParts[0], to_path: renameParts[1], added: 0, removed: 0 });
-        } else {
-          files.push({ operation: "patch_file", path: rawPath, added: 0, removed: 0 });
-        }
-      }
-    }
-    return files.length > 0 ? files : undefined;
-  }
-
-  return undefined;
-}
-
-function normalizeApplyPatchText(rawArguments: unknown): string | null {
-  if (typeof rawArguments === "string") return rawArguments;
-  if (rawArguments && typeof rawArguments === "object") {
-    const args = rawArguments as Record<string, unknown>;
-    if (typeof args.patch === "string") return args.patch;
-    if (typeof args.input === "string") return args.input;
-    // Some transports wrap the patch payload in a nested `arguments` field.
-    if (typeof args.arguments === "string") return args.arguments;
-  }
-  return null;
 }

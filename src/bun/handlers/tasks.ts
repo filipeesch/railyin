@@ -1,15 +1,12 @@
 import type { Database } from "bun:sqlite";
-import type { Task, ConversationMessage } from "../../shared/rpc-types.ts";
+import type { Task } from "../../shared/rpc-types.ts";
 import type { TaskRow } from "../db/row-types.ts";
 import { mapTask } from "../db/mappers.ts";
 import { fetchTaskWithModel } from "../db/task-queries.ts";
 import {
   estimateContextWarning,
-  estimateContextUsage,
 } from "../conversation/context.ts";
-import { appendMessage } from "../conversation/messages.ts";
 import { readSessionMemory } from "../workflow/session-memory.ts";
-import { runWithConfig } from "../config/index.ts";
 import type { WorktreeManager } from "../git/WorktreeManager.ts";
 import { taskLspRegistry } from "../lsp/task-registry.ts";
 import type { OnTaskUpdated } from "../engine/types.ts";
@@ -127,15 +124,6 @@ export function taskHandlers(db: Database, wsRepo: IWorkspaceRepository, orchest
         console.warn("[railyn] failed to register git context for task", taskId, err);
       }
 
-      // Seed conversation with task description as first system message
-      appendMessage(db, 
-        taskId,
-        conversationId,
-        "system",
-        null,
-        `Task: ${params.title}\n\n${params.description}`,
-      );
-
       const row = fetchTaskWithModel(db, taskId);
       if (!row) throw new Error(`Task ${taskId} not found after creation`);
 
@@ -180,11 +168,6 @@ export function taskHandlers(db: Database, wsRepo: IWorkspaceRepository, orchest
         .get(params.taskId);
 
       if (runningCheck?.execution_state === "running") {
-        const fromStateRow = db
-          .query<{ workflow_state: string }, [number]>("SELECT workflow_state FROM tasks WHERE id = ?")
-          .get(params.taskId);
-        const fromState = fromStateRow?.workflow_state ?? params.toState;
-
         db.run(
           "UPDATE tasks SET workflow_state = ? WHERE id = ?",
           [params.toState, params.taskId],
@@ -195,14 +178,6 @@ export function taskHandlers(db: Database, wsRepo: IWorkspaceRepository, orchest
         const col = getColumnConfig(config, runningCheck.board_id, params.toState);
         if (col?.on_enter_prompt) {
           db.run("UPDATE tasks SET needs_column_prompt = 1 WHERE id = ?", [params.taskId]);
-        }
-
-        const convId = runningCheck.conversation_id;
-        if (convId != null) {
-          appendMessage(db, params.taskId, convId, "transition_event", null, "", {
-            from: fromState,
-            to: params.toState,
-          } as unknown as Record<string, unknown>);
         }
 
         const deferredRow = fetchTaskWithModel(db, params.taskId);
@@ -233,29 +208,13 @@ export function taskHandlers(db: Database, wsRepo: IWorkspaceRepository, orchest
           worktreeManager.registerContext(params.taskId, project.gitRootPath);
         }
 
-        const postStatus = (msg: string) => {
-          // Do NOT call onTaskUpdated here: the DB row still carries the old
-          // workflow_state while the worktree is being created (executeTransition
-          // hasn't run yet). Broadcasting the stale row causes the UI card to
-          // bounce back to the source column and then re-animate to the target.
-          // The authoritative state update is pushed at the end of the RPC via
-          // orchestrator.executeTransition → onTaskUpdated.
-          appendMessage(db, params.taskId, convId!, "system", null, msg);
-        };
-
         try {
-          await worktreeManager.triggerWorktreeIfNeeded(params.taskId, postStatus);
+          await worktreeManager.triggerWorktreeIfNeeded(params.taskId);
         } catch (err) {
           // Worktree is required — fail the task so the user sees the error in the UI
           const errMsg = err instanceof Error ? err.message : String(err);
           db.run("UPDATE tasks SET execution_state = 'failed' WHERE id = ?", [params.taskId]);
-          appendMessage(db, 
-            params.taskId,
-            convId!,
-            "system",
-            null,
-            `Worktree setup failed: ${errMsg}`,
-          );
+          console.error(`[railyn] worktree setup failed for task ${params.taskId}: ${errMsg}`);
           const failedRow = fetchTaskWithModel(db, params.taskId);
           if (!failedRow) throw new Error(`Task ${params.taskId} not found`);
           onTaskUpdated(failedRow);
@@ -271,7 +230,7 @@ export function taskHandlers(db: Database, wsRepo: IWorkspaceRepository, orchest
       content: string;
       engineContent?: string;
       attachments?: import("../../shared/rpc-types.ts").Attachment[];
-    }): Promise<{ message: ConversationMessage; executionId: number }> => {
+    }): Promise<{ executionId: number }> => {
       // Check if content is a code review trigger
       type ParsedCodeReview = { _type?: string; manualEdits?: import("../../shared/rpc-types.ts").ManualEdit[] };
       let parsed: ParsedCodeReview | null = null;
@@ -307,7 +266,7 @@ export function taskHandlers(db: Database, wsRepo: IWorkspaceRepository, orchest
       answers: import("../../shared/rpc-types.ts").DecisionAnswer[];
       generalNotes?: string;
       recordAsDecisions?: boolean;
-    }): Promise<{ message: ConversationMessage; executionId: number }> => {
+    }): Promise<{ executionId: number }> => {
       const { buildDecisionSubmission } = await import("../conversation/decision-submission.ts");
       const { userContent, engineContent } = buildDecisionSubmission(params.answers, params.generalNotes, params.recordAsDecisions);
 
@@ -323,8 +282,7 @@ export function taskHandlers(db: Database, wsRepo: IWorkspaceRepository, orchest
 
     "tasks.retry": async (params: {
       taskId: number;
-    }): Promise<{ task: Task; executionId: number }> => {
-
+    }): Promise<{ executionId: number }> => {
 
       // Retry worktree setup if it previously failed — same logic as tasks.transition
       const taskRow = db
@@ -349,7 +307,9 @@ export function taskHandlers(db: Database, wsRepo: IWorkspaceRepository, orchest
         }
 
         const postStatus = (msg: string) => {
-          appendMessage(db, params.taskId, retryConvId!, "system", null, msg);
+          // Worktree setup progress — no conversation_messages write (07-01
+          // D-05); only the task.updated push fires so the board reflects the
+          // state.
           const updated = fetchTaskWithModel(db, params.taskId);
           if (updated) onTaskUpdated(updated);
         };
@@ -359,12 +319,12 @@ export function taskHandlers(db: Database, wsRepo: IWorkspaceRepository, orchest
         } catch (err) {
           const errMsg = err instanceof Error ? err.message : String(err);
           db.run("UPDATE tasks SET execution_state = 'failed' WHERE id = ?", [params.taskId]);
-          appendMessage(db, params.taskId, retryConvId!, "system", null, `Worktree setup failed: ${errMsg}`);
+          console.error(`[railyn] worktree setup failed for task ${params.taskId}: ${errMsg}`);
           const failedRow = fetchTaskWithModel(db, params.taskId);
           if (!failedRow) throw new Error(`Task ${params.taskId} not found`);
           onTaskUpdated(failedRow);
           // Return a fake execution id of -1 since we can't proceed — caller won't use it
-          return { task: failedRow, executionId: -1 };
+          return { executionId: -1 };
         }
       }
 
@@ -387,30 +347,6 @@ export function taskHandlers(db: Database, wsRepo: IWorkspaceRepository, orchest
       const updated = fetchTaskWithModel(db, params.taskId);
       if (!updated) throw new Error(`Task ${params.taskId} not found after model update`);
       return updated;
-    },
-
-    // ─── tasks.contextUsage ──────────────────────────────────────────────────
-    "tasks.contextUsage": async (params: { taskId: number }): Promise<{ usedTokens: number; maxTokens: number; fraction: number }> => {
-
-      const task = db
-        .query<{ conversation_model: string | null }, [number]>(
-          "SELECT c.model AS conversation_model FROM tasks t LEFT JOIN conversations c ON c.id = t.conversation_id WHERE t.id = ?",
-        )
-        .get(params.taskId);
-      const taskModel = task?.conversation_model ?? null;
-      const workspaceKey = wsRepo.getTaskWorkspaceKey(params.taskId);
-      const workspaceConfig = getWorkspaceConfig(workspaceKey);
-      const maxTokens = await runWithConfig(workspaceConfig, async () => (
-        taskModel
-          ? resolveContextWindow(taskModel, workspaceKey, orchestrator, modelSettingsRepo)
-          : Promise.resolve(128_000)
-      ));
-      return estimateContextUsage(db, params.taskId, maxTokens);
-    },
-
-    // ─── tasks.compact ───────────────────────────────────────────────────────
-    "tasks.compact": async (params: { taskId: number }): Promise<void> => {
-      await requireOrchestrator(orchestrator).compactTask(params.taskId);
     },
 
     // ─── tasks.cancel ────────────────────────────────────────────────────────

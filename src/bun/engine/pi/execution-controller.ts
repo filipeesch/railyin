@@ -3,7 +3,6 @@
  *
  * Responsibilities:
  * - Subscribe to Pi SDK events and translate them to EngineEvents via translateEvent.
- * - Forward raw events to onRawModelMessage if provided.
  * - Observe turn_end events and delegate compaction decisions to PiCompactionCoordinator.
  * - Drive the run loop (start → wait → maybe continue) via RunDriver.
  * - Handle SDK overflow auto-compaction (willRetry) by awaiting the next agent_end.
@@ -29,7 +28,6 @@ export interface ExecutionControllerOptions {
   workingDirectory: string | undefined;
   signal?: AbortSignal;
   suspendRef: { onSuspend?: (event: EngineEvent) => void };
-  onRawModelMessage: ExecutionParams["onRawModelMessage"];
   runDriver: RunDriver;
   compactionCoordinator: PiCompactionCoordinator;
 }
@@ -63,7 +61,6 @@ export function startExecution(opts: ExecutionControllerOptions): {
     workingDirectory,
     signal,
     suspendRef,
-    onRawModelMessage,
     runDriver,
     compactionCoordinator,
   } = opts;
@@ -85,21 +82,10 @@ export function startExecution(opts: ExecutionControllerOptions): {
   signal?.addEventListener("abort", onAbort, { once: true });
 
   const unsubscribe = session.subscribe((event) => {
-    if (onRawModelMessage) {
-      onRawModelMessage({
-        engine: "pi",
-        sessionId: String(conversationId),
-        direction: "inbound",
-        eventType: event.type,
-        payload: event as unknown as Record<string, unknown>,
-      });
-    }
-
     if (event.type === "turn_end") {
       const usage = session.getContextUsage();
-      if (usage?.tokens != null) {
-        queue.push({ type: "usage", inputTokens: usage.tokens, outputTokens: 0, contextWindow: piModel.contextWindow });
-      }
+      // usage display trimmed (07-02) — the usage EngineEvent is no longer
+      // emitted; compaction coordination still runs on the SDK's own counts.
       compactionCoordinator.handleTurnEnd(session, conversationId, providerName, usage?.tokens ?? undefined, piModel.contextWindow);
     }
 

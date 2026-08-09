@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 import { execSync } from "child_process";
-import type { ConversationMessage, StreamEvent, Task } from "../../../shared/rpc-types.ts";
+import type { Task } from "../../../shared/rpc-types.ts";
 import { taskHandlers } from "../../handlers/tasks.ts";
 import { WorkspaceRepository } from "../../db/workspace-repository.ts";
 import { taskGitHandlers } from "../../handlers/task-git.ts";
@@ -14,9 +14,6 @@ import { engineHandlers } from "../../handlers/engine.ts";
 import { Orchestrator } from "../../engine/orchestrator.ts";
 import { EngineRegistry } from "../../engine/engine-registry.ts";
 import type { ExecutionEngine } from "../../engine/types.ts";
-import { StreamEventEnricher } from "../../pipeline/stream-event-enricher.ts";
-import { WriteBuffer } from "../../pipeline/write-buffer.ts";
-import { appendStreamEventBatch, type PersistedStreamEvent } from "../../db/stream-events.ts";
 import { initDb, seedProjectAndTask, setupTestConfig } from "../helpers.ts";
 import { CallbackRecorder } from "./callback-recorder.ts";
 import { WorktreeManager } from "../../git/WorktreeManager.ts";
@@ -41,7 +38,6 @@ type AllHandlersMap = ReturnType<typeof taskHandlers> &
 
 interface EngineFactoryCallbacks {
     onTaskUpdated: (task: Task) => void;
-    onNewMessage: (message: ConversationMessage) => void;
 }
 
 export interface BackendRpcRuntime {
@@ -58,12 +54,6 @@ export interface BackendRpcRuntime {
     getExecutionStatus: (executionId: number) => string | null;
     waitForExecutionStatus: (executionId: number, status: string, timeoutMs?: number) => Promise<void>;
     waitForTaskState: (taskId: number, state: string, timeoutMs?: number) => Promise<void>;
-    /** All StreamEvents delivered to IPC immediately (all types). */
-    getIpcEvents: (executionId: number) => StreamEvent[];
-    /** StreamEvents written to DB (persisted types only, after WriteBuffer flush). */
-    getDbStreamEvents: (executionId: number) => PersistedStreamEvent[];
-    /** Wait until a persisted event of `type` appears in DB for this execution. */
-    waitForDbStreamEvent: (executionId: number, type: string, timeoutMs?: number) => Promise<PersistedStreamEvent>;
     /** Poll until predicate returns true (useful for asserting async side-effects after cancellation). */
     waitFor: (predicate: () => boolean, description?: string, timeoutMs?: number) => Promise<void>;
 }
@@ -94,22 +84,11 @@ export function createBackendRpcRuntime(options: {
 
     const recorder = new CallbackRecorder();
 
-    // ── Two-channel IPC simulation ──────────────────────────────────────────
-    // ipcEvents: every event delivered immediately (mirrors what frontend receives in real-time)
-    // DB:        persisted events written by stream event buffer
-    const ipcEvents: StreamEvent[] = [];
-    const enrichers = new Map<number, StreamEventEnricher>();
-    const PERSISTED_TYPES = new Set(["user", "assistant", "reasoning", "tool_call", "tool_result", "file_diff", "system"]);
-    const streamEventBuffer = new WriteBuffer<PersistedStreamEvent>({
-        maxBatch: 100,
-        intervalMs: 500,
-        flushFn: (events) => appendStreamEventBatch(db, events),
-    });
-    streamEventBuffer.start();
+    // The old event IPC/DB dual-channel simulation was removed in 07-01 —
+    // the /ws push and stream_events writes died with the protocol.
 
     const engine = options.createEngine({
         onTaskUpdated: recorder.recordTaskUpdate,
-        onNewMessage: recorder.recordNewMessage,
     });
 
     const coordinator = new Orchestrator(
@@ -120,42 +99,12 @@ export function createBackendRpcRuntime(options: {
         ),
         recorder.recordError,
         recorder.recordTaskUpdate,
-        recorder.recordNewMessage,
         new WorkspaceRepository(db),
         undefined,
         undefined,
         undefined,
         options.registryPool,
     );
-
-    coordinator.setOnStreamEvent((event: StreamEvent) => {
-        recorder.recordStreamEvent(event);
-        let enricher = enrichers.get(event.executionId);
-        if (!enricher) {
-            enricher = new StreamEventEnricher(event.executionId);
-            enrichers.set(event.executionId, enricher);
-        }
-        const { seq, blockId } = enricher.enrich(event.type, event.blockId || undefined);
-        const enrichedEvent = { ...event, seq, blockId };
-        ipcEvents.push(enrichedEvent);
-        if (PERSISTED_TYPES.has(event.type)) {
-            streamEventBuffer.enqueue({
-                conversationId: enrichedEvent.conversationId,
-                executionId: enrichedEvent.executionId,
-                seq: enrichedEvent.seq,
-                blockId: enrichedEvent.blockId,
-                type: enrichedEvent.type,
-                content: enrichedEvent.content,
-                metadata: typeof enrichedEvent.metadata === "string" ? enrichedEvent.metadata : (enrichedEvent.metadata ? JSON.stringify(enrichedEvent.metadata) : null),
-                parentBlockId: enrichedEvent.parentBlockId ?? null,
-                subagentId: enrichedEvent.subagentId ?? null,
-            });
-        }
-        if (event.done) {
-            streamEventBuffer.flush();
-            enrichers.delete(event.executionId);
-        }
-    });
 
     const wsRepo = new WorkspaceRepository(db);
     const worktreeManager = new WorktreeManager(
@@ -181,8 +130,6 @@ export function createBackendRpcRuntime(options: {
         recorder,
         gitDir,
         cleanup: () => {
-            streamEventBuffer.stop();
-            enrichers.clear();
             rmSync(gitDir, { recursive: true, force: true });
             cfg.cleanup();
         },
@@ -229,59 +176,6 @@ export function createBackendRpcRuntime(options: {
                 `task ${taskId} state ${state}`,
                 timeoutMs,
             );
-        },
-        getIpcEvents: (executionId: number) =>
-            ipcEvents.filter((e) => e.executionId === executionId),
-        getDbStreamEvents: (executionId: number) =>
-            db.query<{
-                id: number; task_id: number | null; conversation_id: number; execution_id: number; seq: number;
-                block_id: string; type: string; content: string;
-                metadata: string | null; parent_block_id: string | null; subagent_id: string | null; created_at: string;
-            }, [number]>(
-                "SELECT * FROM stream_events WHERE execution_id = ? ORDER BY seq ASC",
-            ).all(executionId).map((r) => ({
-                id: r.id,
-                taskId: r.task_id,
-                conversationId: r.conversation_id,
-                executionId: r.execution_id,
-                seq: r.seq,
-                blockId: r.block_id,
-                type: r.type,
-                content: r.content,
-                metadata: r.metadata,
-                parentBlockId: r.parent_block_id,
-                subagentId: r.subagent_id,
-                createdAt: r.created_at,
-            })),
-        waitForDbStreamEvent: async (executionId: number, type: string, timeoutMs = 5_000) => {
-            await waitUntil(
-                () => db.query<{ type: string }, [number, string]>(
-                    "SELECT type FROM stream_events WHERE execution_id = ? AND type = ? LIMIT 1",
-                ).get(executionId, type) !== null,
-                `DB stream_event type="${type}" for execution ${executionId}`,
-                timeoutMs,
-            );
-            const row = db.query<{
-                id: number; task_id: number; execution_id: number; seq: number;
-                block_id: string; type: string; content: string;
-                metadata: string | null; subagent_id: string | null; created_at: string;
-                conversation_id: number; parent_block_id: string | null;
-            }, [number, string]>(
-                "SELECT * FROM stream_events WHERE execution_id = ? AND type = ? ORDER BY seq ASC LIMIT 1",
-            ).get(executionId, type)!;
-            return {
-                id: row.id,
-                conversationId: row.conversation_id,
-                executionId: row.execution_id,
-                seq: row.seq,
-                blockId: row.block_id,
-                type: row.type,
-                content: row.content,
-                metadata: row.metadata,
-                parentBlockId: row.parent_block_id,
-                subagentId: row.subagent_id,
-                createdAt: row.created_at,
-            };
         },
         waitFor: async (predicate: () => boolean, description = "condition", timeoutMs = 5_000) => {
             await waitUntil(predicate, description, timeoutMs);

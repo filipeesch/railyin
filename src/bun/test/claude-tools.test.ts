@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildClaudeToolServer, extractWrittenFilesFromResult } from "../engine/claude/tools.ts";
+import { buildClaudeToolServer } from "../engine/claude/tools.ts";
 import { DECISION_REQUEST_TOOL_DEFINITION } from "../engine/decision-request-tool-definition.ts";
 import { executeCommonTool } from "../engine/common-tools.ts";
 
@@ -191,48 +191,5 @@ describe("executeCommonTool — decision_request input validation", () => {
     const questions = [{ question: "Any constraints?", type: "freetext" }];
     const result = await executeCommonTool("decision_request", { questions }, ctx);
     expect(result.type).toBe("suspend");
-  });
-});
-
-describe("Claude tools writtenFiles extraction", () => {
-  it("returns undefined for invalid JSON", () => {
-    expect(extractWrittenFilesFromResult("not-json")).toBeUndefined();
-  });
-
-  it("returns undefined when writtenFiles is missing or not an array", () => {
-    expect(extractWrittenFilesFromResult(JSON.stringify({ ok: true }))).toBeUndefined();
-    expect(extractWrittenFilesFromResult(JSON.stringify({ writtenFiles: {} }))).toBeUndefined();
-  });
-
-  it("filters invalid entries and keeps only object entries with string path", () => {
-    const payload = {
-      writtenFiles: [
-        null,
-        1,
-        {},
-        { path: 42, operation: "patch_file", added: 0, removed: 0 },
-        { path: "src/valid.ts", operation: "patch_file", added: 1, removed: 1 },
-      ],
-    };
-
-    expect(extractWrittenFilesFromResult(JSON.stringify(payload))).toEqual([
-      { path: "src/valid.ts", operation: "patch_file", added: 1, removed: 1 },
-    ]);
-  });
-
-  it("preserves richer valid entries like rename metadata", () => {
-    const payload = {
-      writtenFiles: [
-        {
-          operation: "rename_file",
-          path: "src/old.ts",
-          to_path: "src/new.ts",
-          added: 0,
-          removed: 0,
-        },
-      ],
-    };
-
-    expect(extractWrittenFilesFromResult(JSON.stringify(payload))).toEqual(payload.writtenFiles);
   });
 });

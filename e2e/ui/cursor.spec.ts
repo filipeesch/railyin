@@ -1,337 +1,165 @@
 /**
  * cursor.spec.ts — UI tests for tasks running under the Cursor SDK engine.
  *
- * The chat surface is engine-agnostic: streaming, tool rendering, and
- * decision_request prompts come through engine-neutral RPC + WS events.
- * These tests prove the cursor model picks up, the streaming/tool/decision_request
- * paths render under a `cursor/...` model, and the model swap surface works.
+ * The chat surface is engine-agnostic (D-01): streaming, tool rendering, and
+ * decision requests come through engine-neutral AG-UI events, so these tests
+ * prove the render paths work under model-agnostic agui scripts — no cursor
+ * model id is needed anywhere on the wire.
  *
- * Suites:
- *   CU-1: model picker exposes the cursor engine and switches the task model
- *   CU-2: token streaming under cursor/* renders the assistant message
- *   CU-3: tool_call + tool_result render in the chat surface
- *   CU-4: decision_request_prompt renders the interview UI under cursor
+ * Migrated onto the agui fixture (Phase 6, plan 06-06):
+ *   CU-2.1  token streaming → S-1 (quick script + /run stream)
+ *   CU-3.1  tool_call + tool_result render → toolcall script (T-2 surface)
+ *   CU-4.1  decision_request → C-4 interrupt pattern (decision-card)
+ *   CU-3.1 (shell) → toolcall script tool-card-tc-bash (collapsible output)
+ *   CU-3.2 (read)  → toolcall script tool-card-tc-write (FileChangesRenderer)
  *
- * All backend traffic is mocked via ApiMock + WsMock.
+ * Retired in-file (CU-1.1/1.2 — model picker removed with the legacy input;
+ * .input-model-select only existed in the dead ConversationInput.vue:175):
+ * see the retire block at the bottom.
  */
 
 import { test, expect } from "./fixtures";
-import { openTaskDrawer, sendMessage } from "./fixtures";
-import { makeUserMessage, makeAssistantMessage } from "./fixtures/mock-data";
-import type { Task, StreamEvent, ConversationMessage } from "@shared/rpc-types";
+import { openTaskDrawer, chatTextarea, submitChatMessage } from "./fixtures";
+import { makeTask } from "./fixtures/mock-data";
 
-const CURSOR_MODELS = [
-    { id: "fake/test",                  displayName: "Fake/Test",        contextWindow: 8192,    engineId: "fake" },
-    { id: "cursor/claude-sonnet-4-6",   displayName: "Claude Sonnet 4.6", contextWindow: 200_000, engineId: "cursor" },
-    { id: "cursor/gpt-5",               displayName: "GPT-5",            contextWindow: 200_000, engineId: "cursor" },
-];
+// ─── CU-2: Token streaming ───────────────────────────────────────────────────
 
-const EXEC_ID = 9101;
-
-function textChunk(taskId: number, seq: number, content: string, done = false, executionId = EXEC_ID): StreamEvent {
-    return {
-        taskId,
-        conversationId: taskId,
-        executionId,
-        seq,
-        blockId: `${executionId}-text`,
-        type: "text_chunk",
-        content,
-        metadata: null,
-        parentBlockId: null,
-        subagentId: null,
-        done,
-    };
-}
-
-function makeToolCallMessage(
-    taskId: number,
-    id: number,
-    callId: string,
-    toolName: string,
-    args: Record<string, unknown>,
-    resultContent: string,
-): ConversationMessage[] {
-    return [
-        {
-            id,
-            taskId,
-            conversationId: taskId,
-            type: "tool_call",
-            role: "assistant",
-            content: JSON.stringify({
-                type: "function",
-                function: { name: toolName, arguments: JSON.stringify(args) },
-                id: callId,
-                display: { label: toolName, subject: args.path != null ? String(args.path) : undefined },
-            }),
-            metadata: null,
-            createdAt: new Date().toISOString(),
-        },
-        {
-            id: id + 1,
-            taskId,
-            conversationId: taskId,
-            type: "tool_result",
-            role: "user",
-            content: JSON.stringify({ tool_use_id: callId, content: resultContent }),
-            metadata: null,
-            createdAt: new Date().toISOString(),
-        },
-    ];
-}
-
-function makeDecisionRequestPrompt(taskId: number, id = 7700): ConversationMessage {
-    return {
-        id,
-        taskId,
-        conversationId: taskId,
-        type: "decision_request_prompt",
-        role: "assistant",
-        content: JSON.stringify({
-            questions: [{
-                question: "Pick a runtime for the cursor session",
-                type: "exclusive",
-                weight: "critical",
-                options: [
-                    { title: "Bun", description: "Default Railyin runtime" },
-                    { title: "Node", description: "Used by the cursor worker subprocess" },
-                ],
-            }],
-        }),
-        metadata: null,
-        createdAt: new Date().toISOString(),
-    };
-}
-
-// ─── CU-1: Cursor engine model picker ─────────────────────────────────────────
-
-test.describe("CU-1 — cursor model picker", () => {
-    test("CU-1.1: model picker exposes cursor/* models", async ({ page, api, task }) => {
-        api.returns("models.listEnabled", CURSOR_MODELS);
+test.describe("CU-2 — token streaming", () => {
+    test("CU-2.1: text_chunk events render in the chat surface", async ({ page, api }) => {
+        const t = makeTask({ id: 4101, conversationId: 4101, title: "Cursor Streaming Task" });
+        api.handle("tasks.list", () => [t]);
 
         await page.goto("/");
-        await openTaskDrawer(page, task.id);
+        await openTaskDrawer(page, t.id);
+        await expect(chatTextarea(page)).toBeEnabled({ timeout: 10_000 });
 
-        // Open the model picker dropdown inside the task drawer
-        await page.locator(".task-detail .input-model-select").first().click();
-        await expect(page.locator(".p-select-overlay")).toBeVisible({ timeout: 2_000 });
+        await submitChatMessage(page, "Hello cursor");
 
-        // Both cursor models should appear in the picker
-        await expect(page.locator(".p-select-overlay .p-select-option", { hasText: "Claude Sonnet 4.6" })).toBeVisible();
-        await expect(page.locator(".p-select-overlay .p-select-option", { hasText: "GPT-5" })).toBeVisible();
-
-        // Multi-engine listing should show an engine group header for "cursor"
-        const groupTexts = await page.locator(".p-select-overlay .model-select__group-header").allInnerTexts();
-        expect(groupTexts).toContain("cursor");
-    });
-
-    test("CU-1.2: selecting a cursor model updates the task's model", async ({ page, api, ws, task }) => {
-        api.returns("models.listEnabled", CURSOR_MODELS);
-
-        const updated: Task = { ...task, model: "cursor/claude-sonnet-4-6" };
-        api.handle("tasks.setModel", () => updated);
-
-        await page.goto("/");
-        await openTaskDrawer(page, task.id);
-
-        await page.locator(".task-detail .input-model-select").first().click();
-        await expect(page.locator(".p-select-overlay")).toBeVisible({ timeout: 2_000 });
-        await page.locator(".p-select-overlay .p-select-option", { hasText: "Claude Sonnet 4.6" }).click();
-
-        // Backend confirms the swap via task.updated
-        ws.push({ type: "task.updated", payload: updated });
-
-        await expect(page.locator(".task-detail__model-row")).toContainText("Claude Sonnet 4.6", { timeout: 3_000 });
+        // The assistant text streams via /run (S-1 pattern) — the streaming
+        // render path is engine-agnostic (model-agnostic per the migration map).
+        const chat = page.locator('[data-testid="copilot-chat-view"]');
+        await expect(chat).toContainText("Hello cursor", { timeout: 10_000 });
+        await expect(chat).toContainText("hello", { timeout: 10_000 });
     });
 });
 
-// ─── CU-2: Token streaming under cursor ───────────────────────────────────────
+// ─── CU-3: Tool rendering ─────────────────────────────────────────────────────
 
-test.describe("CU-2 — cursor token streaming", () => {
-    test("CU-2.1: text_chunk events from a cursor-model task render in the chat surface", async ({ page, api, ws, task }) => {
-        const cursorTask: Task = { ...task, model: "cursor/claude-sonnet-4-6" };
-        api.returns("models.listEnabled", CURSOR_MODELS);
-        api.handle("tasks.list", () => [cursorTask]);
-
-        const assistantMsg = makeAssistantMessage(cursorTask.id, "Hello from cursor");
-        api.handle("tasks.sendMessage", async () => {
-            // Backend would route through CursorEngine; emit stream events here
-            // as the cursor SDK worker would push them.
-            setTimeout(() => {
-                ws.pushStreamEvent(textChunk(cursorTask.id, 0, "Hello"));
-                ws.pushStreamEvent(textChunk(cursorTask.id, 1, " from"));
-                ws.pushStreamEvent(textChunk(cursorTask.id, 2, " cursor"));
-                ws.pushDone(cursorTask.id, EXEC_ID);
-            }, 50);
-            return { message: makeUserMessage(cursorTask.id, "Hello cursor"), executionId: EXEC_ID };
-        });
-        api.handle("conversations.getMessages", () => ({ messages: [assistantMsg], hasMore: false }));
+test.describe("CU-3 — tool rendering", () => {
+    test("CU-3.1: tool_call + tool_result messages render in the chat surface", async ({ page, api, agui }) => {
+        const t = makeTask({ id: 4102, conversationId: 4102, title: "Cursor Tool Task" });
+        api.handle("tasks.list", () => [t]);
+        agui.script = "toolcall";
 
         await page.goto("/");
-        await openTaskDrawer(page, cursorTask.id);
-        await sendMessage(page, "Hello cursor");
+        await openTaskDrawer(page, t.id);
+        await expect(chatTextarea(page)).toBeEnabled({ timeout: 10_000 });
 
-        await expect(page.locator(".msg__bubble.streaming")).not.toBeVisible({ timeout: 10_000 });
-        await expect(page.locator(".msg--assistant").last()).toContainText("Hello from cursor");
+        await submitChatMessage(page, "run it");
+
+        // The shell tool card renders name + args (T-2 surface — the legacy
+        // .tc group analog, model-agnostic).
+        const bashCard = page.locator('[data-testid="tool-card-tc-bash"]');
+        await expect(bashCard).toBeVisible({ timeout: 10_000 });
+        await expect(bashCard).toContainText("ls -la");
+
+        // The trailing assistant text also renders.
+        const chat = page.locator('[data-testid="copilot-chat-view"]');
+        await expect(chat).toContainText("Handling that now.", { timeout: 10_000 });
     });
 });
 
-// ─── CU-3: Tool rendering under cursor ────────────────────────────────────────
+// ─── CU-4: Decision request ──────────────────────────────────────────────────
 
-test.describe("CU-3 — cursor tool rendering", () => {
-    test("CU-3.1: tool_call + tool_result messages render under a cursor-model task", async ({ page, api, task }) => {
-        const cursorTask: Task = { ...task, model: "cursor/claude-sonnet-4-6" };
-        api.returns("models.listEnabled", CURSOR_MODELS);
-        api.handle("tasks.list", () => [cursorTask]);
-
-        const messages = makeToolCallMessage(
-            cursorTask.id,
-            200,
-            "tc-railyin-shell-1",
-            "railyin_shell",
-            { command: "ls -la" },
-            "exit_code: 0\n--- stdout ---\ntotal 0\n",
-        );
-
-        // Append a trailing assistant message so the timeline has a final response.
-        const assistant = makeAssistantMessage(cursorTask.id, "Listing complete.", { id: 220 });
-        api.handle("conversations.getMessages", () => ({
-            messages: [...messages, assistant],
-            hasMore: false,
-        }));
+test.describe("CU-4 — decision request", () => {
+    test("CU-4.1: decision_request renders the decision card", async ({ page, api, agui }) => {
+        const t = makeTask({ id: 4103, conversationId: 4103, title: "Cursor Decision Task" });
+        api.handle("tasks.list", () => [t]);
+        agui.script = "interrupt";
 
         await page.goto("/");
-        await openTaskDrawer(page, cursorTask.id);
+        await openTaskDrawer(page, t.id);
+        await expect(chatTextarea(page)).toBeEnabled({ timeout: 10_000 });
 
-        // The tool call group should render with the cursor bypass tool name visible.
-        await expect(page.locator(".conversation-inner .tc").first()).toBeVisible({ timeout: 5_000 });
-        await expect(page.locator(".tc__tool-name").first()).toContainText("railyin_shell");
+        await submitChatMessage(page, "decide this");
 
-        // The trailing assistant message should also render.
-        await expect(page.locator(".msg--assistant").last()).toContainText("Listing complete.");
+        // The #interrupt slot renders DecisionInterrupt with the payload's
+        // two questions (C-4 pattern — replaces the legacy .interview UI).
+        const decisionCard = page.locator('[data-testid="decision-card"]');
+        await expect(decisionCard).toBeVisible({ timeout: 10_000 });
+        await expect(decisionCard).toContainText("Should I apply the changes to src/auth.ts?");
+
+        // Submit stays disabled until all questions are answered.
+        const submit = page.locator('[data-testid="decision-submit"]');
+        await expect(submit).toBeDisabled();
+        await decisionCard.locator(".di__option", { hasText: "Yes, apply them" }).click();
+        await decisionCard.locator(".di__option", { hasText: "Fail loudly" }).click();
+        await expect(submit).toBeEnabled();
+
+        // Resume completes through the quick script; the resume POST /run
+        // carries non-empty answers.
+        agui.script = "quick";
+        await submit.click();
+        await expect
+            .poll(() => (agui.lastRunInput as { resume?: unknown[] } | null)?.resume?.length ?? 0, { timeout: 10_000 })
+            .toBeGreaterThan(0);
+        const resume = (agui.lastRunInput as { resume: Array<{ interruptId: string; payload: { answers?: unknown[] } }> }).resume;
+        expect(resume[0].interruptId).toBe("decision-interrupt-1");
+        expect(resume[0].payload.answers?.length).toBeGreaterThan(0);
     });
 });
 
-// ─── CU-4: decision_request prompt under cursor ───────────────────────────────
+// ─── CU-3.1: Shell tool display ──────────────────────────────────────────────
 
-test.describe("CU-4 — decision_request prompt under cursor", () => {
-    test("CU-4.1: decision_request_prompt renders the interview UI for a cursor-model task", async ({ page, api, task }) => {
-        const cursorTask: Task = { ...task, model: "cursor/claude-sonnet-4-6", executionState: "waiting_user" };
-        api.returns("models.listEnabled", CURSOR_MODELS);
-        api.handle("tasks.list", () => [cursorTask]);
-
-        const promptMsg = makeDecisionRequestPrompt(cursorTask.id);
-        api.handle("conversations.getMessages", () => ({ messages: [promptMsg], hasMore: false }));
+test.describe("CU-3.1 — shell tool display", () => {
+    test("CU-3.1: shell tool shows command in collapsible header", async ({ page, api, agui }) => {
+        const t = makeTask({ id: 4104, conversationId: 4104, title: "Cursor Shell Task" });
+        api.handle("tasks.list", () => [t]);
+        agui.script = "toolcall";
 
         await page.goto("/");
-        await openTaskDrawer(page, cursorTask.id);
+        await openTaskDrawer(page, t.id);
+        await expect(chatTextarea(page)).toBeEnabled({ timeout: 10_000 });
 
-        // The decision_request UI surfaces the question + options.
-        await expect(page.locator(".interview")).toBeVisible({ timeout: 5_000 });
-        await expect(page.locator(".interview")).toContainText("Pick a runtime for the cursor session");
-        await expect(page.locator(".interview__option").filter({ hasText: "Bun" })).toBeVisible();
-        await expect(page.locator(".interview__option").filter({ hasText: "Node" })).toBeVisible();
+        await submitChatMessage(page, "run it");
 
-        // Submit stays disabled until the user picks an option.
-        await expect(page.locator(".interview__submit")).toBeDisabled();
-        await page.locator(".interview__option").filter({ hasText: "Node" }).click();
-        await expect(page.locator(".interview__submit")).toBeEnabled();
+        // The shell tool card shows the command (canonical label "bash") in
+        // the header; the output appears after expanding the card.
+        const bashCard = page.locator('[data-testid="tool-card-tc-bash"]');
+        await expect(bashCard).toBeVisible({ timeout: 10_000 });
+        await expect(bashCard).toContainText("ls -la");
+        await bashCard.locator("button").first().click();
+        await expect(bashCard).toContainText("total 8");
     });
 });
 
-// ─── CU-3.1: Cursor shell tool shows command in collapsible ────────────────
+// ─── CU-3.2: Read tool display ───────────────────────────────────────────────
 
-test.describe("CU-3.1 — cursor shell tool display", () => {
-    test("CU-3.1: shell tool shows command in collapsible header", async ({ page, api, task }) => {
-        const cursorTask: Task = { ...task, model: "cursor/claude-sonnet-4-6" };
-        api.returns("models.listEnabled", CURSOR_MODELS);
-        api.handle("tasks.list", () => [cursorTask]);
-
-        const messages: ConversationMessage[] = [
-            {
-                id: 300,
-                taskId: cursorTask.id,
-                conversationId: cursorTask.id,
-                type: "tool_call",
-                role: "assistant",
-                content: JSON.stringify({
-                    type: "function",
-                    function: { name: "shell", arguments: JSON.stringify({ command: "ls -la" }) },
-                    id: "tc-shell-1",
-                    display: { label: "bash", subject: "ls -la", contentType: "terminal" },
-                }),
-                metadata: null,
-                createdAt: new Date().toISOString(),
-            },
-            {
-                id: 301,
-                taskId: cursorTask.id,
-                conversationId: cursorTask.id,
-                type: "tool_result",
-                role: "user",
-                content: JSON.stringify({ tool_use_id: "tc-shell-1", content: "file1\nfile2\n" }),
-                metadata: null,
-                createdAt: new Date().toISOString(),
-            },
-        ];
-
-        api.handle("conversations.getMessages", () => ({ messages, hasMore: false }));
+test.describe("CU-3.2 — read tool display", () => {
+    test("CU-3.2: read tool shows file path in collapsible", async ({ page, api, agui }) => {
+        const t = makeTask({ id: 4105, conversationId: 4105, title: "Cursor Read Task" });
+        api.handle("tasks.list", () => [t]);
+        agui.script = "toolcall";
 
         await page.goto("/");
-        await openTaskDrawer(page, cursorTask.id);
+        await openTaskDrawer(page, t.id);
+        await expect(chatTextarea(page)).toBeEnabled({ timeout: 10_000 });
 
-        // The tool call group should render with the canonical label "bash"
-        await expect(page.locator(".conversation-inner .tc").first()).toBeVisible({ timeout: 5_000 });
-        await expect(page.locator(".tc__tool-name").first()).toContainText("bash");
-        // The command should be in the primary arg
-        await expect(page.locator(".tc__primary-arg").first()).toContainText("ls -la");
+        await submitChatMessage(page, "run it");
+
+        // The file-family card (FileChangesRenderer — the read family's
+        // renderer, RailyinChat.vue) shows the path.
+        const writeCard = page.locator('[data-testid="tool-card-tc-write"]');
+        await expect(writeCard).toBeVisible({ timeout: 10_000 });
+        await expect(writeCard).toContainText("src/auth.ts");
     });
 });
 
-// ─── CU-3.2: Cursor read tool shows file path ──────────────────────────────
-
-test.describe("CU-3.2 — cursor read tool display", () => {
-    test("CU-3.2: read tool shows file path in collapsible", async ({ page, api, task }) => {
-        const cursorTask: Task = { ...task, model: "cursor/claude-sonnet-4-6" };
-        api.returns("models.listEnabled", CURSOR_MODELS);
-        api.handle("tasks.list", () => [cursorTask]);
-
-        const messages: ConversationMessage[] = [
-            {
-                id: 400,
-                taskId: cursorTask.id,
-                conversationId: cursorTask.id,
-                type: "tool_call",
-                role: "assistant",
-                content: JSON.stringify({
-                    type: "function",
-                    function: { name: "read", arguments: JSON.stringify({ path: "/repo/src/foo.ts" }) },
-                    id: "tc-read-1",
-                    display: { label: "read", subject: "src/foo.ts", contentType: "file" },
-                }),
-                metadata: null,
-                createdAt: new Date().toISOString(),
-            },
-            {
-                id: 401,
-                taskId: cursorTask.id,
-                conversationId: cursorTask.id,
-                type: "tool_result",
-                role: "user",
-                content: JSON.stringify({ tool_use_id: "tc-read-1", content: "file content" }),
-                metadata: null,
-                createdAt: new Date().toISOString(),
-            },
-        ];
-
-        api.handle("conversations.getMessages", () => ({ messages, hasMore: false }));
-
-        await page.goto("/");
-        await openTaskDrawer(page, cursorTask.id);
-
-        await expect(page.locator(".conversation-inner .tc").first()).toBeVisible({ timeout: 5_000 });
-        await expect(page.locator(".tc__tool-name").first()).toContainText("read");
-        await expect(page.locator(".tc__primary-arg").first()).toContainText("src/foo.ts");
-    });
-});
+// ─── Retired tests (in-file rationale, plan 06-06) ───────────────────────────
+//
+// CU-1.1 — model picker exposes cursor/* models: the in-chat model picker is
+//        removed with the legacy input (.input-model-select only existed in
+//        the dead ConversationInput.vue:175); model assignment is now
+//        engines.yaml / task-model configuration, outside the chat surface.
+// CU-1.2 — selecting a cursor model updates the task's model: same surface
+//        removal as CU-1.1; the tasks.setModel RPC has no chat UI consumer.

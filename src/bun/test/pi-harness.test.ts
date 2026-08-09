@@ -230,20 +230,20 @@ describe("PiEngine dialect injection", () => {
   it("SPY-1: dialect passed to constructor is stored and accessible", () => {
     const spy = new SpyDialect();
     const config: PiEngineConfig = { type: "pi", model: "lmstudio/qwen3-8b" };
-    const engine = new PiEngine("test-pi", config, () => {}, () => {}, spy, new NullModelSettingsRepository());
+    const engine = new PiEngine("test-pi", config, () => {}, spy, new NullModelSettingsRepository());
     expect((engine as any).dialect).toBe(spy);
   });
 
   it("SPY-2: default dialect is NullDialect when none is provided", () => {
     const config: PiEngineConfig = { type: "pi", model: "lmstudio/qwen3-8b" };
-    const engine = new PiEngine("test-pi", config, () => {}, () => {}, undefined, new NullModelSettingsRepository());
+    const engine = new PiEngine("test-pi", config, () => {}, undefined, new NullModelSettingsRepository());
     expect((engine as any).dialect).toBeInstanceOf(NullDialect);
   });
 
   it("SPY-3: pre-aborted execution does NOT call dialect.resolvePrompt", async () => {
     const spy = new SpyDialect();
     const config: PiEngineConfig = { type: "pi", model: "lmstudio/qwen3-8b" };
-    const engine = new PiEngine("test-pi", config, () => {}, () => {}, spy, new NullModelSettingsRepository());
+    const engine = new PiEngine("test-pi", config, () => {}, spy, new NullModelSettingsRepository());
     const controller = new AbortController();
     controller.abort();
 
@@ -268,7 +268,7 @@ describe("PiEngine dialect injection", () => {
 
 function makePiEngine(): PiEngine {
   const config: PiEngineConfig = { type: "pi", model: "lmstudio/qwen3-8b" };
-  return new PiEngine("test-pi", config, () => {}, () => {}, undefined, new NullModelSettingsRepository());
+  return new PiEngine("test-pi", config, () => {}, undefined, new NullModelSettingsRepository());
 }
 
 /** Minimal fake AgentSession — only needs abort() */
@@ -335,7 +335,7 @@ describe("PiEngine abort & cancel", () => {
     expect(session.abort).not.toHaveBeenCalled();
   });
 
-  it("ABORT-4: cancel() resolves pending resume before aborting session", () => {
+  it("ABORT-4: cancel() aborts the session for the mapped conversation", () => {
     const engine = makePiEngine();
     const eng = engine as any;
 
@@ -343,14 +343,12 @@ describe("PiEngine abort & cancel", () => {
     eng.sessionManager.sessions.set(1, { session, qualifiedModelId: "test/model" });
     eng.executionToConversation.set(77, 1);
 
-    const rejectFn = vi.fn();
-    eng.pendingResumes.set(77, { resolve: vi.fn(), reject: rejectFn });
-
     engine.cancel(77);
 
-    expect(rejectFn).toHaveBeenCalledWith(expect.objectContaining({ message: "Execution 77 cancelled" }));
+    // 07-02: engine-level resume channels were trimmed (EngineResumeInput
+    // deleted) — cancel() aborts the session; there is no pending resume to resolve.
     expect(session.abort).toHaveBeenCalledOnce();
-    expect(eng.pendingResumes.has(77)).toBe(false);
+    expect(eng.executionToConversation.has(77)).toBe(true); // entry cleaned on execute end
   });
 
   it("ABORT-5: executionToConversation entry is cleaned up after execute finishes", async () => {
@@ -429,7 +427,7 @@ import { ToolLoopDetector } from "../engine/pi/harness/tool-loop-detector.ts";
 describe("HarnessContext.loopDetector", () => {
   it("HLC-1: getOrCreateHarnessContext initializes loopDetector as ToolLoopDetector instance", () => {
     const config: PiEngineConfig = { type: "pi", model: "lmstudio/qwen3-8b" };
-    const engine = new PiEngine("test-pi", config, () => {}, () => {}, undefined, new NullModelSettingsRepository());
+    const engine = new PiEngine("test-pi", config, () => {}, undefined, new NullModelSettingsRepository());
 
     const ctx = engine.toolFactory.getOrCreateHarnessContext(1, "/test-cwd");
     expect(ctx.loopDetector).toBeInstanceOf(ToolLoopDetector);
@@ -437,7 +435,7 @@ describe("HarnessContext.loopDetector", () => {
 
   it("HLC-2: same conversationId returns the same loopDetector instance", () => {
     const config: PiEngineConfig = { type: "pi", model: "lmstudio/qwen3-8b" };
-    const engine = new PiEngine("test-pi", config, () => {}, () => {}, undefined, new NullModelSettingsRepository());
+    const engine = new PiEngine("test-pi", config, () => {}, undefined, new NullModelSettingsRepository());
 
     const ctx1 = engine.toolFactory.getOrCreateHarnessContext(5, "/test-cwd");
     const ctx2 = engine.toolFactory.getOrCreateHarnessContext(5, "/test-cwd");
@@ -446,7 +444,7 @@ describe("HarnessContext.loopDetector", () => {
 
   it("HLC-3: different conversationIds get different loopDetector instances", () => {
     const config: PiEngineConfig = { type: "pi", model: "lmstudio/qwen3-8b" };
-    const engine = new PiEngine("test-pi", config, () => {}, () => {}, undefined, new NullModelSettingsRepository());
+    const engine = new PiEngine("test-pi", config, () => {}, undefined, new NullModelSettingsRepository());
 
     const ctx1 = engine.toolFactory.getOrCreateHarnessContext(10, "/test-cwd");
     const ctx2 = engine.toolFactory.getOrCreateHarnessContext(11, "/test-cwd");

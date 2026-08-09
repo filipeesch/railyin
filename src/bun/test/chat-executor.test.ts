@@ -12,10 +12,8 @@ import { SlashCommandResolver } from "../engine/execution/slash-command-resolver
 import { NullModelSettingsRepository } from "../db/repositories/model-settings-repository.ts";
 import type { ModelSettingsRepository } from "../db/repositories/model-settings-repository.ts";
 import type { IWorkingDirectoryResolver } from "../engine/execution/working-directory-resolver.ts";
-import type { ExecutionEngine, ExecutionParams, EngineEvent, RawModelMessage } from "../engine/types.ts";
-import type { ConversationMessage } from "../../shared/rpc-types.ts";
+import type { ExecutionEngine, ExecutionParams, EngineEvent } from "../engine/types.ts";
 import { initDb, setupTestConfig, makeTestRegistry, makeTestRegistryWith, seedChatSession } from "./helpers.ts";
-import { appendMessage } from "../conversation/messages.ts";
 import { resetConfig } from "../config/index.ts";
 
 let db: Database;
@@ -46,17 +44,11 @@ class StubStreamProcessor extends StreamProcessor {
   lastRun: { taskId: number | null; params: ExecutionParams } | null = null;
 
   constructor() {
-    const _db = initDb();
-    const _rawBuf = { enqueue() {}, flush: async () => {} } as unknown as import("../pipeline/write-buffer.ts").WriteBuffer<import("../engine/stream/raw-message-buffer.ts").RawMessageItem>;
-    super(_db, _rawBuf, () => {}, () => {}, () => {}, () => {});
+    super(null as never, () => {}, () => {}, () => {}, () => {}, () => {});
   }
 
   override createSignal(_executionId: number): AbortSignal {
     return new AbortController().signal;
-  }
-
-  override makePersistCallback(_taskId: number | null, _conversationId: number, _executionId: number): (raw: RawModelMessage) => void {
-    return () => {};
   }
 
   override runNonNative(taskId: number | null, _conversationId: number, _executionId: number, _engine: ExecutionEngine, params: ExecutionParams): void {
@@ -75,7 +67,6 @@ function fixedContextWindowRepo(value: number): ModelSettingsRepository {
 function makeExecutor(opts: {
   modelSettingsRepo?: ModelSettingsRepository;
   boardTools?: BoardToolExecutor;
-  onNewMessage?: (msg: ConversationMessage) => void;
   streamProcessor?: StubStreamProcessor;
   crossEngineInjector?: CrossEngineContextInjector;
 }): { executor: ChatExecutor; streamProcessor: StubStreamProcessor } {
@@ -94,7 +85,6 @@ function makeExecutor(opts: {
     new SlashCommandResolver(),
     paramsEnricher,
     opts.boardTools,
-    opts.onNewMessage,
   );
   return { executor, streamProcessor };
 }
@@ -175,18 +165,17 @@ describe("CE-3: pre-flight fires for Pi + no context window", () => {
     expect(execRow).toBeNull();
   });
 
-  it("persists a system message when Pi has no context window", async () => {
+  it("returns { executionId: -1 } and writes NOTHING to conversation_messages when Pi has no context window", async () => {
     const { sessionId, conversationId } = seedChatSession(db, { model: "pi/some-model" });
     const { executor } = makeExecutor({ modelSettingsRepo: new NullModelSettingsRepository() });
 
-    await executor.execute(sessionId, conversationId, "hello", "pi/some-model");
+    const result = await executor.execute(sessionId, conversationId, "hello", "pi/some-model");
 
-    const systemMsg = db.query<{ type: string; content: string }, [number]>(
-      "SELECT type, content FROM conversation_messages WHERE conversation_id = ? AND type = 'system'",
-    ).get(conversationId);
-    expect(systemMsg).not.toBeNull();
-    expect(systemMsg!.type).toBe("system");
-    expect(systemMsg!.content).toContain("pi/some-model");
+    expect(result).toEqual({ executionId: -1 });
+    const rows = db.query<{ id: number }, [number]>(
+      "SELECT id FROM conversation_messages WHERE conversation_id = ?",
+    ).all(conversationId);
+    expect(rows).toHaveLength(0);
   });
 
   it("resets chat_sessions status to idle after pre-flight error", async () => {
@@ -199,25 +188,6 @@ describe("CE-3: pre-flight fires for Pi + no context window", () => {
       "SELECT status FROM chat_sessions WHERE id = ?",
     ).get(sessionId);
     expect(session?.status).toBe("idle");
-  });
-});
-
-// ─── CE-4: onNewMessage called on pre-flight failure ─────────────────────────
-
-describe("CE-4: onNewMessage called exactly once on pre-flight failure", () => {
-  it("calls onNewMessage with a system-typed ConversationMessage", async () => {
-    const { sessionId, conversationId } = seedChatSession(db, { model: "pi/some-model" });
-    const captured: ConversationMessage[] = [];
-    const { executor } = makeExecutor({
-      modelSettingsRepo: new NullModelSettingsRepository(),
-      onNewMessage: (msg) => captured.push(msg),
-    });
-
-    await executor.execute(sessionId, conversationId, "hello", "pi/some-model");
-
-    expect(captured).toHaveLength(1);
-    expect(captured[0].type).toBe("system");
-    expect(captured[0].content).toContain("pi/some-model");
   });
 });
 
@@ -271,20 +241,19 @@ describe("CE-6: pre-flight does NOT fire for non-Pi engines (e.g. copilot)", () 
   });
 });
 
-// ─── CE-7: onNewMessage NOT called during pre-flight on successful execution ──
+// ─── CE-7: pre-flight does not write anything on successful execution ────────
 
-describe("CE-7: onNewMessage not called in pre-flight phase on successful execution", () => {
-  it("does not call onNewMessage when execution proceeds normally", async () => {
+describe("CE-7: no pre-flight writes on successful execution", () => {
+  it("does not write any conversation_messages row when execution proceeds normally", async () => {
     const { sessionId, conversationId } = seedChatSession(db, { model: "copilot/gpt-4o" });
-    let called = false;
-    const { executor } = makeExecutor({
-      modelSettingsRepo: new NullModelSettingsRepository(),
-      onNewMessage: () => { called = true; },
-    });
+    const { executor } = makeExecutor({ modelSettingsRepo: new NullModelSettingsRepository() });
 
     await executor.execute(sessionId, conversationId, "hello", "copilot/gpt-4o");
 
-    expect(called).toBe(false);
+    const rows = db.query<{ id: number }, [number]>(
+      "SELECT id FROM conversation_messages WHERE conversation_id = ?",
+    ).all(conversationId);
+    expect(rows).toHaveLength(0);
   });
 });
 
@@ -351,10 +320,10 @@ describe("CE-10: no historyBlock injection on first turn (null last_engine_type)
   });
 });
 
-// ─── CE-11: historyBlock not stored in conversation_messages ─────────────────
+// ─── CE-11: zero conversation_messages writes on a normal chat run ───────────
 
-describe("CE-11: historyBlock not stored in user conversation_messages row", () => {
-  it("the persisted user message content equals the original input, not the injected prompt", async () => {
+describe("CE-11: no conversation_messages rows written on a normal run", () => {
+  it("writes zero rows to conversation_messages (frozen-table guarantee)", async () => {
     const { sessionId, conversationId } = seedChatSession(db, {
       model: "copilot/mock-model",
       lastEngineType: "claude",
@@ -363,12 +332,10 @@ describe("CE-11: historyBlock not stored in user conversation_messages row", () 
 
     await executor.execute(sessionId, conversationId, "hello", "copilot/mock-model");
 
-    const userMsg = db.query<{ content: string }, [number]>(
-      "SELECT content FROM conversation_messages WHERE conversation_id = ? AND type = 'user'",
-    ).get(conversationId);
-    expect(userMsg).not.toBeNull();
-    expect(userMsg!.content).toBe("hello");
-    expect(userMsg!.content).not.toContain("<message_history>");
+    const rows = db.query<{ id: number }, [number]>(
+      "SELECT id FROM conversation_messages WHERE conversation_id = ?",
+    ).all(conversationId);
+    expect(rows).toHaveLength(0);
   });
 });
 
@@ -446,7 +413,7 @@ describe("CE-15..17: cross-engine context injection", () => {
       model: "claude/opus",
       lastEngineType: "pi",
     });
-    appendMessage(db, null, conversationId, "assistant", null, "Pi assistant response");
+    db.run("INSERT INTO conversation_messages (conversation_id, role, content, type) VALUES (?, 'assistant', 'Pi assistant response', 'assistant')", [conversationId]);
 
     const injector = new CrossEngineContextInjector(db, makeTestRegistryWith(new Map([
       ["pi", new PassThroughEngine("pi")],
@@ -466,8 +433,8 @@ describe("CE-15..17: cross-engine context injection", () => {
       model: "claude/opus",
       lastEngineType: "pi",
     });
-    appendMessage(db, null, conversationId, "compaction_summary", null, "Pi compaction summary");
-    appendMessage(db, null, conversationId, "assistant", null, "Pi post-compaction response");
+    db.run("INSERT INTO conversation_messages (conversation_id, role, content, type) VALUES (?, NULL, 'Pi compaction summary', 'compaction_summary')", [conversationId]);
+    db.run("INSERT INTO conversation_messages (conversation_id, role, content, type) VALUES (?, 'assistant', 'Pi post-compaction response', 'assistant')", [conversationId]);
 
     const injector = new CrossEngineContextInjector(db, makeTestRegistryWith(new Map([
       ["pi", new PassThroughEngine("pi")],
@@ -488,7 +455,7 @@ describe("CE-15..17: cross-engine context injection", () => {
       model: "claude/opus",
       lastEngineType: "copilot",
     });
-    appendMessage(db, null, conversationId, "assistant", null, "Copilot prior response");
+    db.run("INSERT INTO conversation_messages (conversation_id, role, content, type) VALUES (?, 'assistant', 'Copilot prior response', 'assistant')", [conversationId]);
 
     const injector = new CrossEngineContextInjector(db, makeTestRegistryWith(new Map([
       ["copilot", new PassThroughEngine("copilot")],
@@ -510,7 +477,7 @@ describe("CE-15..17: cross-engine context injection", () => {
       model: "pi/deepseek-chat",
       lastEngineType: "pi-local",
     });
-    appendMessage(db, null, conversationId, "assistant", null, "Pi-local assistant response");
+    db.run("INSERT INTO conversation_messages (conversation_id, role, content, type) VALUES (?, 'assistant', 'Pi-local assistant response', 'assistant')", [conversationId]);
 
     const injector = new CrossEngineContextInjector(db, makeTestRegistryWith(new Map([
       ["pi-local", new PassThroughEngine("pi")],

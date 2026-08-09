@@ -29,6 +29,40 @@ export interface StartServerOptions {
      * so tests can read `mcp-tokens.json` directly from disk.
      */
     mcpConfig?: object;
+    /**
+     * When true, spawns the server with `RAILYN_COPILOTKIT_PROBE=1` so the
+     * composition root registers the ScriptedAgent probe agent under
+     * `/api/copilotkit/*`. Spike-only seam — the flag is never set by
+     * `bun run prod`, so the fake agent is never exposed there.
+     */
+    copilotkitProbe?: boolean;
+    /**
+     * When true, spawns the server with `RAILYN_LEGACY_IMPORT=1` so the
+     * composition root registers the `legacyImport.run` RPC (D-06 retirement
+     * gate). Off by default — without the flag the RPC is absent (404) and
+     * `legacyImport.enabled` returns `{ enabled: false }`; `bun run prod`
+     * never sets it.
+     */
+    legacyImport?: boolean;
+    /**
+     * When provided, `RAILYN_DATA_DIR` is set to this path (created if
+     * missing) instead of the mcpConfig-derived dir, and `shutdown()` skips
+     * deleting the runtime dir — the CALLER owns cleanup. Contract: the dir
+     * must outlive a single server, so a restart-replay e2e can spawn two
+     * servers over the SAME durable data dir (the mcpConfig-derived dir is
+     * deleted at shutdown and cannot survive a restart).
+     */
+    dataDir?: string;
+    /**
+     * When true, the SQLite DB lives at `<dataDir>/railyn.db` instead of
+     * in-memory: `--memory-db` is dropped from the spawn args and
+     * `RAILYN_DB` points at the file. The DB — conversations, executions,
+     * chat sessions — then survives server restarts, which the
+     * post-restart-resume e2e (03-03 test 17) depends on: a fresh server
+     * over the same durable dataDir must still find the conversation and
+     * the `waiting_user` executions row the registry rebuild correlates.
+     */
+    durableDb?: boolean;
 }
 
 const ROOT = new URL("../../../", import.meta.url).pathname;
@@ -138,6 +172,29 @@ export async function startServer(options?: StartServerOptions): Promise<TestSer
         writeFileSync(join(dataDir, "mcp.json"), JSON.stringify(options.mcpConfig, null, 2), "utf-8");
         extraEnv.RAILYN_DATA_DIR = dataDir;
     }
+    // A caller-supplied durable dataDir overrides the mcpConfig-derived one
+    // (survives shutdown; the caller owns cleanup of BOTH this dir and the
+    // runtime dir, since shutdown() skips rmSync when this option is set).
+    if (options?.dataDir) {
+        dataDir = options.dataDir;
+        mkdirSync(dataDir, { recursive: true });
+        extraEnv.RAILYN_DATA_DIR = dataDir;
+        if (options?.mcpConfig !== undefined) {
+            writeFileSync(join(dataDir, "mcp.json"), JSON.stringify(options.mcpConfig, null, 2), "utf-8");
+        }
+    }
+    // A durable DB (survives restarts) requires a durable data dir — see the
+    // durableDb doc. Without it, `--memory-db` in the spawn args would clobber
+    // RAILYN_DB back to ":memory:".
+    if (options?.durableDb && dataDir) {
+        extraEnv.RAILYN_DB = join(dataDir, "railyn.db");
+    }
+    if (options?.copilotkitProbe) {
+        extraEnv.RAILYN_COPILOTKIT_PROBE = "1";
+    }
+    if (options?.legacyImport) {
+        extraEnv.RAILYN_LEGACY_IMPORT = "1";
+    }
 
     const proc = spawn({
         cmd: [
@@ -149,7 +206,9 @@ export async function startServer(options?: StartServerOptions): Promise<TestSer
             "--define",
             '__RAILYN_DEV_CONFIG_DIR__=""',
             "src/bun/index.ts",
-            "--memory-db",
+            // durableDb: the DB file persists — drop --memory-db so RAILYN_DB
+            // env (set above) wins in index.ts.
+            ...(options?.durableDb ? [] : ["--memory-db"]),
             "--port=0",
         ],
         cwd: ROOT,
@@ -255,7 +314,12 @@ export async function startServer(options?: StartServerOptions): Promise<TestSer
             await fetch(`${debugUrl}/shutdown`).catch(() => { });
             await proc.exited;
         } finally {
-            rmSync(runtimeDir, { recursive: true, force: true });
+            // With a caller-supplied dataDir, the caller owns cleanup — the
+            // restart-replay e2e needs the durable dir to survive this
+            // shutdown and live on into the next spawned server.
+            if (!options?.dataDir) {
+                rmSync(runtimeDir, { recursive: true, force: true });
+            }
         }
     }
 

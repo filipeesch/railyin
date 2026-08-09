@@ -9,13 +9,11 @@ const makeChannel = () => {
 };
 
 describe("NotificationService", () => {
-  test("NS-1 — onError broadcasts stream.error", () => {
+  test("NS-1 — onError is a no-op (A2: legacy error push dropped)", () => {
     const { channel, calls } = makeChannel();
     const svc = new NotificationService(channel);
     svc.onError(42, 7, 3, "boom");
-    expect(calls).toEqual([
-      { type: "stream.error", payload: { taskId: 42, conversationId: 7, executionId: 3, error: "boom" } },
-    ]);
+    expect(calls).toEqual([]);
   });
 
   test("NS-2 — notifyTaskUpdated broadcasts task.updated", () => {
@@ -26,15 +24,7 @@ describe("NotificationService", () => {
     expect(calls).toEqual([{ type: "task.updated", payload: task }]);
   });
 
-  test("NS-3 — notifyNewMessage broadcasts message.new", () => {
-    const { channel, calls } = makeChannel();
-    const svc = new NotificationService(channel);
-    const message = { id: 99, content: "hello" } as any;
-    svc.notifyNewMessage(message);
-    expect(calls).toEqual([{ type: "message.new", payload: message }]);
-  });
-
-  test("NS-4 — notifyWorkflowReloaded broadcasts workflow.reloaded", () => {
+  test("NS-3 — notifyWorkflowReloaded broadcasts workflow.reloaded", () => {
     const { channel, calls } = makeChannel();
     const svc = new NotificationService(channel);
     svc.notifyWorkflowReloaded();
@@ -47,13 +37,5 @@ describe("NotificationService", () => {
     const session = { id: 5, name: "my-session" } as any;
     svc.notifyChatSessionUpdated(session);
     expect(calls).toEqual([{ type: "chatSession.updated", payload: session }]);
-  });
-
-  test("NS-6 — broadcastConfigError broadcasts config.error", () => {
-    const { channel, calls } = makeChannel();
-    const svc = new NotificationService(channel);
-    const details = { reason: "invalid yaml" };
-    svc.broadcastConfigError(details);
-    expect(calls).toEqual([{ type: "config.error", payload: details }]);
   });
 });

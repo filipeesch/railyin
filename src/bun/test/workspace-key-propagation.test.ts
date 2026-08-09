@@ -17,7 +17,7 @@ import { Orchestrator } from "../engine/orchestrator.ts";
 import { WorkspaceRepository } from "../db/workspace-repository.ts";
 import { getWorkspaceConfig } from "../workspace-context.ts";
 import type { Database } from "bun:sqlite";
-import type { ExecutionEngine, ExecutionParams, EngineEvent, EngineResumeInput, EngineModelInfo } from "../engine/types.ts";
+import type { ExecutionEngine, ExecutionParams, EngineEvent, EngineModelInfo } from "../engine/types.ts";
 import type { LoadedConfig } from "../config/index.ts";
 
 // ─── CapturingEngine ─────────────────────────────────────────────────────────
@@ -36,7 +36,7 @@ class CapturingEngine implements ExecutionEngine {
     yield { type: "done" };
   }
 
-  async resume(_executionId: number, _input: EngineResumeInput): Promise<void> {}
+  async resume(_executionId: number, _input: never): Promise<void> {}
   cancel(_executionId: number): void {}
 
   async listModels(): Promise<EngineModelInfo[]> {
@@ -69,7 +69,6 @@ function makeOrchestrator(
   return new Orchestrator(
     db,
     registry,
-    () => {},
     () => {},
     () => {},
     new WorkspaceRepository(db),

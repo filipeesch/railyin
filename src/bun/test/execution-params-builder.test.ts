@@ -3,7 +3,6 @@ import { ExecutionParamsBuilder } from "../engine/execution/execution-params-bui
 import type { TaskRow } from "../db/row-types.ts";
 
 const builder = new ExecutionParamsBuilder();
-const noop = () => {};
 
 function makeTask(overrides: Partial<TaskRow> = {}): TaskRow {
   return {
@@ -41,7 +40,6 @@ describe("ExecutionParamsBuilder.build", () => {
       undefined,
       "/workspace",
       controller.signal,
-      noop,
     );
 
     expect(params.signal).toBe(controller.signal);
@@ -49,7 +47,7 @@ describe("ExecutionParamsBuilder.build", () => {
 
   it("populates taskId and boardId from the task row", () => {
     const task = makeTask({ id: 7, board_id: 99 });
-    const params = builder.build(task, 1, 1, "prompt", undefined, "/w", new AbortController().signal, noop);
+    const params = builder.build(task, 1, 1, "prompt", undefined, "/w", new AbortController().signal);
 
     expect(params.taskId).toBe(7);
     expect(params.boardId).toBe(99);
@@ -57,7 +55,7 @@ describe("ExecutionParamsBuilder.build", () => {
 
   it("populates taskContext title and description from the task row", () => {
     const task = makeTask({ title: "Hello", description: "World" });
-    const params = builder.build(task, 1, 1, "prompt", undefined, "/w", new AbortController().signal, noop);
+    const params = builder.build(task, 1, 1, "prompt", undefined, "/w", new AbortController().signal);
 
     expect(params.taskContext?.title).toBe("Hello");
     expect(params.taskContext?.description).toBe("World");
@@ -65,42 +63,42 @@ describe("ExecutionParamsBuilder.build", () => {
 
   it("omits description from taskContext when description is blank", () => {
     const task = makeTask({ description: "   " });
-    const params = builder.build(task, 1, 1, "prompt", undefined, "/w", new AbortController().signal, noop);
+    const params = builder.build(task, 1, 1, "prompt", undefined, "/w", new AbortController().signal);
 
     expect(params.taskContext?.description).toBeUndefined();
   });
 
   it("parses enabled_mcp_tools JSON into an array", () => {
     const task = makeTask({ enabled_mcp_tools: '["tool-a","tool-b"]' });
-    const params = builder.build(task, 1, 1, "prompt", undefined, "/w", new AbortController().signal, noop);
+    const params = builder.build(task, 1, 1, "prompt", undefined, "/w", new AbortController().signal);
 
     expect(params.enabledMcpTools).toEqual(["tool-a", "tool-b"]);
   });
 
   it("sets enabledMcpTools to null when enabled_mcp_tools is null (unfiltered/all visible by default)", () => {
     const task = makeTask({ enabled_mcp_tools: null });
-    const params = builder.build(task, 1, 1, "prompt", undefined, "/w", new AbortController().signal, noop);
+    const params = builder.build(task, 1, 1, "prompt", undefined, "/w", new AbortController().signal);
 
     expect(params.enabledMcpTools).toBeNull();
   });
 
   it("sets enabledMcpTools to null when enabled_mcp_tools is invalid JSON", () => {
     const task = makeTask({ enabled_mcp_tools: "not-json" });
-    const params = builder.build(task, 1, 1, "prompt", undefined, "/w", new AbortController().signal, noop);
+    const params = builder.build(task, 1, 1, "prompt", undefined, "/w", new AbortController().signal);
 
     expect(params.enabledMcpTools).toBeNull();
   });
 
   // EPB-PRESET-2: build() does not set samplingPresetName (it is injected externally by TransitionExecutor)
   it("EPB-PRESET-2: samplingPresetName is undefined in base build() result", () => {
-    const params = builder.build(makeTask(), 1, 1, "prompt", undefined, "/w", new AbortController().signal, noop);
+    const params = builder.build(makeTask(), 1, 1, "prompt", undefined, "/w", new AbortController().signal);
 
     expect(params.samplingPresetName).toBeUndefined();
   });
 
   // EPB-PRESET-1: samplingPresetName passes through when spread onto build() result (mirrors TransitionExecutor pattern)
   it("EPB-PRESET-1: samplingPresetName is preserved when spread onto build() result", () => {
-    const base = builder.build(makeTask(), 1, 1, "prompt", undefined, "/w", new AbortController().signal, noop);
+    const base = builder.build(makeTask(), 1, 1, "prompt", undefined, "/w", new AbortController().signal);
     const params = { ...base, samplingPresetName: "balanced" };
 
     expect(params.samplingPresetName).toBe("balanced");
@@ -112,7 +110,7 @@ describe("ExecutionParamsBuilder.buildForChat", () => {
     const params = builder.buildForChat(
       5, 42, "hello", "/workspace", "fake/model",
       "default",
-      new AbortController().signal, noop, null,
+      new AbortController().signal, null,
     );
 
     expect(params.taskId).toBeNull();
@@ -122,7 +120,7 @@ describe("ExecutionParamsBuilder.buildForChat", () => {
     const params = builder.buildForChat(
       5, 42, "hello", "/workspace", "fake/model",
       "default",
-      new AbortController().signal, noop, null,
+      new AbortController().signal, null,
     );
 
     expect("boardId" in params).toBe(false);
@@ -134,7 +132,7 @@ describe("ExecutionParamsBuilder.buildForChat", () => {
     const params = builder.buildForChat(
       5, 42, "hello", "/workspace", "fake/model",
       "default",
-      new AbortController().signal, noop, tools,
+      new AbortController().signal, tools,
     );
 
     expect(params.enabledMcpTools).toEqual(tools);
@@ -144,7 +142,7 @@ describe("ExecutionParamsBuilder.buildForChat", () => {
     const params = builder.buildForChat(
       5, 42, "hello", "/workspace", "fake/model",
       "default",
-      new AbortController().signal, noop, null,
+      new AbortController().signal, null,
     );
 
     expect(params.enabledMcpTools).toBeNull();
@@ -155,7 +153,7 @@ describe("ExecutionParamsBuilder.buildForChat", () => {
     const params = builder.buildForChat(
       5, 42, "hello", "/workspace", "fake/model",
       "default",
-      controller.signal, noop, null,
+      controller.signal, null,
     );
 
     expect(params.signal).toBe(controller.signal);
@@ -167,7 +165,7 @@ describe("ExecutionParamsBuilder — decisions NOT in systemInstructions", () =>
     const task = makeTask();
     const params = builder.build(
       task, 1, 1, "prompt", "base system instructions", "/w",
-      new AbortController().signal, noop,
+      new AbortController().signal,
     );
     expect(params.systemInstructions).not.toContain("<decisions>");
     expect(params.systemInstructions).toBe("base system instructions");
@@ -177,7 +175,7 @@ describe("ExecutionParamsBuilder — decisions NOT in systemInstructions", () =>
     const params = builder.buildForChat(
       1, 1, "prompt", "/w", "fake/model",
       "default",
-      new AbortController().signal, noop, null,
+      new AbortController().signal, null,
     );
     // systemInstructions is undefined when no instructions are provided — no decisions injection
     expect(params.systemInstructions ?? "").not.toContain("<decisions>");
@@ -188,7 +186,7 @@ describe("ExecutionParamsBuilder.buildForChat — workspaceKey", () => {
     const params = builder.buildForChat(
       5, 42, "hello", "/workspace", "fake/model",
       "default",
-      new AbortController().signal, noop, null,
+      new AbortController().signal, null,
     );
 
     expect(params.workspaceKey).toBe("default");
@@ -198,7 +196,7 @@ describe("ExecutionParamsBuilder.buildForChat — workspaceKey", () => {
     const params = builder.buildForChat(
       5, 42, "hello", "/workspace", "fake/model",
       "test-workspace",
-      new AbortController().signal, noop, null,
+      new AbortController().signal, null,
     );
 
     expect(params.workspaceKey).toBe("test-workspace");
@@ -209,7 +207,7 @@ describe("ExecutionParamsBuilder.build — workspaceKey", () => {
   it("EPB-WK-3: build(workspaceKey='ws-other') sets ExecutionParams.workspaceKey", () => {
     const params = builder.build(
       makeTask(), 1, 1, "prompt", undefined, "/w",
-      new AbortController().signal, noop,
+      new AbortController().signal,
       undefined, undefined, undefined, "ws-other",
     );
 
@@ -219,7 +217,7 @@ describe("ExecutionParamsBuilder.build — workspaceKey", () => {
   it("EPB-WK-4: build() without workspaceKey leaves it undefined", () => {
     const params = builder.build(
       makeTask(), 1, 1, "prompt", undefined, "/w",
-      new AbortController().signal, noop,
+      new AbortController().signal,
     );
 
     expect(params.workspaceKey).toBeUndefined();

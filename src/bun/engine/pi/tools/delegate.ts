@@ -13,7 +13,7 @@ import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { ToolLoopDetector, LOOP_MAX_REPEAT, LOOP_WINDOW_SIZE } from "../harness/tool-loop-detector.ts";
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import type { HarnessContext } from "../harness/context.ts";
-import type { EngineEvent, RawModelMessage } from "../../types.ts";
+import type { EngineEvent } from "../../types.ts";
 import type { ChildSessionFactory } from "../child-session.ts";
 import type { ProviderLimiterRegistry } from "../provider-limiter.ts";
 import type { PiEngineConfig } from "../../../config/index.ts";
@@ -34,8 +34,6 @@ export interface DelegateToolOptions {
   engineConfig?: PiEngineConfig;
   /** Parent's resolved thinking level — children inherit it instead of hardcoded "off". */
   parentThinkingLevel?: string;
-  /** Callback for forwarding child raw-model events to the parent's observability pipeline. */
-  onRawModelMessage?: (message: RawModelMessage) => void;
   /** Builds tools for child sessions — injected by buildAllTools to avoid circular imports. */
   buildChildTools?: (groups: string[]) => AgentTool<any>[];
 }
@@ -57,7 +55,6 @@ export function buildDelegateTool(_harnessCtx: HarnessContext, opts: DelegateToo
     parentConversationId,
     engineConfig,
     delegateEmitRef,
-    onRawModelMessage,
     childSessionFactory = defaultChildSessionFactory,
     buildChildTools = () => [],
   } = opts;
@@ -280,7 +277,6 @@ export function buildDelegateTool(_harnessCtx: HarnessContext, opts: DelegateToo
 
           // Subscribe BEFORE prompting to capture all child events.
           // - UI path: route tool_start/tool_result under childBlockId so they nest in the per-child bubble.
-          // - Observability path: forward raw inbound events via onRawModelMessage tagged with the delegate callId.
           const childSessionId = parentConversationId != null ? `${parentConversationId}/${task.id}` : task.id;
           unsubscribe = handle.session.subscribe((event: AgentSessionEvent) => {
             if (delegateEmitRef?.emit) {
@@ -292,16 +288,6 @@ export function buildDelegateTool(_harnessCtx: HarnessContext, opts: DelegateToo
               }
             }
 
-            if (onRawModelMessage) {
-              onRawModelMessage({
-                engine: "pi",
-                sessionId: childSessionId,
-                parentToolCallId: toolCallId,
-                direction: "inbound",
-                eventType: event.type,
-                payload: event as unknown as Record<string, unknown>,
-              });
-            }
           });
 
           await runWithLimiter(registry, providerName, signal, () => handle!.session.prompt(task.prompt));
