@@ -10,10 +10,19 @@
  *    capture vs the same scenario through the fixture builder — strict
  *    equality on the split frames arrays, plus shared response headers.
  *    (The diff describe is added in plan 01-03 Task 2.)
+ *
+ * Connect parity (WR-01): the CONNECT replay is NOT byte-identical to the
+ * real runner on the registered-thread path — the real in-memory runner
+ * replays compacted historic events only and never emits MESSAGES_SNAPSHOT,
+ * while the fixture appends a synthetic snapshot. The tests below pin the
+ * shared client-contract invariants (first RUN_STARTED / single terminal
+ * RUN_FINISHED last / no events after the terminal) on BOTH sides, assert the
+ * never-run connect body IS byte-identical (empty on both), and document the
+ * deliberate divergence with the client-merge rationale.
  */
 
 import { describe, test, expect, beforeAll, afterAll } from "bun:test";
-import { buildQuickRunSseBody, MOCK_AGUI_SSE_HEADERS } from "../../ui/fixtures/mock-agui";
+import { buildQuickRunSseBody, buildConnectReplaySseBody, MOCK_AGUI_SSE_HEADERS } from "../../ui/fixtures/mock-agui";
 import { startServer, type TestServer } from "../fixtures/server";
 
 /** The exact RunAgentInput the diff scenario POSTs (and the fixture parses). */
@@ -116,5 +125,79 @@ describe("SSE text diff vs the real server (D-07, Pattern 3)", () => {
         // Shared response headers.
         expect(res.headers.get("cache-control")).toBe(MOCK_AGUI_SSE_HEADERS["cache-control"]);
         expect(res.headers.get("content-type")).toBe(MOCK_AGUI_SSE_HEADERS["content-type"]);
+    });
+
+    test("never-run connect: fixture empty replay is byte-identical to the real runner's (RUNR-06, WR-01)", async () => {
+        const threadId = "diff-connect-never";
+        const res = await fetch(`${server.baseUrl}/api/copilotkit/agent/default/connect`, {
+            method: "POST",
+            headers: { "content-type": "application/json", accept: "text/event-stream" },
+            body: JSON.stringify({ ...requestInput, threadId, runId: "diff-connect-never-r" }),
+        });
+        expect(res.status).toBe(200);
+        expect(res.headers.get("content-type")).toBe("text/event-stream");
+
+        const realBody = await res.text();
+        // The fixture's never-run path (unregistered thread) is an empty body.
+        const fixtureBody = buildConnectReplaySseBody(threadId, "quick", new Set());
+        expect(fixtureBody).toBe("");
+        // Byte-identical on this branch: the real runner also completes the
+        // connect stream with zero frames for a thread with no store.
+        expect(realBody).toBe(fixtureBody);
+        expect(res.headers.get("cache-control")).toBe(MOCK_AGUI_SSE_HEADERS["cache-control"]);
+    });
+
+    test("connect replay contract: fixture snapshot framing vs the real compacted replay (WR-01)", async () => {
+        // Give the real runner history: run the quick script on a fresh thread
+        // and drain the stream so the run finalizes into the historic store.
+        const threadId = "diff-connect-run";
+        const runRes = await fetch(`${server.baseUrl}/api/copilotkit/agent/default/run`, {
+            method: "POST",
+            headers: { "content-type": "application/json", accept: "text/event-stream" },
+            body: JSON.stringify({ ...requestInput, threadId, runId: "diff-connect-run-r" }),
+        });
+        expect(runRes.status).toBe(200);
+        await runRes.text();
+
+        // Real side: connect replays the COMPACTED historic events only
+        // (in-memory.mjs connect(): compactEvents(allHistoricEvents)) — first
+        // frame RUN_STARTED, single terminal RUN_FINISHED last, and NEVER a
+        // MESSAGES_SNAPSHOT (the runner does not synthesize one).
+        const connectRes = await fetch(`${server.baseUrl}/api/copilotkit/agent/default/connect`, {
+            method: "POST",
+            headers: { "content-type": "application/json", accept: "text/event-stream" },
+            body: JSON.stringify({ ...requestInput, threadId, runId: "diff-connect-run-c" }),
+        });
+        expect(connectRes.status).toBe(200);
+        const realFrames = framesOf(await connectRes.text()).map((f) => parseFrame<{ type: string }>(f));
+        expect(realFrames.length).toBeGreaterThan(0);
+        expect(realFrames[0].type).toBe("RUN_STARTED");
+        expect(realFrames[realFrames.length - 1].type).toBe("RUN_FINISHED");
+        expect(realFrames.filter((f) => f.type === "RUN_FINISHED")).toHaveLength(1);
+        expect(realFrames.some((f) => f.type === "MESSAGES_SNAPSHOT")).toBe(false);
+
+        // Fixture side: the same thread through the replay builder — the
+        // historic sequence PLUS the synthetic MESSAGES_SNAPSHOT (test-authored
+        // client convenience, WR-01) PLUS its own single terminal, with the
+        // snapshot strictly before the terminal (verifyEvents rejects any
+        // event after RUN_FINISHED). Behaviorally equivalent for the client:
+        // the @ag-ui/client MESSAGES_SNAPSHOT handler replaces the message list
+        // by id, so the snapshot masks the replayed events and the rendered
+        // final state matches the real replay's text-event reconstruction.
+        const fixtureFrames = framesOf(buildConnectReplaySseBody(threadId, "quick", new Set([threadId]))).map((f) =>
+            parseFrame<{ type: string }>(f),
+        );
+        expect(fixtureFrames[0].type).toBe("RUN_STARTED");
+        expect(fixtureFrames[fixtureFrames.length - 1].type).toBe("RUN_FINISHED");
+        expect(fixtureFrames.filter((f) => f.type === "RUN_FINISHED")).toHaveLength(1);
+        const snapshotIdx = fixtureFrames.findIndex((f) => f.type === "MESSAGES_SNAPSHOT");
+        expect(snapshotIdx).toBeGreaterThan(0);
+        expect(snapshotIdx).toBeLessThan(fixtureFrames.length - 1);
+        // The snapshot carries the message the replayed TEXT events reconstruct.
+        const snapshot = fixtureFrames[snapshotIdx] as {
+            type: string;
+            messages?: Array<{ id: string; role: string; content?: string }>;
+        };
+        expect(snapshot.messages).toEqual([{ id: "m1", role: "assistant", content: "hello" }]);
     });
 });

@@ -20,12 +20,27 @@
  *  - GET  /info                          — agent discovery
  *
  * Framing is NEVER hand-rolled — single sources of truth, so the fixture can
- * never drift from the real wire format:
+ * never drift from the real wire format on the /run path (byte-parity proven
+ * by the D-07 text-diff test in e2e/api/copilotkit/sse-text-diff.test.ts):
  *  - SSE frames: EventEncoder from @ag-ui/encoder (the runtime's own encoder)
  *  - Run event sequence: buildQuickRunEvents from e2e/api/copilotkit/
  *    probe-agent.ts (the canonical builder the real ScriptedAgent emits)
  *  - RUN_STARTED input patch: replicates InMemoryAgentRunner's own patching
  *    (@copilotkit/runtime in-memory.mjs) so the wire text stays byte-identical
+ *
+ * The CONNECT replay is a deliberate, documented divergence (WR-01): the real
+ * in-memory runner's connect() replays COMPACTED HISTORIC EVENTS ONLY
+ * (in-memory.mjs: RUN_STARTED → historic text/tool events → the historic
+ * RUN_FINISHED — it never emits MESSAGES_SNAPSHOT and never re-terminates the
+ * stream). The fixture additionally frames a synthetic MESSAGES_SNAPSHOT
+ * (test-authored history, client-consumed) plus its own single terminal.
+ * This is behaviorally equivalent for the client: the @ag-ui/client
+ * MESSAGES_SNAPSHOT handler replaces the message list by id, so the snapshot
+ * masks the replayed events and the rendered final state matches what the
+ * real compacted replay reconstructs. The connect parity tests in
+ * e2e/api/copilotkit/sse-text-diff.test.ts pin the shared invariants
+ * (first RUN_STARTED / single terminal RUN_FINISHED last / never-run empty
+ * body byte-identical) and this deliberate divergence.
  *
  * Wired into e2e/ui/fixtures/index.ts as the auto-use `agui` fixture (Phase 5).
  * No @copilotkit/vue import anywhere (D-10 still holds).
