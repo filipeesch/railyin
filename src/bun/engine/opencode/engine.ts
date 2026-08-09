@@ -5,7 +5,6 @@ import type {
   EngineModelInfo,
   CommandInfo,
   OnTaskUpdated,
-  OnNewMessage,
 } from "../types.ts";
 import type { OpenCodeSdkAdapter, PermissionDecision } from "./types.ts";
 import { TodoRepository } from "../../db/todos.ts";
@@ -24,7 +23,6 @@ export class OpenCodeEngine implements ExecutionEngine {
 
   constructor(
     onTaskUpdated: OnTaskUpdated,
-    _onNewMessage: OnNewMessage,
     sdkAdapter: OpenCodeSdkAdapter,
     shellApprovalRepo?: ShellApprovalRepository,
   ) {
@@ -50,7 +48,6 @@ export class OpenCodeEngine implements ExecutionEngine {
       systemInstructions,
       taskContext,
       attachments,
-      onRawModelMessage,
       onTransition,
       onHumanTurn,
       boardTools,
@@ -104,18 +101,6 @@ export class OpenCodeEngine implements ExecutionEngine {
       },
     };
 
-    const onRawEvent = onRawModelMessage
-      ? (event: Record<string, unknown>) => {
-          onRawModelMessage({
-            engine: "opencode",
-            sessionId,
-            direction: "inbound",
-            eventType: typeof event.type === "string" ? event.type : "unknown",
-            payload: event,
-          });
-        }
-      : undefined;
-
     try {
       for await (const event of this.sdkAdapter.run({
         executionId,
@@ -128,7 +113,6 @@ export class OpenCodeEngine implements ExecutionEngine {
         attachments,
         signal,
         commonToolContext,
-        onRawEvent,
         onPermissionAsked,
       })) {
         yield event;

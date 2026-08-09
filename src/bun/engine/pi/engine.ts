@@ -4,10 +4,8 @@ import type {
   ExecutionParams,
   EngineEvent,
   EngineModelInfo,
-  EngineResumeInput,
   CommandInfo,
   OnTaskUpdated,
-  OnNewMessage,
 } from "../types.ts";
 import type { PiEngineConfig, PiModelConfig } from "../../config/index.ts";
 import type { ModelSettingAxis, ModelParamValue } from "../../../shared/rpc-types.ts";
@@ -131,10 +129,6 @@ export class PiEngine implements ExecutionEngine {
   private readonly modelSettingsRepo: ModelSettingsRepository;
   /** Map<executionId, conversationId> — lets cancel() find the right session. */
   private readonly executionToConversation = new Map<number, number>();
-  private readonly pendingResumes = new Map<
-    number,
-    { resolve: (input: EngineResumeInput) => void; reject: (error: Error) => void }
-  >();
   /** Map<conversationId, SuspendRef> */
   private readonly suspendRefs = new Map<number, { onSuspend?: (event: EngineEvent) => void }>();
 
@@ -161,7 +155,6 @@ export class PiEngine implements ExecutionEngine {
     engineId: string,
     config: PiEngineConfig,
     onTaskUpdated: OnTaskUpdated,
-    _onNewMessage: OnNewMessage,
     dialect: SlashCommandDialect = new NullDialect(),
     modelSettingsRepo: ModelSettingsRepository,
     sessionFactory: SessionFactory = defaultSessionFactory,
@@ -232,7 +225,6 @@ export class PiEngine implements ExecutionEngine {
       signal,
       systemInstructions,
       taskContext,
-      onRawModelMessage,
       onTransition,
       onHumanTurn,
       boardTools,
@@ -322,7 +314,6 @@ export class PiEngine implements ExecutionEngine {
       workingDirectory,
       signal,
       suspendRef,
-      onRawModelMessage,
       runDriver: this.runDriver,
       compactionCoordinator: this.compactionCoordinator,
     });
@@ -333,7 +324,6 @@ export class PiEngine implements ExecutionEngine {
       }
     } finally {
       cleanup();
-      this.pendingResumes.delete(executionId);
       this.executionToConversation.delete(executionId);
     }
 
@@ -376,19 +366,14 @@ export class PiEngine implements ExecutionEngine {
     yield { type: "done" };
   }
 
-  async resume(executionId: number, input: EngineResumeInput): Promise<void> {
-    const pending = this.pendingResumes.get(executionId);
-    if (!pending) throw new Error(`Execution ${executionId} is not waiting for resume input`);
-    this.pendingResumes.delete(executionId);
-    pending.resolve(input);
+  async resume(_executionId: number, _input: never): Promise<void> {
+    // All engine-level resume channels were trimmed with ask_user/shell_approval
+    // (EngineResumeInput deleted). Decision interrupts resume via a NEW turn —
+    // executeChatTurn/executeHumanTurn deliver the answer as engineContent —
+    // never through engine.resume().
   }
 
   cancel(executionId: number): void {
-    const pending = this.pendingResumes.get(executionId);
-    if (pending) {
-      this.pendingResumes.delete(executionId);
-      pending.reject(new Error(`Execution ${executionId} cancelled`));
-    }
     const conversationId = this.executionToConversation.get(executionId);
     if (conversationId !== undefined) {
       const session = this.sessionManager.get(conversationId);

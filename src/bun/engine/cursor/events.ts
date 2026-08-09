@@ -13,7 +13,7 @@ export {
   extractStructuredResult,
   unwrapCursorToolName,
   buildCursorToolDisplay,
-  parseUnifiedDiff,
   type CursorSDKMessage,
   type StructuredResult,
 } from "./translate-events.ts";
+export { parseUnifiedDiff } from "../diff-utils.ts";

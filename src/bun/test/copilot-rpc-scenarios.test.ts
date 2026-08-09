@@ -48,8 +48,8 @@ function createCopilotRuntime(adapter: MockCopilotSdkAdapter, registryPool?: Mcp
 
     const runtime = createBackendRpcRuntime({
         taskModel: "copilot/mock-model",
-        createEngine: ({ onTaskUpdated, onNewMessage }) =>
-            new CopilotEngine(onTaskUpdated, onNewMessage, adapter),
+        createEngine: ({ onTaskUpdated }) =>
+            new CopilotEngine(onTaskUpdated, adapter),
         registryPool,
     });
     runtimes.push(runtime);
@@ -610,8 +610,8 @@ describe("Copilot engine — systemInstructions propagation", () => {
         // Move task to 'backlog' which has no stage_instructions or workflow_instructions
         const runtime = createBackendRpcRuntime({
             taskModel: "copilot/mock-model",
-            createEngine: ({ onTaskUpdated, onNewMessage }) =>
-                new CopilotEngine(onTaskUpdated, onNewMessage, adapter),
+            createEngine: ({ onTaskUpdated }) =>
+                new CopilotEngine(onTaskUpdated, adapter),
         });
         runtimes.push(runtime);
         const { taskId } = await runtime.createTask();

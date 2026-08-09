@@ -143,7 +143,7 @@ describe("ClaudeEngine.listCommands — path resolution", () => {
       return origListCommands(cwd);
     };
 
-    const engine = new ClaudeEngine(undefined, () => {}, () => {}, adapter);
+    const engine = new ClaudeEngine(undefined, () => {}, adapter);
     await engine.listCommands(taskId);
 
     expect(capturedCwds).toHaveLength(1);
@@ -168,7 +168,7 @@ describe("ClaudeEngine.listCommands — path resolution", () => {
       return [];
     };
 
-    const engine = new ClaudeEngine(undefined, () => {}, () => {}, adapter);
+    const engine = new ClaudeEngine(undefined, () => {}, adapter);
     await engine.listCommands(taskId);
 
     expect(capturedCwds).toHaveLength(1);
@@ -177,7 +177,7 @@ describe("ClaudeEngine.listCommands — path resolution", () => {
 
   it("returns empty array when task row does not exist", async () => {
     const adapter = new MockClaudeSdkAdapter();
-    const engine = new ClaudeEngine(undefined, () => {}, () => {}, adapter);
+    const engine = new ClaudeEngine(undefined, () => {}, adapter);
 
     const result = await engine.listCommands(999999);
 
@@ -193,7 +193,7 @@ describe("ClaudeEngine.listCommands — path resolution", () => {
       { name: "opsx:propose", description: "" },
     ];
 
-    const engine = new ClaudeEngine(undefined, () => {}, () => {}, adapter);
+    const engine = new ClaudeEngine(undefined, () => {}, adapter);
     const commands = await engine.listCommands(taskId);
 
     expect(commands).toEqual([
@@ -239,7 +239,7 @@ describe("CursorEngine.listCommands — path resolution", () => {
       getSkillPaths: () => [],
     };
 
-    const engine = new CursorEngine(() => {}, () => {}, new MockCursorSdkAdapter(), spyDialect);
+    const engine = new CursorEngine(() => {}, new MockCursorSdkAdapter(), spyDialect);
     await engine.listCommands(taskId);
 
     expect(dialectCalls).toHaveLength(1);
@@ -258,7 +258,7 @@ describe("CursorEngine.listCommands — path resolution", () => {
       getSkillPaths: () => [],
     };
 
-    const engine = new CursorEngine(() => {}, () => {}, new MockCursorSdkAdapter(), spyDialect);
+    const engine = new CursorEngine(() => {}, new MockCursorSdkAdapter(), spyDialect);
     await engine.listCommands(taskId);
 
     expect(dialectCalls).toHaveLength(1);
@@ -272,7 +272,7 @@ describe("CursorEngine.listCommands — path resolution", () => {
       resolvePrompt: async (v: string) => ({ content: v, wasSlash: false }),
       getSkillPaths: () => [],
     };
-    const engine = new CursorEngine(() => {}, () => {}, new MockCursorSdkAdapter(), spyDialect);
+    const engine = new CursorEngine(() => {}, new MockCursorSdkAdapter(), spyDialect);
     const result = await engine.listCommands(999999);
     expect(result).toEqual([]);
   });

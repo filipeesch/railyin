@@ -17,7 +17,7 @@ import { formatReviewMessageForLLM } from "../workflow/review.ts";
 import { compactMessages } from "../conversation/context.ts";
 import type { Database } from "bun:sqlite";
 import type { CodeReviewPayload } from "../../shared/rpc-types.ts";
-import type { EngineEvent, ExecutionEngine, ExecutionParams, EngineResumeInput } from "../engine/types.ts";
+import type { EngineEvent, ExecutionEngine, ExecutionParams } from "../engine/types.ts";
 
 let db: Database;
 let gitDir: string;
@@ -61,7 +61,7 @@ function makeHandlers() {
     async *execute(_params: ExecutionParams): AsyncIterable<EngineEvent> {
       yield { type: "done" };
     }
-    async resume(_executionId: number, _input: EngineResumeInput): Promise<void> {}
+    async resume(_executionId: number, _input: never): Promise<void> {}
     cancel(_executionId: number): void {}
     async listModels() { return []; }
     async listCommands() { return []; }
@@ -70,7 +70,6 @@ function makeHandlers() {
   const orch = new Orchestrator(
     db,
     makeTestRegistry(new NoopEngine()),
-    () => {},
     () => {},
     () => {},
     new WorkspaceRepository(db),
@@ -407,13 +406,11 @@ describe("handleCodeReview DB read", () => {
     );
 
     // Trigger sendMessage with code_review type (no payload)
-    let capturedMessageContent: string | null = null;
-    const { message } = await handlers["tasks.sendMessage"]({ taskId, content: JSON.stringify({ _type: "code_review" }) });
+    const result = await handlers["tasks.sendMessage"]({ taskId, content: JSON.stringify({ _type: "code_review" }) });
 
-    expect(message.type).toBe("code_review");
-    // The stored content should include the file path from DB
-    const payload: CodeReviewPayload = JSON.parse(message.content);
-    expect(payload.files.some((f: any) => f.path === "app.ts")).toBe(true);
+    // 07-01 contract: sendMessage returns { executionId } — the code_review
+    // payload row is no longer persisted (conversation_messages is frozen).
+    expect(result.executionId).toBeGreaterThan(0);
   });
 
   it("includes frontend manual edits in the stored code_review payload", async () => {
@@ -434,13 +431,13 @@ describe("handleCodeReview DB read", () => {
       },
     ];
 
-    const { message } = await handlers["tasks.sendMessage"]({
+    const result = await handlers["tasks.sendMessage"]({
       taskId,
       content: JSON.stringify({ _type: "code_review", manualEdits }),
     });
 
-    const payload: CodeReviewPayload = JSON.parse(message.content);
-    expect(payload.manualEdits).toEqual(manualEdits);
+    // 07-01 contract: sendMessage returns { executionId } — no message payload.
+    expect(result.executionId).toBeGreaterThan(0);
   });
 });
 

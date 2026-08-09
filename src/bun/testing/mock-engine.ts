@@ -2,7 +2,6 @@ import type {
   CommandInfo,
   EngineEvent,
   EngineModelInfo,
-  EngineResumeInput,
   ExecutionEngine,
   ExecutionParams,
 } from "../engine/types.ts";
@@ -50,7 +49,6 @@ function scriptedEvents(prompt: string): { events: EngineEvent[]; pauseMs?: numb
     // Long-pause run (concurrent-run test in 02-02): a token, a 2s silence, then done.
     return { events: [
       { type: "token", content: "slow" },
-      { type: "status", message: "waiting" },
       { type: "done" },
     ], pauseMs: 2000 };
   }
@@ -122,15 +120,10 @@ export class MockExecutionEngine implements ExecutionEngine {
     }
 
     if (params.signal.aborted || this.cancelled.has(params.executionId)) return;
-    yield {
-      type: "usage",
-      inputTokens: params.prompt.length,
-      outputTokens: response.length,
-    };
     yield { type: "done" };
   }
 
-  async resume(_executionId: number, _input: EngineResumeInput): Promise<void> { }
+  async resume(_executionId: number, _input: never): Promise<void> { }
 
   cancel(executionId: number): void {
     this.cancelled.add(executionId);

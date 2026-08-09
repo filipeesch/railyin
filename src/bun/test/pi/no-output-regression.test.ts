@@ -123,9 +123,8 @@ describe("Pi no-output regression", () => {
     const engine = new PiEngine(
       "test-pi",
       config,
-      () => {},
-      () => {},
-      undefined,
+                  () => {},
+                  undefined,
       new NullModelSettingsRepository(),
       createFauxSessionFactory as any,
     );

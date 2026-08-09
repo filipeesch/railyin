@@ -44,7 +44,7 @@ function createClaudeRuntime(adapter: MockClaudeSdkAdapter, registryPool?: McpRe
   const runtime = createBackendRpcRuntime({
     taskModel: "claude/claude-sonnet-4-6",
     createEngine: ({ onTaskUpdated }) =>
-      new ClaudeEngine("claude-sonnet-4-6", onTaskUpdated, undefined, adapter),
+      new ClaudeEngine("claude-sonnet-4-6", onTaskUpdated, adapter),
     registryPool,
   });
   runtimes.push(runtime);

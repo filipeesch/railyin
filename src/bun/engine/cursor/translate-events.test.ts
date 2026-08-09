@@ -119,7 +119,7 @@ describe("extractStructuredResult", () => {
     expect(r.detailedResult).toBe("out\nerr");
   });
 
-  it("edit: surfaces diffString as detailedResult (writtenFiles trimmed)", () => {
+  it("edit: surfaces diffString as detailedResult (file-diff extraction trimmed)", () => {
     const r = extractStructuredResult({
       status: "success",
       value: {
@@ -223,7 +223,7 @@ describe("translateCursorMessage", () => {
     });
   });
 
-  it("tool_call completed edit → tool_result WITH detailedResult (writtenFiles trimmed)", () => {
+  it("tool_call completed edit → tool_result WITH detailedResult (file-diff extraction trimmed)", () => {
     const events = translateCursorMessage({
       type: "tool_call",
       call_id: "tc-2",

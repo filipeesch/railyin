@@ -128,9 +128,8 @@ function makePiEngine(session: MockBgSession, config: PiEngineConfig): PiEngine 
   return new PiEngine(
     "test-pi",
     config,
-    () => {},
-    () => {},
-    undefined,
+            () => {},
+            undefined,
     new StubModelSettingsRepository(128_000),
     async () => session as any,
   );

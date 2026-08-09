@@ -9,7 +9,7 @@
  * Compaction: handled by Copilot's infinite sessions feature.
  */
 
-import type { ExecutionEngine, ExecutionParams, EngineEvent, EngineModelInfo, CommandInfo, OnTaskUpdated, OnNewMessage } from "../types.ts";
+import type { ExecutionEngine, ExecutionParams, EngineEvent, EngineModelInfo, CommandInfo, OnTaskUpdated } from "../types.ts";
 import type { CopilotSdkAdapter, CopilotSdkAttachment, CopilotSdkSession, CopilotSdkModelInfo } from "./session";
 import { copilotSessionIdForConversation, copilotSessionIdForTask, createDefaultCopilotSdkAdapter } from "./session";
 import { approveAll } from "@github/copilot-sdk";
@@ -77,7 +77,6 @@ export class CopilotEngine implements ExecutionEngine {
 
   constructor(
     onTaskUpdated: OnTaskUpdated,
-    _onNewMessage: OnNewMessage,
     sdkAdapter: CopilotSdkAdapter = createDefaultCopilotSdkAdapter(),
     dialect: CopilotDialect = new CopilotDialect(),
     // cliPath is only used when constructing the default adapter above;
@@ -220,7 +219,7 @@ export class CopilotEngine implements ExecutionEngine {
       // fail to match the dialect's leading "/command" pattern.
       // Single-pass turn: the ask_user/shell_approval pause loop was trimmed in
       // 07-02 (EngineResumeInput deleted), so the run ends when the stream ends
-      // or the run is aborted — no waitForResume between turns.
+      // or the run is aborted — no resume-wait between turns.
       {
         // Fire the prompt; pass the promise into translateCopilotStream so a rejection
         // (e.g. CLI crash) is surfaced as a fatal error rather than silently hanging.
@@ -288,15 +287,6 @@ export class CopilotEngine implements ExecutionEngine {
           sendPromise,
           worktreePath: workingDirectory,
           onWatchdogFire,
-          onRawEvent: (rawEvent) => {
-            params.onRawModelMessage?.({
-              engine: "copilot",
-              sessionId: sdkSessionId,
-              direction: "inbound",
-              eventType: rawEvent.type,
-              payload: rawEvent as unknown as Record<string, unknown>,
-            });
-          },
           onHeartbeat: () => this.sdkAdapter.touchLease(sdkSessionId, "running"),
         })) {
           this.sdkAdapter.touchLease(sdkSessionId, "running");

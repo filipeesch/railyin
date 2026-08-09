@@ -20,10 +20,10 @@ describe("CursorEngine — deterministic agentId forwarding (§6.5.1)", () => {
             const { taskId, conversationId } = await runtime.createTask();
 
             const first = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "ping 1" });
-            await runtime.recorder.waitForStreamDone(first.executionId);
+            await runtime.waitForExecutionStatus(first.executionId, "completed");
 
             const second = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "ping 2" });
-            await runtime.recorder.waitForStreamDone(second.executionId);
+            await runtime.waitForExecutionStatus(second.executionId, "completed");
 
             const expected = cursorAgentIdForConversation(taskId, conversationId);
 
@@ -97,19 +97,19 @@ class SpyDialect implements SlashCommandDialect {
 describe("CursorEngine dialect injection", () => {
   it("dialect passed to constructor is stored and used", () => {
     const spy = new SpyDialect();
-    const engine = new CursorEngine(() => {}, () => {}, new MockCursorSdkAdapter(), spy);
+    const engine = new CursorEngine(() => {}, new MockCursorSdkAdapter(), spy);
     expect((engine as any).dialect).toBe(spy);
   });
 
   it("default dialect is CursorDialect when none provided", () => {
-    const engine = new CursorEngine(() => {}, () => {}, new MockCursorSdkAdapter());
+    const engine = new CursorEngine(() => {}, new MockCursorSdkAdapter());
     expect((engine as any).dialect).toBeInstanceOf(CursorDialect);
   });
 
   it("pre-aborted execution does NOT call dialect.resolvePrompt", async () => {
     const spy = new SpyDialect();
     const adapter = new MockCursorSdkAdapter();
-    const engine = new CursorEngine(() => {}, () => {}, adapter, spy);
+    const engine = new CursorEngine(() => {}, adapter, spy);
 
     const controller = new AbortController();
     controller.abort();
@@ -142,7 +142,7 @@ describe("CursorEngine dialect injection", () => {
 
       const spy = new SpyDialect();
       const adapter = new MockCursorSdkAdapter().queueTurn({ steps: [token("done")] });
-      const engine = new CursorEngine(() => {}, () => {}, adapter, spy);
+      const engine = new CursorEngine(() => {}, adapter, spy);
 
       const gen = engine.execute({
         executionId: 1,
@@ -173,7 +173,7 @@ describe("CursorEngine dialect injection", () => {
   it("plain prompt is forwarded unchanged (dialect no longer consulted internally)", async () => {
     const spy = new SpyDialect();
     const adapter = new MockCursorSdkAdapter().queueTurn({ steps: [token("done")] });
-    const engine = new CursorEngine(() => {}, () => {}, adapter, spy);
+    const engine = new CursorEngine(() => {}, adapter, spy);
 
     const gen = engine.execute({
       executionId: 1,
@@ -201,7 +201,7 @@ describe("CursorEngine dialect injection", () => {
       writeFileSync(join(skillDir, "SKILL.md"), "# My Skill\n\nDo amazing things.", "utf-8");
 
       const adapter = new MockCursorSdkAdapter().queueTurn({ steps: [token("done")] });
-      const engine = new CursorEngine(() => {}, () => {}, adapter);
+      const engine = new CursorEngine(() => {}, adapter);
 
       const gen = engine.execute({
         executionId: 1,
@@ -230,7 +230,7 @@ describe("CursorEngine dialect injection", () => {
     const spy = new SpyDialect();
     spy.skillPathsResult = []; // empty
     const adapter = new MockCursorSdkAdapter().queueTurn({ steps: [token("done")] });
-    const engine = new CursorEngine(() => {}, () => {}, adapter, spy);
+    const engine = new CursorEngine(() => {}, adapter, spy);
 
     const gen = engine.execute({
       executionId: 1,
@@ -258,7 +258,7 @@ describe("CursorEngine — compaction wiring (§7 compaction)", () => {
             displayName: "Claude Opus 4.8",
             contextWindow: 300_000,
         }]);
-        const engine = new CursorEngine(() => {}, () => {}, adapter);
+        const engine = new CursorEngine(() => {}, adapter);
 
         const models = await engine.listModels();
         expect(models[0]).toMatchObject({
@@ -270,7 +270,7 @@ describe("CursorEngine — compaction wiring (§7 compaction)", () => {
 
     it("compact(taskId=null) rejects chat-session compaction as unsupported", async () => {
         const adapter = new MockCursorSdkAdapter();
-        const engine = new CursorEngine(() => {}, () => {}, adapter);
+        const engine = new CursorEngine(() => {}, adapter);
 
         await expect(
             engine.compact(null, 1234, "/tmp", "workspace"),

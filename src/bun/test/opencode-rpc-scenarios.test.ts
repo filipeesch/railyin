@@ -40,8 +40,8 @@ function createOpenCodeRuntime(adapter: MockOpenCodeSdkAdapter, registryPool?: M
 
   const runtime = createBackendRpcRuntime({
     taskModel: TASK_MODEL,
-    createEngine: ({ onTaskUpdated, onNewMessage }) =>
-      new OpenCodeEngine(onTaskUpdated, onNewMessage, adapter),
+    createEngine: ({ onTaskUpdated }) =>
+      new OpenCodeEngine(onTaskUpdated, adapter),
     registryPool,
   });
   runtimes.push(runtime);

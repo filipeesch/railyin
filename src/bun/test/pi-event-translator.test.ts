@@ -9,7 +9,7 @@ import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 // ─── Compaction event translation ────────────────────────────────────────────
 
 describe("translateEvent — compaction events", () => {
-  it("ET-C1: compaction_start emits a compaction_start engine event", () => {
+  it("ET-C1: compaction_start emits no engine event (compaction_summary trimmed)", () => {
     const event: AgentSessionEvent = {
       type: "compaction_start",
       reason: "context_limit",
@@ -17,11 +17,10 @@ describe("translateEvent — compaction events", () => {
 
     const result = translateEvent(event);
 
-    expect(result).toHaveLength(1);
-    expect(result[0]).toEqual({ type: "compaction_start" });
+    expect(result).toEqual([]);
   });
 
-  it("ET-C2: compaction_end with result emits a compaction_done engine event", () => {
+  it("ET-C2: compaction_end with result emits no engine event (compaction_summary trimmed)", () => {
     const event: AgentSessionEvent = {
       type: "compaction_end",
       aborted: false,
@@ -35,11 +34,7 @@ describe("translateEvent — compaction events", () => {
 
     const result = translateEvent(event);
 
-    expect(result).toHaveLength(1);
-    expect(result[0]).toMatchObject({
-      type: "compaction_done",
-      summary: "Context was compacted. The project is a TypeScript monorepo.",
-    });
+    expect(result).toEqual([]);
   });
 
   it("ET-C3: compaction_end aborted emits nothing", () => {

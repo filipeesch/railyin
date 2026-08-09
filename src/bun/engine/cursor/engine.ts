@@ -14,7 +14,7 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import type { SlashCommandDialect } from "../dialects/slash-command-dialect.ts";
 import { CursorDialect } from "../dialects/cursor-dialect.ts";
-import type { ExecutionEngine, ExecutionParams, EngineEvent, EngineModelInfo, CommandInfo, OnTaskUpdated, OnNewMessage, CommonToolContext } from "../types.ts";
+import type { ExecutionEngine, ExecutionParams, EngineEvent, EngineModelInfo, CommandInfo, OnTaskUpdated, CommonToolContext } from "../types.ts";
 import { createDefaultCursorSdkAdapter, type CursorSdkAdapter } from "./adapter.ts";
 import { buildCursorTools } from "./tools.ts";
 import { taskLspRegistry } from "../../lsp/task-registry.ts";
@@ -39,7 +39,6 @@ export class CursorEngine implements ExecutionEngine {
 
   constructor(
     onTaskUpdated: OnTaskUpdated,
-    _onNewMessage: OnNewMessage,
     adapter: CursorSdkAdapter = createDefaultCursorSdkAdapter(),
     dialect: SlashCommandDialect = new CursorDialect(),
   ) {
@@ -276,15 +275,6 @@ export class CursorEngine implements ExecutionEngine {
       customTools,
       agentId,
       workspaceKey: params.workspaceKey!,
-      onRawMessage: (message: unknown) => {
-        params.onRawModelMessage?.({
-          engine: "cursor",
-          sessionId,
-          direction: "inbound",
-          eventType: (message as { type?: string })?.type ?? "unknown",
-          payload: message as Record<string, unknown>,
-        });
-      },
     };
 
     try {

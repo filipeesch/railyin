@@ -103,7 +103,6 @@ function makeOptions(overrides?: Partial<ExecutionControllerOptions>): Execution
     workingDirectory: "/cwd",
     signal: undefined,
     suspendRef: {},
-    onRawModelMessage: undefined,
     runDriver,
     compactionCoordinator,
     ...overrides,
@@ -135,23 +134,6 @@ describe("PiExecutionController", () => {
 
     expect(events).toContainEqual({ type: "token", content: "Hi" });
     // The controller does not emit { type: "done" }; the facade yields it after the queue closes.
-  });
-
-  test("EC-2: emits usage event on turn_end", async () => {
-    const opts = makeOptions();
-    const fake = opts.session as unknown as FakeAgentSession;
-    const driver = opts.runDriver as MockRunDriver;
-
-    driver.whenStart(() => {
-      fake.emit({ type: "turn_end" });
-      fake.emit({ type: "agent_end" });
-    });
-
-    const { queue, cleanup } = startExecution(opts);
-    const events = await drain(queue);
-    cleanup();
-
-    expect(events).toContainEqual({ type: "usage", inputTokens: 1000, outputTokens: 0, contextWindow: 128_000 });
   });
 
   test("EC-3: resumes after background compaction when last message is not assistant", async () => {
@@ -220,24 +202,4 @@ describe("PiExecutionController", () => {
     expect(events).not.toContainEqual({ type: "done" });
   });
 
-  test("EC-6: forwards raw model messages", async () => {
-    const rawMessages: any[] = [];
-    const opts = makeOptions({
-      onRawModelMessage: (msg) => rawMessages.push(msg),
-    });
-    const fake = opts.session as unknown as FakeAgentSession;
-    const driver = opts.runDriver as MockRunDriver;
-
-    driver.whenStart(() => {
-      fake.emit({ type: "agent_end" });
-    });
-
-    const { queue, cleanup } = startExecution(opts);
-    await drain(queue);
-    cleanup();
-
-    expect(rawMessages).toHaveLength(1);
-    expect(rawMessages[0].eventType).toBe("agent_end");
-    expect(rawMessages[0].sessionId).toBe("1");
-  });
 });

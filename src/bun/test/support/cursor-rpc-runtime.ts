@@ -13,8 +13,8 @@ export function createCursorRpcRuntime(
 ): BackendRpcRuntime {
     return createBackendRpcRuntime({
         taskModel: "cursor/mock-model",
-        createEngine: ({ onTaskUpdated, onNewMessage }) =>
-            new CursorEngine(onTaskUpdated, onNewMessage, adapter),
+        createEngine: ({ onTaskUpdated }) =>
+            new CursorEngine(onTaskUpdated, adapter),
         registryPool,
     });
 }

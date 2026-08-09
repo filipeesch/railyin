@@ -1,4 +1,4 @@
-import type { ExecutionEngine, ExecutionParams, EngineEvent, EngineModelInfo, EngineResumeInput, CommandInfo, OnTaskUpdated, OnNewMessage } from "../types.ts";
+import type { ExecutionEngine, ExecutionParams, EngineEvent, EngineModelInfo, CommandInfo, OnTaskUpdated } from "../types.ts";
 import type { ClaudeRunConfig, ClaudeSdkAdapter } from "./adapter.ts";
 import type { ModelSettingAxis } from "../../../shared/rpc-types.ts";
 import { claudeSessionIdForConversation, claudeSessionIdForTask, createDefaultClaudeSdkAdapter } from "./adapter.ts";
@@ -18,15 +18,10 @@ export class ClaudeEngine implements ExecutionEngine {
   private readonly defaultModel: string | undefined;
   private readonly sdkAdapter: ClaudeSdkAdapter;
   private readonly _onTaskUpdated: OnTaskUpdated;
-  private readonly pendingResumes = new Map<number, {
-    resolve: (input: EngineResumeInput) => void;
-    reject: (error: Error) => void;
-  }>();
 
   constructor(
     defaultModel: string | undefined,
     onTaskUpdated: OnTaskUpdated,
-    _onNewMessage: OnNewMessage,
     sdkAdapter: ClaudeSdkAdapter = createDefaultClaudeSdkAdapter(),
   ) {
     this.defaultModel = defaultModel;
@@ -105,22 +100,14 @@ export class ClaudeEngine implements ExecutionEngine {
     }
   }
 
-  async resume(executionId: number, input: EngineResumeInput): Promise<void> {
-    this.sdkAdapter.touchExecutionLease?.(executionId, "running");
-    const pending = this.pendingResumes.get(executionId);
-    if (!pending) {
-      throw new Error(`Execution ${executionId} is not waiting for resume input`);
-    }
-    this.pendingResumes.delete(executionId);
-    pending.resolve(input);
+  async resume(_executionId: number, _input: never): Promise<void> {
+    // All engine-level resume channels were trimmed with ask_user/shell_approval
+    // (EngineResumeInput deleted). Decision interrupts resume via a NEW turn —
+    // executeChatTurn/executeHumanTurn deliver the answer as engineContent —
+    // never through engine.resume().
   }
 
   cancel(executionId: number): void {
-    const pending = this.pendingResumes.get(executionId);
-    if (pending) {
-      this.pendingResumes.delete(executionId);
-      pending.reject(new Error(`Execution ${executionId} cancelled`));
-    }
     void this.sdkAdapter.cancel(executionId).catch(() => { });
   }
 
@@ -180,42 +167,6 @@ export class ClaudeEngine implements ExecutionEngine {
 
   async shutdown(options: import("../types.ts").EngineShutdownOptions = { reason: "app-exit", deadlineMs: 3_000 }): Promise<void> {
     await this.sdkAdapter.shutdownAll?.(options);
-  }
-
-  private waitForResume(
-    executionId: number,
-    _request: { type: "ask_user" | "shell_approval" },
-    signal?: AbortSignal,
-  ): Promise<EngineResumeInput> {
-    return new Promise<EngineResumeInput>((resolve, reject) => {
-      const existing = this.pendingResumes.get(executionId);
-      if (existing) {
-        reject(new Error(`Execution ${executionId} is already waiting for resume input`));
-        return;
-      }
-
-      const cleanup = () => {
-        signal?.removeEventListener("abort", onAbort);
-        this.pendingResumes.delete(executionId);
-      };
-
-      const onAbort = () => {
-        cleanup();
-        reject(new Error(`Execution ${executionId} aborted while waiting for input`));
-      };
-
-      signal?.addEventListener("abort", onAbort, { once: true });
-      this.pendingResumes.set(executionId, {
-        resolve: (input) => {
-          cleanup();
-          resolve(input);
-        },
-        reject: (error) => {
-          cleanup();
-          reject(error);
-        },
-      });
-    });
   }
 }
 

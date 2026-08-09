@@ -9,9 +9,9 @@
  *   session.error            → { type: "error", fatal: true }
  *
  * Trimmed (07-02): assistant.usage (usage display), session.ask_user,
- * session.compaction_* (compaction_summary), report_intent status, and
- * writtenFiles on tool_result (file_diff) — the EngineEvent union members
- * were removed; the bridge no longer consumes them.
+ * session.compaction_* (compaction_summary), report_intent status, and the
+ * file-diff extraction on tool_result — the EngineEvent union members were
+ * removed; the bridge no longer consumes them.
  */
 
 import type { CopilotSdkEvent, CopilotSdkSession } from "./session.ts";

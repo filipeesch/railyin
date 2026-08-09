@@ -48,9 +48,9 @@ export interface StructuredResult {
  *
  * Handles:
  *   - Shell: extracts stdout/stderr into detailedResult
- *   - Edit/Write: surfaces the diff text as detailedResult (writtenFiles was
- *     trimmed with the file_diff EngineEvent surface — the renderer derives
- *     diffs from tool ARGS via buildDiffPayloadsFromArgs)
+ *   - Edit/Write: surfaces the diff text as detailedResult (the file-diff
+ *     extraction was trimmed with the file_diff EngineEvent surface — the
+ *     renderer derives diffs from tool ARGS via buildDiffPayloadsFromArgs)
  *   - Delete: handles empty result gracefully
  *   - Read: passes through content as detailedResult
  *   - Unknown: falls back to JSON stringify
@@ -76,7 +76,7 @@ export function extractStructuredResult(rawResult: unknown): StructuredResult {
   }
 
   // Edit/Write: { linesAdded, linesRemoved, diffString } — keep the diff text
-  // as detailedResult (the writtenFiles extraction was trimmed).
+  // as detailedResult (the file-diff extraction was trimmed).
   if (typeof value.diffString === "string" && value.diffString.includes("@@")) {
     return { detailedResult: value.diffString };
   }

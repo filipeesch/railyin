@@ -93,12 +93,9 @@ function makeDbOrchestrator(): ExecutionCoordinator {
     executeHumanTurn: async () => { throw new Error("not implemented"); },
     executeRetry: async () => { throw new Error("not implemented"); },
     executeCodeReview: async () => { throw new Error("not implemented"); },
-    respondShellApprovalByExecution: async () => { throw new Error("not implemented"); },
     executeChatTurn: async () => { throw new Error("not implemented"); },
     cancel: () => {},
     listModels: async () => [],
-    compactTask: async () => {},
-    compactConversation: async () => {},
     listCommands: async () => [],
   };
 }
@@ -581,24 +578,6 @@ describe("conversations handlers", () => {
     expect(result.messages.every((message) => message.conversationId === conversationId)).toBe(true);
   });
 
-  it("loads stream events by conversationId", async () => {
-    const { taskId, conversationId } = seedProjectAndTask(db, gitDir);
-    db.run(
-      "INSERT INTO executions (id, task_id, conversation_id, from_state, to_state, status, attempt) VALUES (?, ?, ?, 'plan', 'plan', 'running', 1)",
-      [10, taskId, conversationId],
-    );
-    db.run(
-      "INSERT INTO stream_events (id, conversation_id, execution_id, seq, block_id, type, content, metadata, parent_block_id, subagent_id) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL), (?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL)",
-      [1, conversationId, 10, 0, "root-1", "assistant", "alpha", 2, conversationId, 10, 1, "root-2", "assistant", "beta"],
-    );
-
-    const handlers = conversationHandlers(db, null);
-    const canonical = await handlers["conversations.getStreamEvents"]({ conversationId, afterSeq: 0 });
-
-    expect(canonical).toHaveLength(1);
-    expect(canonical[0]?.content).toBe("beta");
-  });
-
   it("computes context usage for session conversations without a task", async () => {
     db.run("INSERT INTO conversations (task_id) VALUES (NULL)");
     const conversationId = (db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!).id;
@@ -673,8 +652,7 @@ describe("chat session parity handlers", () => {
             executionId: 7,
           };
         },
-        compactConversation: async () => {},
-      } as unknown as ExecutionCoordinator,
+          } as unknown as ExecutionCoordinator,
     );
 
     const attachments: Attachment[] = [
@@ -816,8 +794,7 @@ describe("chat session parity handlers", () => {
           capturedContent.push(engineContent as string);
           return { message: { id: 1, taskId: null, conversationId, type: "user" as const, role: "user" as const, content: "", metadata: null, createdAt: "" }, executionId: 1 };
         },
-        compactConversation: async () => {},
-      } as unknown as ExecutionCoordinator,
+          } as unknown as ExecutionCoordinator,
     );
 
     await handlers["chatSessions.sendMessage"]({
@@ -851,8 +828,7 @@ describe("chat session parity handlers", () => {
           capturedContent.push(engineContent as string);
           return { message: { id: 1, taskId: null, conversationId, type: "user" as const, role: "user" as const, content: "", metadata: null, createdAt: "" }, executionId: 1 };
         },
-        compactConversation: async () => {},
-      } as unknown as ExecutionCoordinator,
+          } as unknown as ExecutionCoordinator,
     );
 
     await handlers["chatSessions.submitDecisions"]({
@@ -910,11 +886,8 @@ function makeMockOrchestrator(models: Array<{ qualifiedId: string | null; contex
     executeHumanTurn: async () => { throw new Error("not implemented"); },
     executeRetry: async () => { throw new Error("not implemented"); },
     executeCodeReview: async () => { throw new Error("not implemented"); },
-    respondShellApprovalByExecution: async () => { throw new Error("not implemented"); },
     executeChatTurn: async () => { throw new Error("not implemented"); },
     cancel: () => {},
-    compactTask: async () => {},
-    compactConversation: async () => {},
     listCommands: async () => [],
   };
 }

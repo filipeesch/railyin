@@ -16,7 +16,7 @@ function makeEngine(providers: PiEngineConfig["providers"] = {}): PiEngine {
     type: "pi",
     providers,
   };
-  return new PiEngine("pi-local", config, () => {}, () => {}, undefined, new NullModelSettingsRepository());
+  return new PiEngine("pi-local", config, () => {}, undefined, new NullModelSettingsRepository());
 }
 
 function okJsonResponse(body: unknown): Response {

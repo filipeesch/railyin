@@ -68,9 +68,8 @@ function makePiEngine(session: MockAgentSession): PiEngine {
   return new PiEngine(
     "test-pi",
     config,
-    () => {},
-    () => {},
-    undefined,
+            () => {},
+            undefined,
     new StubModelSettingsRepository(128_000),
     async () => session as any,
   );
@@ -131,9 +130,8 @@ describe("PiEngine.compact() — model resolution", () => {
     const engine = new PiEngine(
       "test-pi",
       { type: "pi" },
-      () => {},
-      () => {},
-      undefined,
+                  () => {},
+                  undefined,
       mockRepo,
       async (opts: any) => {
         capturedModel = opts.model;
@@ -157,9 +155,8 @@ describe("PiEngine.compact() — model resolution", () => {
     const engine = new PiEngine(
       "test-pi",
       { type: "pi" },
-      () => {},
-      () => {},
-      undefined,
+                  () => {},
+                  undefined,
       mockRepo,
       async (opts: any) => {
         capturedContextWindow = opts.model.contextWindow;
@@ -180,9 +177,8 @@ describe("PiEngine.compact() — model resolution", () => {
     const engine = new PiEngine(
       "test-pi",
       { type: "pi" },
-      () => {},
-      () => {},
-      undefined,
+                  () => {},
+                  undefined,
       mockRepo,
       async () => ({} as any),
     );
@@ -199,9 +195,8 @@ describe("PiEngine.compact() — model resolution", () => {
     const engine = new PiEngine(
       "test-pi",
       { type: "pi" },
-      () => {},
-      () => {},
-      undefined,
+                  () => {},
+                  undefined,
       mockRepo,
       async () => ({} as any),
     );
@@ -220,9 +215,8 @@ describe("PiEngine.compact()", () => {
     const engine = new PiEngine(
       "test-pi",
       config,
-      () => {},
-      () => {},
-      undefined,
+                  () => {},
+                  undefined,
       new StubModelSettingsRepository(128_000),
       async () => { factoryCallCount++; return session as any; },
     );
@@ -361,9 +355,8 @@ function makePiEngineWithPresets(session: MockAgentSession): PiEngine {
   return new PiEngine(
     "test-pi",
     config,
-    () => {},
-    () => {},
-    undefined,
+            () => {},
+            undefined,
     new StubModelSettingsRepository(128_000),
     async () => session as any,
   );

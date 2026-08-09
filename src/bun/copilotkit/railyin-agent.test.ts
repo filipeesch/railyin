@@ -183,7 +183,6 @@ beforeEach(() => {
     executeHumanTurn: async () => { throw new Error("not implemented"); },
     executeRetry: async () => { throw new Error("not implemented"); },
     executeCodeReview: async () => { throw new Error("not implemented"); },
-    respondShellApprovalByExecution: async () => { throw new Error("not implemented"); },
     executeChatTurn: async (_sessionId, _conversationId, _content, _model, _mcp, ws, _att, _ec, opts) => {
       capturedWorkspaceKey = ws ?? null;
       capturedOpts = opts;
@@ -199,8 +198,6 @@ beforeEach(() => {
     },
     cancel: (executionId) => cancelCalls.push(executionId),
     listModels: async () => [],
-    compactTask: async () => {},
-    compactConversation: async () => {},
     listCommands: async () => [],
   };
 });
@@ -293,8 +290,8 @@ describe("RailyinAgent", () => {
         capturedOpts = opts;
         if (opts) {
           opts.onEngineEvent?.({ type: "token", content: "Hello" });
-          opts.onEngineEvent?.({ type: "ask_user", payload: "{}" });
-          // no onRunEnd — consume ended via pause path
+          opts.onEngineEvent?.({ type: "done" });
+          // no onRunEnd — non-standard coordinator that never fires the terminal
         }
         return { message: { id: 1 } as never, executionId: 7 };
       },
@@ -401,7 +398,7 @@ describe("RailyinAgent", () => {
     expect(textEnd).toBeLessThan(types.lastIndexOf(EventType.RUN_FINISHED));
   });
 
-  test("4d: async ask_user pause (engine returns, no onRunEnd) completes with RUN_FINISHED (WR-02)", async () => {
+  test("4d: async terminal event without onRunEnd (engine returns) completes with RUN_FINISHED (WR-02)", async () => {
     const { conversationId } = seedChatSession(db);
     fakeCoordinator = {
       ...fakeCoordinator,
@@ -409,8 +406,8 @@ describe("RailyinAgent", () => {
         capturedOpts = opts;
         setTimeout(() => {
           opts?.onEngineEvent?.({ type: "token", content: "Hi" });
-          // pause-path return: ask_user is the last event, no onRunEnd.
-          opts?.onEngineEvent?.({ type: "ask_user", payload: "{}" });
+          // non-standard coordinator: terminal event without onRunEnd.
+          opts?.onEngineEvent?.({ type: "done" });
         }, 10);
         return { message: { id: 1 } as never, executionId: 44 };
       },
