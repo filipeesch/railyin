@@ -476,4 +476,61 @@ describe("decision cycle (RUNR-08, CHAT-09, D-09)", () => {
         expect(frames[frames.length - 1].type).toBe("RUN_ERROR");
         expect(frames[frames.length - 1]).toMatchObject({ code: "THREAD_BUSY" });
     });
+
+    test("17: post-restart resume — a decision paused before a restart is answerable on a fresh server (A2)", async () => {
+        const durableDir = mkdtempSync(join(tmpdir(), "railyn-durable-decision-"));
+        try {
+            // Server A: pause a decision into the durable data dir (JSONL log
+            // AND the SQLite DB — durableDb keeps the conversation +
+            // waiting_user executions row alive across restarts).
+            const serverA = await startServer({ mcpConfig: {}, dataDir: durableDir, durableDb: true });
+            const session = await serverA.request("chatSessions.create", { title: "d5" });
+            const threadId = String(session.conversationId);
+            const runRes = await postJsonOn(serverA.baseUrl, "/api/copilotkit/agent/default/run", runInput(threadId, "run-17a", "__SCRIPT_DECISION__"));
+            expect(runRes.status).toBe(200);
+            const runFrames = parseSseFrames(await runRes.text());
+            const last = runFrames[runFrames.length - 1] as { type?: string; outcome?: { type?: string; interrupts?: { id?: string }[] } };
+            expect(last.outcome?.type).toBe("interrupt");
+            const interruptId = last.outcome!.interrupts![0]!.id!;
+            await serverA.shutdown();
+
+            // Server B: a FRESH process over the SAME durable data dir — the
+            // in-memory registry is empty at boot, so the resume must reach
+            // the lazy rebuild (get() → ensureOpen).
+            const serverB = await startServer({ mcpConfig: {}, dataDir: durableDir, durableDb: true });
+            try {
+                // Cold connect replays the interrupt card (D-08, Pitfall 7).
+                const connectRes = await postJsonOn(serverB.baseUrl, "/api/copilotkit/agent/default/connect", runInput(threadId, "run-connect-17", "hello"));
+                expect(connectRes.status).toBe(200);
+                const frames = parseSseFrames(await connectRes.text());
+                const replayLast = frames[frames.length - 1] as { type?: string; outcome?: { type?: string; interrupts?: { id?: string }[] } };
+                expect(replayLast.type).toBe("RUN_FINISHED");
+                expect(replayLast.outcome?.type).toBe("interrupt");
+                expect(replayLast.outcome?.interrupts?.[0]?.id).toBe(interruptId);
+
+                // Post-restart resume succeeds with continuation frames — the
+                // ensureOpen fallback rebuilds the registry from the JSONL
+                // tail + the durable waiting_user row (A2).
+                const resumeRes = await postJsonOn(serverB.baseUrl, "/api/copilotkit/agent/default/run", resumeInput(threadId, "run-17b", [
+                    {
+                        interruptId,
+                        status: "resolved",
+                        payload: {
+                            decision: "approved",
+                            answers: [{ question: "Choose __DECISION_OPTION__", answer: "A", weight: "medium" }],
+                        },
+                    },
+                ]));
+                expect(resumeRes.status).toBe(200);
+                const resumeFrames = parseSseFrames(await resumeRes.text());
+                expect(resumeFrames.some((f) => f.type === "TEXT_MESSAGE_CONTENT" && f.delta === "Decision received, continuing.")).toBe(true);
+                expect(resumeFrames[resumeFrames.length - 1].type).toBe("RUN_FINISHED");
+                expect(resumeFrames.some((f) => f.type === "RUN_ERROR")).toBe(false);
+            } finally {
+                await serverB.shutdown();
+            }
+        } finally {
+            rmSync(durableDir, { recursive: true, force: true });
+        }
+    }, 30_000);
 });

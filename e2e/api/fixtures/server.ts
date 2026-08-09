@@ -45,6 +45,16 @@ export interface StartServerOptions {
      * deleted at shutdown and cannot survive a restart).
      */
     dataDir?: string;
+    /**
+     * When true, the SQLite DB lives at `<dataDir>/railyn.db` instead of
+     * in-memory: `--memory-db` is dropped from the spawn args and
+     * `RAILYN_DB` points at the file. The DB — conversations, executions,
+     * chat sessions — then survives server restarts, which the
+     * post-restart-resume e2e (03-03 test 17) depends on: a fresh server
+     * over the same durable dataDir must still find the conversation and
+     * the `waiting_user` executions row the registry rebuild correlates.
+     */
+    durableDb?: boolean;
 }
 
 const ROOT = new URL("../../../", import.meta.url).pathname;
@@ -165,6 +175,12 @@ export async function startServer(options?: StartServerOptions): Promise<TestSer
             writeFileSync(join(dataDir, "mcp.json"), JSON.stringify(options.mcpConfig, null, 2), "utf-8");
         }
     }
+    // A durable DB (survives restarts) requires a durable data dir — see the
+    // durableDb doc. Without it, `--memory-db` in the spawn args would clobber
+    // RAILYN_DB back to ":memory:".
+    if (options?.durableDb && dataDir) {
+        extraEnv.RAILYN_DB = join(dataDir, "railyn.db");
+    }
     if (options?.copilotkitProbe) {
         extraEnv.RAILYN_COPILOTKIT_PROBE = "1";
     }
@@ -179,7 +195,9 @@ export async function startServer(options?: StartServerOptions): Promise<TestSer
             "--define",
             '__RAILYN_DEV_CONFIG_DIR__=""',
             "src/bun/index.ts",
-            "--memory-db",
+            // durableDb: the DB file persists — drop --memory-db so RAILYN_DB
+            // env (set above) wins in index.ts.
+            ...(options?.durableDb ? [] : ["--memory-db"]),
             "--port=0",
         ],
         cwd: ROOT,

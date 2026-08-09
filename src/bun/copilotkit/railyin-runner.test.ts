@@ -253,4 +253,77 @@ describe("RailyinAgentRunner", () => {
     expect(types[types.length - 1]).toBe(EventType.RUN_FINISHED);
     expect(connected.some((e) => (e as { delta?: string }).delta === "hot")).toBe(true);
   });
+
+  test("6a: Replay A — an interrupt terminal re-emits verbatim: RUN_FINISHED outcome.interrupt is the LAST frame, never an INCOMPLETE_STREAM RUN_ERROR (Pitfall 7, D-08)", async () => {
+    store.append("9007", ev(EventType.RUN_STARTED, { threadId: "9007", runId: "int-1" }));
+    store.append("9007", ev(EventType.TEXT_MESSAGE_START, { messageId: "m1", role: "assistant" }));
+    store.append("9007", ev(EventType.TEXT_MESSAGE_CONTENT, { messageId: "m1", delta: "I need your decision." }));
+    store.append("9007", ev(EventType.TEXT_MESSAGE_END, { messageId: "m1" }));
+    store.append("9007", ev(EventType.RUN_FINISHED, {
+      threadId: "9007",
+      runId: "int-1",
+      outcome: {
+        type: "interrupt",
+        interrupts: [{ id: "decision-9007-1", reason: "decision_request", message: "mock context" }],
+      },
+    }));
+
+    const events = await collect<BaseEvent>(runner.connect({ threadId: "9007" }));
+    const last = events[events.length - 1] as unknown as {
+      type?: string;
+      outcome?: { type?: string; interrupts?: { id?: string; reason?: string }[] };
+    };
+    expect(last.type).toBe(EventType.RUN_FINISHED);
+    expect(last.outcome?.type).toBe("interrupt");
+    expect(last.outcome?.interrupts?.[0]?.id).toBe("decision-9007-1");
+    expect(last.outcome?.interrupts?.[0]?.reason).toBe("decision_request");
+    // The terminal is a NORMAL completion — the cold pipeline never converts
+    // it into an INCOMPLETE_STREAM RUN_ERROR (finalizeRunEvents early-return).
+    expect(events.some((e) => e.type === EventType.RUN_ERROR)).toBe(false);
+    // The interrupt terminal stays the FINAL frame — nothing appended after it.
+    expect(events[events.length - 1] as unknown).toBe(last as unknown);
+  });
+
+  test("6b: Replay B — a resume run replays with its input.resume[] intact across per-run boundaries (Pitfall 7, D-08)", async () => {
+    // Run 1: interrupt terminal.
+    store.append("9008", ev(EventType.RUN_STARTED, { threadId: "9008", runId: "int-1" }));
+    store.append("9008", ev(EventType.RUN_FINISHED, {
+      threadId: "9008",
+      runId: "int-1",
+      outcome: { type: "interrupt", interrupts: [{ id: "decision-9008-1", reason: "decision_request" }] },
+    }));
+    // Run 2: the resume run — RUN_STARTED carries input.resume[].
+    store.append("9008", ev(EventType.RUN_STARTED, {
+      threadId: "9008",
+      runId: "res-1",
+      input: {
+        threadId: "9008",
+        runId: "res-1",
+        messages: [{ id: "a1", role: "assistant", content: "I need your decision." }],
+        resume: [{ interruptId: "decision-9008-1", status: "resolved", payload: { decision: "approved" } }],
+      },
+    }));
+    store.append("9008", ev(EventType.TEXT_MESSAGE_START, { messageId: "m2", role: "assistant" }));
+    store.append("9008", ev(EventType.TEXT_MESSAGE_CONTENT, { messageId: "m2", delta: "Decision received, continuing." }));
+    store.append("9008", ev(EventType.TEXT_MESSAGE_END, { messageId: "m2" }));
+    store.append("9008", ev(EventType.RUN_FINISHED, { threadId: "9008", runId: "res-1", result: null }));
+
+    const events = await collect<BaseEvent>(runner.connect({ threadId: "9008" }));
+    const types = events.map((e) => e.type);
+    // Per-run boundaries preserved through compaction.
+    const boundaries = types.filter((t) => t === EventType.RUN_STARTED || t === EventType.RUN_FINISHED);
+    expect(boundaries).toEqual([
+      EventType.RUN_STARTED,
+      EventType.RUN_FINISHED,
+      EventType.RUN_STARTED,
+      EventType.RUN_FINISHED,
+    ]);
+    // The resume run's RUN_STARTED.input.resume[] survived the pipeline.
+    const resumeStarted = events.find(
+      (e) => e.type === EventType.RUN_STARTED && (e as { runId?: string }).runId === "res-1",
+    ) as unknown as { input?: { resume?: { interruptId?: string; status?: string }[] } };
+    expect(resumeStarted?.input?.resume?.[0]?.interruptId).toBe("decision-9008-1");
+    expect(resumeStarted?.input?.resume?.[0]?.status).toBe("resolved");
+    expect(events.some((e) => (e as { delta?: string }).delta === "Decision received, continuing.")).toBe(true);
+  });
 });
