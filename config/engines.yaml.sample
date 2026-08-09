@@ -122,18 +122,22 @@ engines:
   #   #
   #   #   # Reasoning config. `thinkingFormat` (renamed from the legacy `interleaved`)
   #   #   # maps to the pi SDK's `compat.thinkingFormat`; `reasoning` toggles extended
-  #   #   # thinking. `variants` become the "Mode" axis in the UI; each variant's
-  #   #   # `reasoningEffort` is the canonical pi SDK thinking level
-  #   #   # (off|minimal|low|medium|high|xhigh; "none" → off).
+  #   #   # thinking. `variants` become the "Mode" axis in the UI. Each variant drives
+  #   #   # reasoning via DIRECT request-body injection (decision #1953):
+  #   #   #   - `thinking: bool` → sends `thinking: { type: enabled|disabled }` on the wire.
+  #   #   #   - `options` are merged VERBATIM into the request (e.g. `reasoning_effort`,
+  #   #   #     `enable_thinking`, `chat_template_kwargs`) — whatever the provider needs.
+  #   #   # The variant node name is an opaque key; `label` is shown in the UI.
+  #   #   # No Pi canonical-level normalization is applied.
   #   #   #
-  #   #   # DeepSeek example (served via OpenRouter):
+  #   #   # DeepSeek example (served via OpenRouter; ds4 reasoning_effort: none|high|max):
   #   #   #   deepseek/deepseek-chat:
   #   #   #     reasoning: true
   #   #   #     thinkingFormat: deepseek
   #   #   #     variants:
-  #   #   #       none:   { label: "None",   options: { reasoningEffort: "none" } }
-  #   #   #       normal: { label: "Normal", options: { reasoningEffort: "high" } }
-  #   #   #       max:    { label: "Max",    options: { reasoningEffort: "xhigh" } }
+  #   #   #       none:   { label: "Off",     thinking: false, options: { reasoning_effort: "none" } }
+  #   #   #       normal: { label: "Normal",  thinking: true,  options: { reasoning_effort: "high" } }
+  #   #   #       max:    { label: "Max",     thinking: true,  options: { reasoning_effort: "max" } }
   #   #
   #   #   # Optional UI presentation axes (overrides the auto-derived Mode/Sampling axes).
   #   #   axes:

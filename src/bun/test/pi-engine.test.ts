@@ -456,13 +456,13 @@ describe("_applyModelConfigToSession", () => {
     expect(session.agent.onPayload).toBeUndefined();
   });
 
-  it("PE-VARIANT-3: variant reasoningEffort maps to canonical thinkingLevel and is NOT forwarded to onPayload", () => {
+  it("PE-VARIANT-3: variant thinking toggle + reasoning_effort are injected verbatim into the wire body", () => {
     const session = new MockAgentSession();
     const modelCfg: import("../config/index.ts").PiModelConfig = {
       variants: {
-        none: { options: { reasoningEffort: "none" } },
-        normal: { options: { reasoningEffort: "high", temperature: 0.4 } },
-        max: { options: { reasoningEffort: "xhigh" } },
+        none: { label: "Off", thinking: false, options: { reasoning_effort: "none" } },
+        normal: { label: "Normal", thinking: true, options: { reasoning_effort: "high", temperature: 0.4 } },
+        max: { label: "Max", thinking: true, options: { reasoning_effort: "max" } },
       },
     };
     const engine = makePiEngine(session);
@@ -473,29 +473,26 @@ describe("_applyModelConfigToSession", () => {
       undefined,
       [{ id: "mode", value: "normal" }],
     );
-    // Variant's reasoningEffort is the canonical level (high), not the variant name.
-    expect(session.agent.state.thinkingLevel).toBe("high");
     const result = session.agent.onPayload!({}, null) as Record<string, unknown>;
-    // Non-reasoning options are merged...
+    // thinking toggle + raw reasoning_effort are merged verbatim (direct-injection, not stripped).
+    expect(result.thinking).toEqual({ type: "enabled" });
+    expect(result.reasoning_effort).toBe("high");
     expect(result.temperature).toBe(0.4);
-    // ...but neither the camel nor snake effort key is emitted by Railyin (SDK-owned).
-    expect(result.reasoningEffort).toBeUndefined();
-    expect(result.reasoning_effort).toBeUndefined();
   });
 
-  it("PE-VARIANT-4: none/normal/max variants resolve to off/high/xhigh canonical levels", () => {
-    const cases: Array<[string, string]> = [
-      ["none", "off"],
-      ["normal", "high"],
-      ["max", "xhigh"],
+  it("PE-VARIANT-4: none/normal/max variants inject the correct thinking + reasoning_effort wire body", () => {
+    const cases: Array<[string, { type: string }, string]> = [
+      ["none", { type: "disabled" }, "none"],
+      ["normal", { type: "enabled" }, "high"],
+      ["max", { type: "enabled" }, "max"],
     ];
-    for (const [mode, expectedLevel] of cases) {
+    for (const [mode, thinking, effort] of cases) {
       const session = new MockAgentSession();
       const modelCfg: import("../config/index.ts").PiModelConfig = {
         variants: {
-          none: { options: { reasoningEffort: "none" } },
-          normal: { options: { reasoningEffort: "high" } },
-          max: { options: { reasoningEffort: "xhigh" } },
+          none: { label: "Off", thinking: false, options: { reasoning_effort: "none" } },
+          normal: { label: "Normal", thinking: true, options: { reasoning_effort: "high" } },
+          max: { label: "Max", thinking: true, options: { reasoning_effort: "max" } },
         },
       };
       const engine = makePiEngine(session);
@@ -506,15 +503,17 @@ describe("_applyModelConfigToSession", () => {
         undefined,
         [{ id: "mode", value: mode }],
       );
-      expect(session.agent.state.thinkingLevel).toBe(expectedLevel);
+      const result = session.agent.onPayload!({}, null) as Record<string, unknown>;
+      expect(result.thinking).toEqual(thinking);
+      expect(result.reasoning_effort).toBe(effort);
     }
   });
 
-  it("PE-VARIANT-5: provider-specific reasoning knob (chat_template_kwargs/enable_thinking) passes through onPayload", () => {
+  it("PE-VARIANT-5: provider-specific reasoning knob (chat_template_kwargs/boolean) passes through verbatim", () => {
     const session = new MockAgentSession();
     const modelCfg: import("../config/index.ts").PiModelConfig = {
       variants: {
-        qwen: { options: { chat_template_kwargs: { enable_thinking: true }, reasoningEffort: "high" } },
+        qwen: { thinking: true, options: { chat_template_kwargs: { enable_thinking: true }, enable_thinking: true } },
       },
     };
     const engine = makePiEngine(session);
@@ -526,11 +525,10 @@ describe("_applyModelConfigToSession", () => {
       [{ id: "mode", value: "qwen" }],
     );
     const result = session.agent.onPayload!({}, null) as Record<string, unknown>;
-    // Provider-specific reasoning knob is forwarded for per-model flexibility.
+    // thinking toggle + provider-specific reasoning knobs are all injected verbatim.
+    expect(result.thinking).toEqual({ type: "enabled" });
     expect(result.chat_template_kwargs).toEqual({ enable_thinking: true });
-    // ...but the SDK-owned effort key is dropped.
-    expect(result.reasoning_effort).toBeUndefined();
-    expect(result.reasoningEffort).toBeUndefined();
+    expect(result.enable_thinking).toBe(true);
   });
 
   it("PE-VARIANT-6: provider-specific reasoning knob is NOT auto-injected when not declared", () => {
@@ -594,7 +592,7 @@ describe("_applyModelConfigToSession", () => {
     expect(session.agent.state.thinkingLevel).toBe("high");
   });
 
-  it("PE-THINKING-3: modeValue 'high' sets thinkingLevel to 'high' (not 'off')", () => {
+  it("PE-THINKING-3: a bare mode value without variant config yields thinkingLevel off (no injected reasoning)", () => {
     const session = new MockAgentSession();
     session.agent.state.thinkingLevel = "off";
     const engine = makePiEngine(session);
@@ -605,7 +603,9 @@ describe("_applyModelConfigToSession", () => {
       undefined,
       [{ id: "mode", value: "high" }],
     );
-    expect(session.agent.state.thinkingLevel).toBe("high");
+    // No variant config / no thinking toggle → reasoning sentinel is off (no wire injection either).
+    expect(session.agent.state.thinkingLevel).toBe("off");
+    expect(session.agent.onPayload).toBeUndefined();
   });
 
   it("PE-THINKING-4: modeValue 'off' sets thinkingLevel to 'off', not config default", () => {

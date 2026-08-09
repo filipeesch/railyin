@@ -2,21 +2,20 @@ import type { PiModelConfig } from "../../config/index.ts";
 import type { ModelParamValue, ModelSettingAxis } from "../../../shared/rpc-types.ts";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import { resolveSamplingPreset } from "./sampling-params.ts";
-import { CANONICAL_THINKING_LEVELS, canonicalThinkingLevel } from "./model-config.ts";
 
 /**
  * Applies a Pi model's per-model config to an `AgentSession` for the current execution.
  *
  * Owns two responsibilities extracted from the PiEngine god-class:
  *  - `buildSettings` — derive the UI Mode/Sampling/axes from the model config.
- *  - `applyToSession` — resolve the active Mode/Reasoning axis to a canonical SDK
- *    thinking level, and assemble the `onPayload` request-body merge.
+ *  - `applyToSession` — resolve the active Mode/Reasoning axis and assemble the `onPayload`
+ *    request-body merge.
  *
- * Reasoning ownership contract: the **effort** key (`reasoning_effort`/`reasoningEffort`)
- * is owned by the pi SDK (driven by `session.agent.state.thinkingLevel` through the
- * model's `compat.thinkingFormat`), so Railyin never emits it. Provider-specific
- * reasoning knobs (`enable_thinking`, `thinking`, `chat_template_kwargs`) declared in
- * the config may still be forwarded through `onPayload` for per-model flexibility.
+ * Reasoning is a **direct-injection** contract: the selected Mode variant's `thinking: bool`
+ * and arbitrary `options` (e.g. `reasoning_effort: max/high/none`, `enable_thinking`,
+ * `chat_template_kwargs`) are merged **verbatim** into the request body via `onPayload`.
+ * `onPayload` runs after the SDK's `buildParams`, so these override the SDK's own reasoning
+ * defaults. Railyin does NOT normalize canonical thinking levels or own a reasoning-effort key.
  */
 export class PiModelConfigApplier {
   /** Derive the UI axes (Mode from variants, Sampling from presets, explicit `axes`). */
@@ -53,10 +52,14 @@ export class PiModelConfigApplier {
 
   /**
    * Apply the per-model config to `session.agent`:
-   *  - Resolves the active Mode/Reasoning axis value (UI `modelParams` override wins over config default)
-   *    and sets `session.agent.state.thinkingLevel` to a canonical SDK level.
-   *  - Deep-merges the model's static `options`, the selected Mode variant's options (minus the
-   *    SDK-owned effort key), and custom-axis runtime overrides into the request body via `onPayload`.
+   *  - Resolves the active Mode/Reasoning axis value (UI `modelParams` override wins over config default).
+   *  - Direct-injection reasoning: the selected variant's `thinking: bool` and `options` (e.g.
+   *    `reasoning_effort`) are merged **verbatim** into the request body via `onPayload`, so the
+   *    provider receives exactly the reasoning kwargs the config declares (no Pi thinkingLevel/map
+   *    normalization). `onPayload` runs after the SDK's `buildParams`, so injected `thinking` /
+   *    `reasoning_effort` override the SDK's defaults.
+   *  - Deep-merges the model's static `options`, the selected Mode variant's `options`, and
+   *    custom-axis runtime overrides into the request body.
    *  - Resolves the sampling preset against the active model set and merges its defined fields.
    */
   applyToSession(
@@ -80,37 +83,38 @@ export class PiModelConfigApplier {
       }
     }
 
-    // Mode/Reasoning level → canonical SDK thinking level + variant body options.
+    // Mode → direct-injection variant body + optional reasoning toggle + thinkingLevel sentinel.
     const modeValue =
       modelParams?.find((p) => p.id === "mode")?.value ?? modelParams?.find((p) => p.id === "thinkingLevel")?.value;
+
     if (modeValue) {
-      const variantOpts = modelCfg?.variants?.[modeValue]?.options;
+      const variantCfg = modelCfg?.variants?.[modeValue];
+      const variantOpts = variantCfg?.options;
       const variantOptsRecord =
         variantOpts && typeof variantOpts === "object" ? (variantOpts as Record<string, unknown>) : {};
-      // Canonical level derives from the variant's reasoningEffort, with a fallback
-      // to the bare mode value when it is already a valid canonical level (legacy
-      // level-based reasoning-mode path). Without either, it resolves to "off".
-      const hasVariantEffort =
-        variantOptsRecord.reasoningEffort !== undefined || variantOptsRecord.reasoning_effort !== undefined;
-      const isCanonicalModeValue = (CANONICAL_THINKING_LEVELS as readonly string[]).includes(modeValue);
-      session.agent.state.thinkingLevel = hasVariantEffort
-        ? canonicalThinkingLevel(variantOptsRecord)
-        : isCanonicalModeValue
-          ? (modeValue as never)
-          : ("off" as never);
-      // Merge the variant's body options (excluding the SDK-owned effort key).
+
+      // Direct-injection: merge the variant's `options` verbatim (incl. reasoning_effort).
       for (const [key, value] of Object.entries(variantOptsRecord)) {
-        if (key === "reasoning_effort" || key === "reasoningEffort") continue;
         mergedOptions[key] = value;
       }
+
+      // Optional explicit `thinking:{type:enabled|disabled}` toggle for the variant → reasoning sentinel.
+      let reasoningEnabled: boolean;
+      if (typeof variantCfg?.thinking === "boolean") {
+        mergedOptions.thinking = { type: variantCfg.thinking ? "enabled" : "disabled" };
+        reasoningEnabled = variantCfg.thinking;
+      } else {
+        // Sentinel fallback: a non-none reasoning effort implies reasoning is on.
+        const effort = variantOptsRecord.reasoning_effort ?? variantOptsRecord.reasoningEffort;
+        reasoningEnabled = typeof effort === "string" && effort !== "none";
+      }
+      session.agent.state.thinkingLevel = (reasoningEnabled
+        ? (modelCfg?.thinking_level ?? "high")
+        : "off") as never;
     } else {
+      // No mode selected — fall back to the model default thinking level (legacy).
       session.agent.state.thinkingLevel = (modelCfg?.thinking_level ?? "off") as never;
     }
-
-    // The effort key is SDK-owned (driven by thinkingLevel through compat.thinkingFormat).
-    // Strip it from the final body regardless of source (base options, variant, or axis).
-    delete mergedOptions.reasoning_effort;
-    delete mergedOptions.reasoningEffort;
 
     const sampling = resolveSamplingPreset(presetName, modelCfg);
     if (sampling !== undefined) {

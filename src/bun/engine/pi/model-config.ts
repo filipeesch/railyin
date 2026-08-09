@@ -1,15 +1,5 @@
 import type { PiEngineConfig, PiModelAxisConfig, PiModelConfig } from "../../config/index.ts";
-
-/** Canonical pi SDK thinking levels (`ModelThinkingLevel`). */
-export const CANONICAL_THINKING_LEVELS = [
-  "off",
-  "minimal",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-] as const;
-export type CanonicalThinkingLevel = (typeof CANONICAL_THINKING_LEVELS)[number];
+import { QualifiedModelId } from "../qualified-model-id.ts";
 
 /**
  * Resolve the per-model config for a qualified model id (e.g. "lmstudio/qwen3-8b").
@@ -24,25 +14,16 @@ export function resolvePiModelConfig(
 }
 
 /**
- * Map a Mode variant's reasoning option to a canonical pi SDK thinking level.
+ * Derive the native (engine-stripped) model id for a possibly-qualified model string.
  *
- * The variant's `reasoningEffort`/`reasoning_effort` value is the canonical level
- * the user intends (`"none"` → `"off"`, else one of `off|minimal|low|medium|high|xhigh`).
- * A variant that carries a provider-specific reasoning knob (`enable_thinking`,
- * `chat_template_kwargs`, `thinking`) without an explicit effort is treated as
- * reasoning-enabled and maps to a default `"high"` level.
+ * A qualified id is `{engineId}/{providerId?}/{modelId}`. `nativeModelId()` drops the
+ * engine segment but keeps the provider prefix when present (e.g.
+ * `pi-local/vllm/deepseek-v4-flash` → `vllm/deepseek-v4-flash`), which is the form
+ * `resolvePiModelConfig` can match against `config.models` keys via its single-segment
+ * fallback. Total and non-throwing: unparseable strings fall back to the input.
  */
-export function canonicalThinkingLevel(variantOptions: Record<string, unknown> | undefined): CanonicalThinkingLevel {
-  const effort = variantOptions?.reasoningEffort ?? variantOptions?.reasoning_effort;
-  if (effort === "none") return "off";
-  if (typeof effort === "string" && (CANONICAL_THINKING_LEVELS as readonly string[]).includes(effort)) {
-    return effort as CanonicalThinkingLevel;
-  }
-  // No explicit effort, but the variant declares some other reasoning knob → reasoning is on.
-  const hasReasoningKnob = ["enable_thinking", "chat_template_kwargs", "thinking"].some(
-    (k) => variantOptions?.[k] !== undefined,
-  );
-  return hasReasoningKnob ? "high" : "off";
+export function nativeModelIdFor(modelStr: string | undefined): string {
+  return QualifiedModelId.tryParse(modelStr)?.nativeModelId() ?? modelStr ?? "";
 }
 
 /** Effective token limits + reasoning flags for a model. */

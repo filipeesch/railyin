@@ -11,7 +11,7 @@ import type {
 } from "../types.ts";
 import type { PiEngineConfig, PiModelConfig } from "../../config/index.ts";
 import type { ModelSettingAxis, ModelParamValue } from "../../../shared/rpc-types.ts";
-import { derivePiModelAxes, derivePiModelSettings, resolvePiModelConfig } from "./model-config.ts";
+import { nativeModelIdFor, resolvePiModelConfig } from "./model-config.ts";
 import type { SlashCommandDialect } from "../dialects/slash-command-dialect.ts";
 import { NullDialect } from "../dialects/null-dialect.ts";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
@@ -286,7 +286,11 @@ export class PiEngine implements ExecutionEngine {
     const providerName = piModel.provider;
 
     const modelStr = modelOverride ?? this.config.model ?? "default";
-    const modelCfg = resolvePiModelConfig(this.config, modelStr);
+    // Resolve the per-model config from the native (engine-stripped) model id so
+    // provider-bearing qualified ids (e.g. pi-local/vllm/deepseek-v4-flash) reach
+    // their config.models key (deepseek-v4-flash). Passing the full qualified id here
+    // drops configured reasoning/variants, defaulting thinking to "off".
+    const modelCfg = resolvePiModelConfig(this.config, nativeModelIdFor(modelStr));
 
     const session = await this.sessionManager.getOrCreate(conversationId, piModel, tools, enrichedSystem, cwd, modelOverride);
 

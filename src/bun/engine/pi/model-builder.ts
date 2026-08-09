@@ -7,10 +7,9 @@
  */
 
 import type { PiEngineConfig } from "../../config/index.ts";
-import { QualifiedModelId } from "../qualified-model-id.ts";
 import type { Model } from "@earendil-works/pi-ai";
 import { PROVIDER_LIMITER_DEFAULTS } from "./provider-limiter.ts";
-import { resolvePiModelConfig } from "./model-config.ts";
+import { nativeModelIdFor, resolvePiModelConfig } from "./model-config.ts";
 
 /** Default max tokens per response. */
 export const DEFAULT_MAX_TOKENS = 8_192;
@@ -36,8 +35,7 @@ export class PiModelBuilder {
   build(modelOverride: string | undefined, contextWindowOverride: number | undefined): Model<"openai-completions"> {
     const modelStr = modelOverride ?? this.config.model ?? "default";
 
-    const qmid = QualifiedModelId.tryParse(modelStr);
-    const nativeId = qmid?.nativeModelId() ?? modelStr;
+    const nativeId = nativeModelIdFor(modelStr);
     const slash = nativeId.indexOf("/");
     const providerName = slash !== -1 ? nativeId.slice(0, slash) : undefined;
     const modelId = slash !== -1 ? nativeId.slice(slash + 1) : nativeId;
