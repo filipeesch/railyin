@@ -17,6 +17,8 @@ import { EventType } from "@ag-ui/core";
 import type { BaseEvent } from "@ag-ui/client";
 import type { EngineEvent } from "../engine/types.ts";
 import type { DecisionRequestPayload } from "../../shared/rpc-types.ts";
+import { buildDecisionSubmission } from "../conversation/decision-submission.ts";
+import type { DecisionAnswer } from "../../shared/rpc-types.ts";
 
 /** Per-run mutable translation state. Owned by the agent's run closure —
  * NEVER agent instance fields (the runtime clones per request). */
@@ -365,4 +367,33 @@ export function buildInterruptOutcome(
       ],
     },
   };
+}
+
+/**
+ * The Phase 5 resume-payload contract (A1/Open Question 2 — SINGLE SOURCE OF
+ * TRUTH; Phase 5 must match this):
+ *
+ *   {
+ *     decision: "approved" | "rejected",      // informational server-side — see below
+ *     answers?: DecisionAnswer[],             // required for a RESOLVED resume
+ *     generalNotes?: string,
+ *     recordAsDecisions?: boolean,            // default true
+ *   }
+ *
+ * `decision` is informational: the resume entry's `status` is the real channel
+ * per A4 — `"cancelled"` is the rejection/dismissal (nothing reaches the
+ * engine), while a RESOLVED resume MUST carry `answers` (a resolved payload
+ * without answers is an error, INVALID_PAYLOAD, at the agent).
+ *
+ * Translates the payload into the existing decision-submission format
+ * (D-07, Don't Hand-Roll row 3): delegates to buildDecisionSubmission — the
+ * hidden record_decision instructions stay the single source of truth, and the
+ * Q/A pairs are NEVER re-formatted here. Returns null when the payload carries
+ * no answers (missing, non-array, or empty) or is not an object at all.
+ */
+export function translateResumeToSubmission(payload: unknown): { userContent: string; engineContent: string } | null {
+  if (typeof payload !== "object" || payload === null || Array.isArray(payload)) return null;
+  const p = payload as { answers?: unknown; generalNotes?: string; recordAsDecisions?: boolean };
+  if (!Array.isArray(p.answers) || p.answers.length === 0) return null;
+  return buildDecisionSubmission(p.answers as DecisionAnswer[], p.generalNotes, p.recordAsDecisions ?? true);
 }
