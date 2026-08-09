@@ -12,6 +12,9 @@
  *   - @ag-ui/core@0.0.57
  *   - @ag-ui/client@0.0.57
  *   - @ag-ui/encoder@0.0.57
+ *   - rxjs@^7.8.2                 (explicit direct pin — 02-03; hoisted 7.8.2,
+ *                                 nested 7.8.1 inside @ag-ui/client; the explicit
+ *                                 pin prevents dedupe surprises, research Installation)
  */
 
 import { describe, test, expect } from "bun:test";
@@ -43,5 +46,11 @@ describe("copilotkit stack pins (HOST-03)", () => {
         for (const name of ["@ag-ui/core", "@ag-ui/client", "@ag-ui/encoder"]) {
             expect(pkg.dependencies[name]).toMatch(/^0\.0\.57$/);
         }
+    });
+
+    test("rxjs is an explicit direct dependency pinned to ^7.8.2 (02-03, HOST-03 continuation)", () => {
+        // The agent/runner import from "rxjs"; hoisted at 7.8.2 with a nested
+        // 7.8.1 in @ag-ui/client. The explicit pin prevents dedupe surprises.
+        expect(pkg.dependencies["rxjs"]).toBe("^7.8.2");
     });
 });
