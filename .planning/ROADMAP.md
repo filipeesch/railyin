@@ -209,7 +209,24 @@ Plans:
   3. `git grep` shows zero references to the custom StreamEvent protocol and deleted modules; build and all suites stay green after deletion
   4. Legacy import is retired behind a flag once imports are complete
 
-**Plans**: TBD
+**Plans**: 5 plans
+Plans:
+**Wave 1**
+
+- [ ] 07-01-PLAN.md — consume() surgical rewrite (tracer): zero writes to frozen tables, engine-type trim, session-status push, executor excision + {executionId} contract, smoke rework (D-05, D-03)
+- [ ] 07-02-PLAN.md — Engine emitter trims: claude gate/cache deletion, writtenFiles removal, opencode shell posture (A3), copilot/cursor emitters, event-bridge drop-list (D-02 engine side)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] 07-03-PLAN.md — Dead chat stack deletion (19 components + Group C modules, D-01), store/rpc/App.vue strips, protocol type removal, e2e fixture strips + session-status spec
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [ ] 07-04-PLAN.md — Trim RPC + MessageType removal in shared contract, handler entry removals, context-usage partial trim (D-02 backend)
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [ ] 07-05-PLAN.md — Import retirement behind RAILYN_LEGACY_IMPORT (D-06), full D-07 gate, VALIDATION/COVERAGE close-out
 
 ## Coverage
 
