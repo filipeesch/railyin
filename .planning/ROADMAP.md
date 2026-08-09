@@ -117,7 +117,7 @@ Plans:
   4. Old chat tables remain intact and readable throughout (frozen, not dropped)
   5. Interrupted or corrupted JSONL writes never lose a thread: the store tolerates trailing partial lines and the index rebuilds from the log
 
-**Plans**: 1/3 plans executed
+**Plans**: 2/3 plans executed
 Plans:
 **Wave 1**
 
@@ -125,7 +125,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 04-02-PLAN.md — Idempotent legacy import: buildThreadLog/runLegacyImport + atomic importLog write + handler + contract + seeded-DB e2e; mapping matrix + restart-replay (IMPR-01, IMPR-02)
+- [x] 04-02-PLAN.md — Idempotent legacy import: buildThreadLog/runLegacyImport + atomic importLog write + handler + contract + seeded-DB e2e; mapping matrix + restart-replay (IMPR-01, IMPR-02)
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
@@ -201,7 +201,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 | 1. CopilotRuntime Hosting & Thread APIs (Spike) | 3/3 | Complete    | 2026-08-09 |
 | 2. AG-UI Bridge & RailyinAgentRunner | 3/3 | Complete    | 2026-08-09 |
 | 3. Decision Interrupts & Resume | 3/3 | Complete    | 2026-08-09 |
-| 4. JSONL Persistence & Legacy Import | 1/3 | In Progress|  |
+| 4. JSONL Persistence & Legacy Import | 2/3 | In Progress|  |
 | 5. Chat UI Replacement (Vue) | 0/TBD | Not started | - |
 | 6. E2E Migration & Verification | 0/TBD | Not started | - |
 | 7. Cleanup & Feature Trim | 0/TBD | Not started | - |
