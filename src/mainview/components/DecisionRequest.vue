@@ -133,6 +133,7 @@ import { ref, computed, watch, nextTick } from "vue";
 import { Marked } from "marked";
 import mermaid from "mermaid";
 import type { DecisionRequestQuestion } from "@shared/rpc-types";
+import { sanitizeHtml } from "../utils/sanitizeHtml";
 import {
   canSubmitDecisionRequest,
   buildDecisionAnswers,
@@ -157,7 +158,8 @@ const mermaidMarked = new Marked({
 });
 
 function renderMd(content: string): string {
-  return mermaidMarked.parse(content, { async: false }) as string;
+  // CR-01 (legacy counterpart of DecisionInterrupt): sanitize before v-html.
+  return sanitizeHtml(mermaidMarked.parse(content, { async: false }) as string);
 }
 
 const props = defineProps<{

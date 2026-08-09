@@ -132,6 +132,7 @@ import { Marked } from "marked";
 import mermaid from "mermaid";
 import type { Interrupt } from "@ag-ui/client";
 import type { DecisionRequestPayload, DecisionRequestQuestion } from "@shared/rpc-types";
+import { sanitizeHtml } from "../../utils/sanitizeHtml";
 import {
   canSubmitDecisionRequest,
   buildDecisionAnswers,
@@ -182,7 +183,10 @@ const mermaidMarked = new Marked({
 });
 
 function renderMd(content: string): string {
-  return mermaidMarked.parse(content, { async: false }) as string;
+  // CR-01: the interrupt context/question/description metadata is engine/LLM
+  // controlled (prompt-injectable) — sanitize before v-html. The mermaid
+  // <pre class="mermaid"> pass-through survives DOMPurify's allow-list.
+  return sanitizeHtml(mermaidMarked.parse(content, { async: false }) as string);
 }
 
 // ─── Payload + answered state ────────────────────────────────────────────────
