@@ -14,9 +14,11 @@
  *
  * Phase 4 scope: crash tolerance + index rebuild from the log — `list()`
  * scans the threads dir (THREAD_ID_RE-filtered) so the log IS the index
- * (D-04/D-05); decoy entries are skipped, never thrown at.
+ * (D-04/D-05); decoy entries are skipped, never thrown at. `importLog()`
+ * writes whole imported logs atomically (tmp+rename) so file existence
+ * stays the honest D-07 idempotency marker (Pitfall 5).
  */
-import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync } from "fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from "fs";
 import { dirname, join, resolve, sep } from "path";
 import type { BaseEvent } from "@ag-ui/client";
 
@@ -81,6 +83,25 @@ export class JsonlStore {
   exists(threadId: string): boolean {
     this.assertThreadId(threadId);
     return existsSync(threadLogPath(this.dataDir, threadId));
+  }
+
+  /**
+   * Atomic whole-file import write (Pattern 2, D-07): the complete event
+   * array (source: SQLite, not a stream) is written to `{threadId}.jsonl.tmp`
+   * and renameSync'd over the final path — atomic on POSIX. A crashed import
+   * leaves only a `.tmp` that `list()`/`exists()` never match, so the final
+   * file's existence stays the trustworthy idempotency marker (Pitfall 5 —
+   * a partial append would make existence checks lie). This is the ONLY
+   * writer of imported logs; append() remains the live-run writer.
+   */
+  importLog(threadId: string, events: BaseEvent[]): void {
+    this.assertThreadId(threadId);
+    const filePath = threadLogPath(this.dataDir, threadId);
+    const dir = dirname(filePath);
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+    const tmpPath = filePath + ".tmp";
+    writeFileSync(tmpPath, events.map((e) => JSON.stringify(e)).join("\n") + "\n", "utf-8");
+    renameSync(tmpPath, filePath);
   }
 
   /**

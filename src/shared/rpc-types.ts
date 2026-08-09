@@ -120,6 +120,18 @@ export interface ThreadSummary {
   updatedAt: string;
 }
 
+/** Result of a legacy-import run (IMPR-01, D-06/D-07): per-conversation counts.
+ * total = conversations that HAVE messages; skipped = already-imported (D-07
+ * existence marker) or empty after mapping; failed = per-conversation errors
+ * that never abort the loop (T-04-06). */
+export interface ImportSummary {
+  total: number;
+  imported: number;
+  skipped: number;
+  failed: number;
+  errors: string[];
+}
+
 export interface ModelInfo {
   id: string | null;
   displayName?: string;
@@ -1099,6 +1111,13 @@ export type RailynAPI = {
   "threads.list": {
     params: Record<string, never>;
     response: ThreadSummary[];
+  };
+  // Legacy import (IMPR-01, D-06) — converts frozen conversation_messages
+  // rows into JSONL threads; idempotent (D-07), SELECT-only w.r.t. legacy
+  // tables (IMPR-02, D-08)
+  "legacyImport.run": {
+    params: Record<string, never>;
+    response: ImportSummary;
   };
   "mcp.getStatus": {
     params: Record<string, never>;
