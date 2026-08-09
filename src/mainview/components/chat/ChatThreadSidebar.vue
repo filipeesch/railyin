@@ -188,8 +188,17 @@ function statusLabel(status: string): string {
 }
 
 async function createNewSession() {
-  const session = await chatStore.createSession(workspaceStore.activeWorkspaceKey ?? undefined);
-  await chatStore.selectSession(session.id);
+  try {
+    const session = await chatStore.createSession(workspaceStore.activeWorkspaceKey ?? undefined);
+    await chatStore.selectSession(session.id);
+  } catch (err) {
+    toast.add({
+      severity: "error",
+      summary: "New session failed",
+      detail: err instanceof Error ? err.message : String(err),
+      life: 6000,
+    });
+  }
 }
 
 function openSession(session: ChatSession) {
@@ -197,7 +206,15 @@ function openSession(session: ChatSession) {
 }
 
 function archiveSession(sessionId: number) {
-  chatStore.archiveSession(sessionId);
+  // WR-04: a failed archive must not fail silently — surface a toast.
+  chatStore.archiveSession(sessionId).catch((err) => {
+    toast.add({
+      severity: "error",
+      summary: "Archive failed",
+      detail: err instanceof Error ? err.message : String(err),
+      life: 6000,
+    });
+  });
 }
 
 function startRename(session: ChatSession) {
@@ -210,8 +227,20 @@ async function saveRename(sessionId: number) {
     cancelRename();
     return;
   }
-  await chatStore.renameSession(sessionId, renameValue.value.trim());
-  renamingId.value = null;
+  try {
+    await chatStore.renameSession(sessionId, renameValue.value.trim());
+  } catch (err) {
+    // WR-04: revert to display mode and surface the failure — the row must
+    // not stick in edit mode forever on an RPC rejection.
+    toast.add({
+      severity: "error",
+      summary: "Rename failed",
+      detail: err instanceof Error ? err.message : String(err),
+      life: 6000,
+    });
+  } finally {
+    renamingId.value = null;
+  }
 }
 
 function cancelRename() {
