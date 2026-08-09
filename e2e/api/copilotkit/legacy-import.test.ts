@@ -57,6 +57,36 @@ function seedLegacyConversation(dbPath: string): string {
     }
 }
 
+/** Raw fetch helper for AG-UI endpoints against an arbitrary server. */
+function postJsonOn(baseUrl: string, path: string, body: unknown) {
+    return fetch(`${baseUrl}${path}`, {
+        method: "POST",
+        headers: { "content-type": "application/json", accept: "text/event-stream" },
+        body: JSON.stringify(body),
+    });
+}
+
+/** Split an SSE body on the \n\n frame separator and parse each data: line. */
+function parseSseFrames(body: string): Record<string, unknown>[] {
+    return body
+        .split("\n\n")
+        .filter(Boolean)
+        .map((frame) => JSON.parse(frame.slice("data: ".length)) as Record<string, unknown>);
+}
+
+/** A minimal valid RunAgentInput with a user text message (schema-valid). */
+function runInput(threadId: string, runId: string, text: string) {
+    return {
+        threadId,
+        runId,
+        tools: [],
+        context: [],
+        forwardedProps: {},
+        state: [],
+        messages: [{ id: "u1", role: "user", content: [{ type: "text", text }] }],
+    };
+}
+
 describe("legacyImport.run (IMPR-01, D-06/D-07/D-08)", () => {
     test("1: seeded legacy rows import over the wire — JSONL shape, frozen counts, idempotent re-run, threads.list, no .tmp residue", async () => {
         const dataDir = mkdtempSync(join(tmpdir(), "railyn-import-e2e-"));
@@ -103,6 +133,47 @@ describe("legacyImport.run (IMPR-01, D-06/D-07/D-08)", () => {
         } finally {
             await server.shutdown();
             rmSync(dataDir, { recursive: true, force: true });
+        }
+    }, 30_000);
+
+    test("2: restart replay — a fresh server over the same durable dataDir cold-replays the imported thread (criterion 5)", async () => {
+        const durableDir = mkdtempSync(join(tmpdir(), "railyn-import-durable-"));
+        try {
+            // Server A: seed + import over the real wire.
+            const serverA: TestServer = await startServer({ dataDir: durableDir, durableDb: true });
+            let threadId: string;
+            try {
+                threadId = seedLegacyConversation(join(durableDir, "railyn.db"));
+                const summary = await serverA.request("legacyImport.run", {});
+                expect(summary.imported).toBe(1);
+            } finally {
+                await serverA.shutdown();
+            }
+
+            // Server B: a FRESH process over the SAME dataDir — the in-memory
+            // thread store is empty, so connect cold-replays the imported JSONL
+            // (index rebuilt from the log — criterion 5 for imported data).
+            const serverB: TestServer = await startServer({ dataDir: durableDir, durableDb: true });
+            try {
+                const res = await postJsonOn(
+                    serverB.baseUrl,
+                    "/api/copilotkit/agent/default/connect",
+                    runInput(threadId, "run-connect", "hello"),
+                );
+                expect(res.status).toBe(200);
+                const frames = parseSseFrames(await res.text());
+                expect(frames.length).toBeGreaterThan(0);
+                expect(frames[0].type).toBe("RUN_STARTED");
+                expect(frames[frames.length - 1].type).toBe("RUN_FINISHED");
+
+                // The index rebuilt from the log lists the imported thread.
+                const threads = await serverB.request("threads.list", {});
+                expect(threads.some((t) => t.threadId === threadId)).toBe(true);
+            } finally {
+                await serverB.shutdown();
+            }
+        } finally {
+            rmSync(durableDir, { recursive: true, force: true });
         }
     }, 30_000);
 });
