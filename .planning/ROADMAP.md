@@ -117,7 +117,19 @@ Plans:
   4. Old chat tables remain intact and readable throughout (frozen, not dropped)
   5. Interrupted or corrupted JSONL writes never lose a thread: the store tolerates trailing partial lines and the index rebuilds from the log
 
-**Plans**: TBD
+**Plans**: 3 plans
+Plans:
+**Wave 1**
+
+- [ ] 04-01-PLAN.md — Thread-index endpoint `threads.list` (tracer: store scan + contract + handler + registration + real-wire e2e); list() unit layer + crash-tolerance store scenarios (CHAT-08)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] 04-02-PLAN.md — Idempotent legacy import: buildThreadLog/runLegacyImport + atomic importLog write + handler + contract + seeded-DB e2e; mapping matrix + restart-replay (IMPR-01, IMPR-02)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [ ] 04-03-PLAN.md — Crash-tolerance e2e proof (corrupted log still lists + replays, .tmp residue invisible), phase gate + 04-COVERAGE/04-VALIDATION close-out (CHAT-08, IMPR-01, IMPR-02)
 
 ### Phase 5: Chat UI Replacement (Vue)
 
