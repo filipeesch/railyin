@@ -1179,4 +1179,37 @@ describe("resume branch (D-05/D-07 — 03-02)", () => {
     // The entry survives — the client can retry with a proper payload.
     expect(interruptRegistry.hasOpen(threadId)).toBe(true);
   });
+
+  test("R13: IN-02 — duplicate resume entries with the same interruptId → INVALID_INTERRUPT, no executor call", async () => {
+    const { conversationId } = seedChatSession(db);
+    const threadId = String(conversationId);
+    const interruptId = await openPendingDecision(conversationId);
+    const agent = makeAgent(conversationId);
+
+    let executeChatTurnCalls = 0;
+    fakeCoordinator = {
+      ...fakeCoordinator,
+      executeChatTurn: async (_s, _c, _content, _m, _mcp, _ws, _att, _ec, opts) => {
+        executeChatTurnCalls += 1;
+        opts?.onRunEnd?.("done");
+        return { message: { id: 1 } as never, executionId: 1 };
+      },
+    };
+    agent.orchestrator = fakeCoordinator;
+
+    // Same id twice — find() would silently take the first and drop the
+    // second (possibly conflicting) payload; the duplicate is rejected.
+    const events = await collectRun(
+      agent,
+      resumeInput(threadId, [
+        { interruptId, status: "resolved", payload: RESUME_PAYLOAD },
+        { interruptId, status: "resolved", payload: RESUME_PAYLOAD },
+      ]),
+    );
+    expect(executeChatTurnCalls).toBe(0);
+    expect(events[events.length - 1].type).toBe(EventType.RUN_ERROR);
+    expect(events[events.length - 1]).toMatchObject({ code: "INVALID_INTERRUPT" });
+    // The open entry survives — a clean single resume still works.
+    expect(interruptRegistry.hasOpen(threadId)).toBe(true);
+  });
 });

@@ -145,11 +145,6 @@ export class RailyinAgent extends AbstractAgent {
     // registry entry carries the raw serialized payload; parsing stays in
     // buildInterruptOutcome.
     let capturedDecisionPayload: string | null = null;
-    // WR-02: any engine event seen since run start (NOT "during the
-    // synchronous dispatch tick") — real engines dispatch asynchronously, so
-    // a dispatch-scoped flag is dead code for them and lets streams that end
-    // without a terminal wedge the thread forever.
-    let anyEventSeen = false;
     const run: ActiveRun = { executionId: null, abortRequested: false };
     this.activeRun = run;
 
@@ -254,13 +249,19 @@ export class RailyinAgent extends AbstractAgent {
       if (!open) open = interruptRegistry.ensureOpen(threadId, this.db);
       const openIds = open ? [open.interruptId] : []; // v1: one interrupt per batch (D-02)
       const addressed = new Set(input.resume.map((r) => r.interruptId));
+      const resumeIds = input.resume.map((r) => r.interruptId);
       // D-05: all-or-nothing — every resume id must be an OPEN interrupt for
       // this thread AND every open interrupt must be addressed. Unknown,
       // partial, or duplicate-after-clear resumes → INVALID_INTERRUPT
       // (Pitfall 8: the entry clears only after delivery starts, so a replay
       // of an old id fails here).
+      // IN-02: duplicates of the same interruptId also fail — find() below
+      // would silently take the first entry and drop the second (possibly
+      // conflicting) payload; rejecting makes the resolution deterministic.
       const allResolved =
-        openIds.every((id) => addressed.has(id)) && input.resume.every((r) => openIds.includes(r.interruptId));
+        openIds.every((id) => addressed.has(id)) &&
+        input.resume.every((r) => openIds.includes(r.interruptId)) &&
+        new Set(resumeIds).size === resumeIds.length;
       if (!open || !allResolved) {
         emitRunError("Resume does not match open decision interrupt(s)", "INVALID_INTERRUPT");
         return subject.asObservable() as unknown as ReturnType<AbstractAgent["run"]>;
@@ -347,7 +348,6 @@ export class RailyinAgent extends AbstractAgent {
       // again (register + interrupt terminal).
       const resumeOpts = {
         onEngineEvent: (event: EngineEvent) => {
-          anyEventSeen = true;
           if (event.type === "error") lastEngineError = event.message;
           if (event.type === "decision_request") capturedDecisionPayload = event.payload;
           const translated = translateEngineEvent(event, state);
@@ -473,7 +473,6 @@ export class RailyinAgent extends AbstractAgent {
     void this.orchestrator
       .executeChatTurn(0, conversationId, content, undefined, null, workspaceKey, undefined, undefined, {
         onEngineEvent: (event: EngineEvent) => {
-          anyEventSeen = true;
           if (event.type === "error") lastEngineError = event.message;
           // D-06 (Pitfall 5): capture the decision payload BEFORE translation —
           // it fires immediately BEFORE onRunEnd("decision") and is needed at
