@@ -285,7 +285,7 @@ export async function runLegacyImport(db: Database, store: JsonlStore): Promise<
     const convs = db.query<{ id: number }, []>(
         `SELECT DISTINCT c.id FROM conversations c
          JOIN conversation_messages m ON m.conversation_id = c.id
-         WHERE m.id >= 0 ORDER BY c.id ASC`, // frozen-table reads only (IMPR-02, D-08)
+         ORDER BY c.id ASC`, // frozen-table reads only (IMPR-02, D-08)
     ).all();
     const summary: ImportSummary = { total: convs.length, imported: 0, skipped: 0, failed: 0, errors: [] };
 
