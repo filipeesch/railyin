@@ -6,8 +6,10 @@
  * entry from the live DB: kind via conversations.task_id, name via
  * tasks.title / chat_sessions.title, timestamps via tasks.created_at /
  * chat_sessions.created_at / chat_sessions.last_activity_at with file
- * birthtime/mtime fallback for orphan files. NEVER queries
- * conversations.created_at — the table has NO such column (Pitfall 2).
+ * birthtime/mtime fallback for orphan files. DB timestamps are normalized
+ * to ISO-8601 (naive-UTC "YYYY-MM-DD HH:MM:SS" → ISO string contract —
+ * Pitfall 1). NEVER queries conversations.created_at — the table has NO such
+ * column (Pitfall 2).
  */
 import type { Database } from "bun:sqlite";
 import type { ThreadSummary } from "../../shared/rpc-types.ts";
@@ -21,6 +23,21 @@ interface ThreadJoinRow {
   session_title: string | null;
   session_created: string | null;
   session_activity: string | null;
+}
+
+/**
+ * Normalize a DB datetime column to an ISO-8601 string — the ThreadSummary
+ * contract promises ISO strings, but SQLite `datetime('now')` emits naive-UTC
+ * "YYYY-MM-DD HH:MM:SS" (migrations 001/026) that `new Date()` would parse as
+ * LOCAL time (Pitfall 1 — the same normalization import.ts applies). Values
+ * already carrying a timezone are parsed verbatim; unparseable values yield
+ * null so the caller falls back to the next source.
+ */
+function toIso(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  const candidate = /(?:Z|[+-]\d{2}:?\d{2})$/.test(raw.trim()) ? raw : raw.replace(" ", "T") + "Z";
+  const ts = Date.parse(candidate);
+  return Number.isNaN(ts) ? null : new Date(ts).toISOString();
 }
 
 export function threadHandlers(db: Database, store: JsonlStore) {
@@ -46,8 +63,8 @@ export function threadHandlers(db: Database, store: JsonlStore) {
         const kind: ThreadSummary["kind"] = row && row.task_id != null ? "card" : "session";
         const name = kind === "card" ? (row?.task_title ?? null) : (row?.session_title ?? null);
         const createdAt =
-          row?.task_created ?? row?.session_created ?? new Date(f.birthtimeMs ?? f.mtimeMs).toISOString();
-        const updatedAt = row?.session_activity ?? new Date(f.mtimeMs).toISOString();
+          toIso(row?.task_created) ?? toIso(row?.session_created) ?? new Date(f.birthtimeMs ?? f.mtimeMs).toISOString();
+        const updatedAt = toIso(row?.session_activity) ?? new Date(f.mtimeMs).toISOString();
         return { threadId: f.threadId, name, kind, createdAt, updatedAt };
       });
     },

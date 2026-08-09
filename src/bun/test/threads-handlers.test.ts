@@ -50,11 +50,12 @@ describe("threads.list handler", () => {
     expect(sess!.kind).toBe("session");
     expect(sess!.name).toBe("My Session");
 
-    // Timestamps flow from the DB when present (raw SQLite datetime strings).
+    // Timestamps flow from the DB when present, normalized to ISO-8601
+    // (naive-UTC SQLite datetime strings → the ThreadSummary ISO contract).
     const taskCreated = db
       .query<{ created_at: string }, [number]>("SELECT created_at FROM tasks WHERE conversation_id = ?")
       .get(task.conversationId)!;
-    expect(card!.createdAt).toBe(taskCreated.created_at);
+    expect(card!.createdAt).toBe(new Date(taskCreated.created_at.replace(" ", "T") + "Z").toISOString());
 
     const sessCreated = db
       .query<{ created_at: string }, [number]>("SELECT created_at FROM chat_sessions WHERE conversation_id = ?")
@@ -62,8 +63,8 @@ describe("threads.list handler", () => {
     const sessActivity = db
       .query<{ last_activity_at: string }, [number]>("SELECT last_activity_at FROM chat_sessions WHERE conversation_id = ?")
       .get(session.conversationId)!;
-    expect(sess!.createdAt).toBe(sessCreated.created_at);
-    expect(sess!.updatedAt).toBe(sessActivity.last_activity_at);
+    expect(sess!.createdAt).toBe(new Date(sessCreated.created_at.replace(" ", "T") + "Z").toISOString());
+    expect(sess!.updatedAt).toBe(new Date(sessActivity.last_activity_at.replace(" ", "T") + "Z").toISOString());
   });
 
   it("6: orphan JSONL file with no DB row → kind 'session', name null, file-derived timestamps", async () => {
