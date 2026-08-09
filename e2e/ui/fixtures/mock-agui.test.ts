@@ -96,6 +96,67 @@ describe("buildConnectReplaySseBody", () => {
         expect(buildConnectReplaySseBody("t-iso", "quick", a.knownThreadIds)).not.toBe("");
         expect(buildConnectReplaySseBody("t-iso", "quick", b.knownThreadIds)).toBe("");
     });
+
+    test("historyMessages knob: MESSAGES_SNAPSHOT carries the provided messages in order (plan 06-01, Pattern 3)", () => {
+        const known = new Set(["t-hist"]);
+        const history = [
+            { id: "u1", role: "user", content: "Round 1" },
+            { id: "a1", role: "assistant", content: "Reply 1" },
+            { id: "u2", role: "user", content: "Round 2" },
+            { id: "a2", role: "assistant", content: "Reply 2" },
+        ];
+        const body = buildConnectReplaySseBody("t-hist", "quick", known, history);
+
+        const snapshot = decodeFrames(body).find((f) => f.type === EventType.MESSAGES_SNAPSHOT) as
+            | { type: EventType.MESSAGES_SNAPSHOT; messages: Array<{ id: string; role: string; content?: string }> }
+            | undefined;
+        expect(snapshot).toBeDefined();
+        expect(snapshot!.messages).toEqual(history);
+    });
+
+    test("historyMessages omitted: snapshot stays the default single 'hello' message (backward compat)", () => {
+        const known = new Set(["t-hist-default"]);
+        const frames = decodeFrames(buildConnectReplaySseBody("t-hist-default", "quick", known));
+
+        const snapshot = frames.find((f) => f.type === EventType.MESSAGES_SNAPSHOT) as
+            | { type: EventType.MESSAGES_SNAPSHOT; messages: Array<{ id: string; role: string; content?: string }> }
+            | undefined;
+        expect(snapshot).toBeDefined();
+        expect(snapshot!.messages).toEqual([{ id: "m1", role: "assistant", content: "hello" }]);
+    });
+
+    test("WR-05 parity: history registered on one instance never replays through another instance (plan 06-01)", () => {
+        const a = new MockAgui(null as unknown as Page);
+        const b = new MockAgui(null as unknown as Page);
+        a.registerHistory("t-hiso", [
+            { id: "u1", role: "user", content: "private" },
+            { id: "a1", role: "assistant", content: "secret reply" },
+        ]);
+        // Instance A replays its registered history...
+        expect(
+            buildConnectReplaySseBody("t-hiso", "quick", a.knownThreadIds, a.historyByThread.get("t-hiso")),
+        ).not.toBe("");
+        // ...instance B still answers the empty body for the same thread.
+        expect(
+            buildConnectReplaySseBody("t-hiso", "quick", b.knownThreadIds, b.historyByThread.get("t-hiso")),
+        ).toBe("");
+    });
+
+    test("historyMessages knob keeps MESSAGES_SNAPSHOT strictly before the single terminal RUN_FINISHED (plan 06-01)", () => {
+        const known = new Set(["t-hist-seq"]);
+        const history = [
+            { id: "u1", role: "user", content: "Round 1" },
+            { id: "a1", role: "assistant", content: "Reply 1" },
+        ];
+        const types = typesOf(buildConnectReplaySseBody("t-hist-seq", "quick", known, history));
+
+        const snapshotIdx = types.indexOf(EventType.MESSAGES_SNAPSHOT);
+        const finishedIdx = types.lastIndexOf(EventType.RUN_FINISHED);
+        expect(snapshotIdx).toBeGreaterThan(0);
+        expect(finishedIdx).toBeGreaterThan(snapshotIdx);
+        expect(finishedIdx).toBe(types.length - 1);
+        expect(types.filter((t) => t === EventType.RUN_FINISHED)).toHaveLength(1);
+    });
 });
 
 describe("buildErrorRunSseBody", () => {
