@@ -1,180 +1,107 @@
+/**
+ * conversation-body.spec.ts — UI tests for the chat body surface.
+ *
+ * Suite CB — conversation body coverage:
+ *   CB-1: reasoning card renders alongside the streamed answer (C-2)
+ *   CB-1b: persisted (replayed) reasoning starts collapsed, expandable
+ *   CB-3: tool groups render in the shared body (T-2)
+ *
+ * Migrated onto the agui fixture (Phase 6, plan 06-03): CB-1/CB-1b use the
+ * C-2 reasoning pattern (agui.script = "reasoning", [data-message-id="r1"]
+ * card, collapsed → expand → summary); CB-3 uses the T-2 toolcall pattern
+ * (tool-card-* group rendering).
+ *
+ * Retired in-file (trimmed/deferred features — recorded in plan 06-03):
+ *   CB-2 — virtualization: PERF-01 deferred; full-history replay is the v1
+ *     behavior (the CopilotChat scroll view renders the complete thread).
+ *   CB-4 — transition cards: transition_event is in the trim list; the
+ *     legacy prompt rows and the transition card rendering are gone with
+ *     ConversationBody (that whole card-era surface is retired with the
+ *     feature).
+ */
+
 import { test, expect } from "./fixtures";
-import { makeAssistantMessage, makeTransitionMessage, makeUserMessage } from "./fixtures/mock-data";
-import type { ConversationMessage, StreamEvent } from "@shared/rpc-types";
-
-const EXEC_ID = 30_001;
-
-async function openTaskDrawer(page: import("@playwright/test").Page, taskId: number) {
-    await page.locator(`[data-task-id="${taskId}"]`).click();
-    await expect(page.locator(".task-detail")).toBeVisible();
-}
-
-function makeStreamEvent(
-    taskId: number,
-    seq: number,
-    type: StreamEvent["type"],
-    content: string,
-    overrides: Partial<StreamEvent> = {},
-): StreamEvent {
-    return {
-        taskId,
-        conversationId: taskId,
-        executionId: EXEC_ID,
-        seq,
-        blockId: `${EXEC_ID}-${type}-${seq}`,
-        type,
-        content,
-        metadata: null,
-        parentBlockId: null,
-        subagentId: null,
-        done: false,
-        ...overrides,
-    };
-}
-
-function makeToolMessages(taskId: number): ConversationMessage[] {
-    const createdAt = new Date().toISOString();
-    return [
-        {
-            id: 91_000,
-            taskId,
-            conversationId: taskId,
-            type: "tool_call",
-            role: "assistant",
-            content: JSON.stringify({
-                type: "function",
-                function: { name: "read_file", arguments: JSON.stringify({ path: "alpha.ts" }) },
-                id: "cb-tool-1",
-                display: { label: "read_file", subject: "alpha.ts" },
-            }),
-            metadata: null,
-            createdAt,
-        },
-        {
-            id: 91_001,
-            taskId,
-            conversationId: taskId,
-            type: "tool_result",
-            role: "user",
-            content: JSON.stringify({ tool_use_id: "cb-tool-1", content: "alpha contents" }),
-            metadata: null,
-            createdAt,
-        },
-        makeAssistantMessage(taskId, "Tool output summarized"),
-    ];
-}
+import { openTaskDrawer, chatTextarea, submitChatMessage } from "./fixtures";
+import { makeTask } from "./fixtures/mock-data";
 
 test.describe("CB — conversation body coverage", () => {
-    test("CB-1: reasoning and live text blocks render in order while streaming", async ({ page, ws, task }) => {
+    test("CB-1: reasoning card renders alongside the streamed answer (C-2)", async ({ page, api, agui }) => {
+        const t = makeTask({ id: 301, conversationId: 301, title: "Reasoning Body Task" });
+        api.handle("tasks.list", () => [t]);
+        agui.script = "reasoning";
+
         await page.goto("/");
-        await openTaskDrawer(page, task.id);
+        await openTaskDrawer(page, t.id);
+        await expect(chatTextarea(page)).toBeEnabled({ timeout: 10_000 });
 
-        ws.pushStreamEvent(makeStreamEvent(task.id, 0, "reasoning_chunk", "Thinking through the request", { blockId: `${EXEC_ID}-r1` }));
-        ws.pushStreamEvent(makeStreamEvent(task.id, 1, "text_chunk", "Final streamed answer", { blockId: `${EXEC_ID}-t1` }));
+        await submitChatMessage(page, "walk me through it");
 
-        await expect(page.locator(".rb")).toBeVisible({ timeout: 3_000 });
-        await expect(page.locator(".msg__bubble.streaming")).toBeVisible({ timeout: 3_000 });
+        // The reasoning card (data-message-id r1) renders with the
+        // streaming/completed label…
+        const reasoningCard = page.locator('[data-message-id="r1"]');
+        await expect(reasoningCard).toBeVisible({ timeout: 10_000 });
+        await expect(reasoningCard).toContainText(/Thinking…|Thought for/);
 
-        const blocks = page.locator(".conv-body .rb, .conv-body .msg__bubble.streaming");
-        await expect(blocks.nth(0)).toHaveClass(/rb/);
-        await expect(blocks.nth(1)).toHaveClass(/streaming/);
-
-        // Reasoning bubble is open by default during streaming — content visible without clicking
-        await expect(page.locator(".rb__content")).toContainText("Thinking through the request");
+        // …expand it to reveal the summary; the streamed answer text follows
+        // in the shared body.
+        await reasoningCard.locator("button").first().click();
+        await expect(reasoningCard).toContainText("Comparing two candidate designs");
+        await expect(page.locator('[data-testid="copilot-chat-view"]')).toContainText("here is the answer");
     });
 
-    test("CB-1b: reasoning bubble loaded from DB starts collapsed", async ({ page, api, task }) => {
-        api.handle("conversations.getMessages", () => ({
-            messages: [
-                {
-                    id: 9001,
-                    taskId: task.id,
-                    conversationId: task.id,
-                    type: "reasoning" as const,
-                    role: "assistant" as const,
-                    content: "Some persisted reasoning content",
-                    metadata: null,
-                    createdAt: new Date().toISOString(),
-                },
-            ],
-            hasMore: false,
-        }));
+    test("CB-1b: persisted reasoning starts collapsed, expandable (C-2)", async ({ page, api, agui }) => {
+        const t = makeTask({ id: 302, conversationId: 302, title: "Persisted Reasoning Task" });
+        api.handle("tasks.list", () => [t]);
+        // Fixture-driven replay: the connect MESSAGES_SNAPSHOT carries a
+        // reasoning-role message — replayed (non-streaming) reasoning starts
+        // collapsed with the "Thought for" label (the legacy DB-loaded
+        // reasoning-bubble intent).
+        agui.registerHistory(String(t.conversationId), [
+            { id: "r1", role: "reasoning", content: "Some persisted reasoning content" },
+        ]);
 
         await page.goto("/");
-        await openTaskDrawer(page, task.id);
+        await openTaskDrawer(page, t.id);
 
-        await expect(page.locator(".rb")).toBeVisible({ timeout: 3_000 });
-        // Persisted reasoning bubble starts collapsed — content NOT visible
-        await expect(page.locator(".rb__content")).not.toBeVisible();
+        const reasoningCard = page.locator('[data-message-id="r1"]');
+        await expect(reasoningCard).toBeVisible({ timeout: 10_000 });
+        await expect(reasoningCard).toContainText(/Thought for/);
+
+        // Replayed reasoning starts collapsed (aria-expanded false) — the
+        // content stays hidden until the header is clicked.
+        const toggle = reasoningCard.locator("button").first();
+        await expect(toggle).toHaveAttribute("aria-expanded", "false");
+
+        await toggle.click();
+        await expect(toggle).toHaveAttribute("aria-expanded", "true");
+        await expect(reasoningCard).toContainText("Some persisted reasoning content");
     });
 
-    test("CB-2: virtualized conversation only renders a subset of a long history at once", async ({ page, api, task }) => {
-        const messages = Array.from({ length: 140 }, (_, index) =>
-            index % 2 === 0
-                ? makeUserMessage(task.id, `virtual user ${index}`, { id: 20_000 + index })
-                : makeAssistantMessage(task.id, `virtual assistant ${index}`, { id: 20_000 + index }),
-        );
-        api.handle("conversations.getMessages", () => ({ messages: messages, hasMore: false }));
+    test("CB-3: tool groups render in the shared body (T-2)", async ({ page, api, agui }) => {
+        const t = makeTask({ id: 303, conversationId: 303, title: "Tool Body Task" });
+        api.handle("tasks.list", () => [t]);
+        agui.script = "toolcall";
 
         await page.goto("/");
-        await openTaskDrawer(page, task.id);
+        await openTaskDrawer(page, t.id);
+        await expect(chatTextarea(page)).toBeEnabled({ timeout: 10_000 });
 
-        const initialRendered = await page.locator(".conv-body .msg").count();
-        expect(initialRendered).toBeGreaterThan(0);
-        expect(initialRendered).toBeLessThan(messages.length);
+        await submitChatMessage(page, "run the tools");
 
-        await page.locator(".conv-body").evaluate((el) => {
-            el.scrollTop = el.scrollHeight;
-        });
+        // Each tool-call family renders its card in the shared message body —
+        // shell, delegate, and write_file all visible (T-2 pattern).
+        const bashCard = page.locator('[data-testid="tool-card-tc-bash"]');
+        await expect(bashCard).toBeVisible({ timeout: 10_000 });
+        await expect(bashCard).toContainText("ls -la");
+        await bashCard.locator("button").first().click();
+        await expect(bashCard).toContainText("total 8");
 
-        await expect(page.locator(".conv-body .msg").filter({ hasText: "virtual assistant 139" })).toBeVisible({ timeout: 3_000 });
-    });
+        const subCard = page.locator('[data-testid="tool-card-tc-sub"]');
+        await expect(subCard).toBeVisible();
+        await expect(subCard).toContainText("Write the auth module");
 
-    test("CB-3: mixed persisted tool groups and assistant messages render in the shared body", async ({ page, api, task }) => {
-        api.handle("conversations.getMessages", () => ({
-            messages: [
-                ...makeToolMessages(task.id),
-                makeUserMessage(task.id, "follow-up question"),
-            ],
-            hasMore: false,
-        }));
-
-        await page.goto("/");
-        await openTaskDrawer(page, task.id);
-
-        await expect(page.locator(".conv-body .tc")).toHaveCount(1);
-        await expect(page.locator(".conv-body .tc .tc__tool-name")).toContainText("read_file");
-        await expect(page.locator(".conv-body .msg--assistant")).toContainText("Tool output summarized");
-        await expect(page.locator(".conv-body .msg--user")).toContainText("follow-up question");
-    });
-
-    test("CB-4: legacy prompt rows coexist with new transition cards without duplicating fresh prompt UI", async ({ page, api, task }) => {
-        api.handle("conversations.getMessages", () => ({
-            messages: [
-                makeTransitionMessage(task.id, { from: "Backlog", to: "Plan" }, { id: 92_000 }),
-                makeUserMessage(task.id, "/legacy-plan prompt", {
-                    id: 92_001,
-                    role: "prompt",
-                }),
-                makeTransitionMessage(task.id, {
-                    from: "Plan",
-                    to: "Apply",
-                    instructionDetail: {
-                        displayText: "Run [/opsx:apply|/opsx:apply] with [#src/app.ts|#app.ts]",
-                        sourceText: "/opsx:apply",
-                        sourceKind: "slash",
-                    },
-                }, { id: 92_002 }),
-            ],
-            hasMore: false,
-        }));
-
-        await page.goto("/");
-        await openTaskDrawer(page, task.id);
-
-        await expect(page.locator(".transition-card")).toHaveCount(2);
-        await expect(page.locator(".msg--prompt")).toHaveCount(1);
-        await expect(page.locator(".transition-card").last()).toContainText("Moved to Apply from Plan");
-        await expect(page.locator(".transition-card").last()).not.toContainText("Source");
+        const writeCard = page.locator('[data-testid="tool-card-tc-write"]');
+        await expect(writeCard).toBeVisible();
+        await expect(writeCard).toContainText("src/auth.ts");
     });
 });
