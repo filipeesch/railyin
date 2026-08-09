@@ -12,7 +12,7 @@ Railyin's hand-rolled chat stack (~8.2k lines: custom `StreamEvent` protocol, du
 - Decimal phases (2.1, 2.2): Urgent insertions (marked with INSERTED)
 
 - [x] **Phase 1: CopilotRuntime Hosting & Thread APIs (Spike)** - Pin the stack; mount CopilotRuntime inside Bun.serve; prove run/connect/stop over SSE; validate mock fixture foundation (completed 2026-08-09)
-- [ ] **Phase 2: AG-UI Bridge & RailyinAgentRunner** - All five engines behind one AG-UI boundary; JSONL persistence, replay, run lock, complete tool-call lifecycle
+- [x] **Phase 2: AG-UI Bridge & RailyinAgentRunner** - All five engines behind one AG-UI boundary; JSONL persistence, replay, run lock, complete tool-call lifecycle (completed 2026-08-09)
 - [ ] **Phase 3: Decision Interrupts & Resume** - decision_request as canonical AG-UI interrupts: runs pause, user approves/rejects, runs resume with payload; fake-engine contract tests
 - [ ] **Phase 4: JSONL Persistence & Legacy Import** - Crash-tolerant store, thread-index endpoint, idempotent legacy import over frozen tables
 - [ ] **Phase 5: Chat UI Replacement (Vue)** - Big-bang swap to CopilotChat + slots; streaming, tool cards, reasoning, slash commands, history; board /ws intact
@@ -174,7 +174,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. CopilotRuntime Hosting & Thread APIs (Spike) | 3/3 | Complete    | 2026-08-09 |
-| 2. AG-UI Bridge & RailyinAgentRunner | 3/3 | In Progress|  |
+| 2. AG-UI Bridge & RailyinAgentRunner | 3/3 | Complete    | 2026-08-09 |
 | 3. Decision Interrupts & Resume | 0/TBD | Not started | - |
 | 4. JSONL Persistence & Legacy Import | 0/TBD | Not started | - |
 | 5. Chat UI Replacement (Vue) | 0/TBD | Not started | - |

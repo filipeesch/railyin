@@ -21,13 +21,13 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### Runner & Persistence (RUNR)
 
-- [ ] **RUNR-01**: `RailyinAgentRunner` bridges all five engines (pi/claude/copilot/cursor/opencode) behind one AG-UI boundary, with per-workspace engine selection intact
-- [ ] **RUNR-02**: Conversations persist per-thread as JSONL (`data/threads/{threadId}.jsonl`) via the custom runner
-- [ ] **RUNR-03**: Thread mapping holds: `threadId = conversation.id` for cards; standalone sessions are threads without a taskId
-- [ ] **RUNR-04**: Runner enforces run locking — concurrent runs on the same thread are rejected with a clear error
-- [ ] **RUNR-05**: Reconnect/reload replays the full conversation from the JSONL event log (not snapshots)
-- [ ] **RUNR-06**: connect-before-run returns a valid empty conversation snapshot for unknown threads
-- [ ] **RUNR-07**: Replayed tool calls synthesize `TOOL_CALL_RESULT` events so cards never show stale "running" state
+- [x] **RUNR-01**: `RailyinAgentRunner` bridges all five engines (pi/claude/copilot/cursor/opencode) behind one AG-UI boundary, with per-workspace engine selection intact
+- [x] **RUNR-02**: Conversations persist per-thread as JSONL (`data/threads/{threadId}.jsonl`) via the custom runner
+- [x] **RUNR-03**: Thread mapping holds: `threadId = conversation.id` for cards; standalone sessions are threads without a taskId
+- [x] **RUNR-04**: Runner enforces run locking — concurrent runs on the same thread are rejected with a clear error
+- [x] **RUNR-05**: Reconnect/reload replays the full conversation from the JSONL event log (not snapshots)
+- [x] **RUNR-06**: connect-before-run returns a valid empty conversation snapshot for unknown threads
+- [x] **RUNR-07**: Replayed tool calls synthesize `TOOL_CALL_RESULT` events so cards never show stale "running" state
 - [ ] **RUNR-08**: Runner emits `RUN_FINISHED` with `outcome: interrupt` + `RunAgentInput.resume[]` entries for decision requests (canonical AG-UI contract; not the deprecated `on_interrupt` event)
 
 ### Runtime & Hosting (HOST)
@@ -38,9 +38,9 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### Bridge (BRDG)
 
-- [ ] **BRDG-01**: Engine `EngineEvent` deltas (text, reasoning, tool calls, interrupt) map to AG-UI events through exactly one translation path (no double-broadcast)
-- [ ] **BRDG-02**: Engine thinking routes to `REASONING_*` events consumed by the reasoning card
-- [ ] **BRDG-03**: Tool calls emit the complete lifecycle (`TOOL_CALL_START`/`ARGS`/`END`/`RESULT`) so renderers and replay stay consistent
+- [x] **BRDG-01**: Engine `EngineEvent` deltas (text, reasoning, tool calls, interrupt) map to AG-UI events through exactly one translation path (no double-broadcast)
+- [x] **BRDG-02**: Engine thinking routes to `REASONING_*` events consumed by the reasoning card
+- [x] **BRDG-03**: Tool calls emit the complete lifecycle (`TOOL_CALL_START`/`ARGS`/`END`/`RESULT`) so renderers and replay stay consistent
 
 ### Import & Migration (IMPR)
 
@@ -115,20 +115,20 @@ Which phases cover which requirements. Updated during roadmap creation.
 | CHAT-07 | Phase 5 | Pending |
 | CHAT-08 | Phase 4 | Pending |
 | CHAT-09 | Phase 3 | Pending |
-| RUNR-01 | Phase 2 | Pending |
-| RUNR-02 | Phase 2 | Pending |
-| RUNR-03 | Phase 2 | Pending |
-| RUNR-04 | Phase 2 | Pending |
-| RUNR-05 | Phase 2 | Pending |
-| RUNR-06 | Phase 2 | Pending |
-| RUNR-07 | Phase 2 | Pending |
+| RUNR-01 | Phase 2 | Complete |
+| RUNR-02 | Phase 2 | Complete |
+| RUNR-03 | Phase 2 | Complete |
+| RUNR-04 | Phase 2 | Complete |
+| RUNR-05 | Phase 2 | Complete |
+| RUNR-06 | Phase 2 | Complete |
+| RUNR-07 | Phase 2 | Complete |
 | RUNR-08 | Phase 3 | Pending |
 | HOST-01 | Phase 1 | Complete |
 | HOST-02 | Phase 1 | Complete |
 | HOST-03 | Phase 1 | Complete |
-| BRDG-01 | Phase 2 | Pending |
-| BRDG-02 | Phase 2 | Pending |
-| BRDG-03 | Phase 2 | Pending |
+| BRDG-01 | Phase 2 | Complete |
+| BRDG-02 | Phase 2 | Complete |
+| BRDG-03 | Phase 2 | Complete |
 | IMPR-01 | Phase 4 | Pending |
 | IMPR-02 | Phase 4 | Pending |
 | IMPR-03 | Phase 5 | Pending |
