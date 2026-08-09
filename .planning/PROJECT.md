@@ -22,11 +22,11 @@ The board + task card workflow with decision-request UX, powered by pluggable en
 
 ### Active
 
-- [ ] Adopt AG-UI as the wire protocol between agent backend and frontend, replacing the custom `StreamEvent` protocol
+- ✓ Adopt AG-UI as the wire protocol between agent backend and frontend — Phase 2 (bridge proven on the wire for all five engines)
 - [ ] Replace the custom chat UI stack with CopilotKit Vue (`CopilotChat` + slots, `CopilotChatInput`), deleting the ~7k-line manual implementation
-- [ ] Bridge the engine adapter layer to AG-UI via a custom `RailyinAgentRunner` (run/connect/stop/isRunning), keeping all five engines
-- [ ] Store chat history as per-thread JSONL files (`data/threads/{threadId}.jsonl`) via a custom runner (no official JSONL runner in CopilotKit)
-- [ ] Map board-card conversations and standalone chat sessions to CopilotKit threads (threadId = conversation.id)
+- ✓ Bridge the engine adapter layer to AG-UI via `RailyinAgent` + `RailyinAgentRunner` — Phase 2 (event-bridge single translation path, JSONL persistence, replay, run locking)
+- ✓ Store chat history as per-thread JSONL files (`data/threads/{threadId}.jsonl`) via `RailyinAgentRunner` — Phase 2 (crash tolerance hardening in Phase 4)
+- ✓ Map board-card conversations and standalone chat sessions to CopilotKit threads (threadId = conversation.id) — Phase 2 (workspace-key resolver)
 - [ ] Provide a legacy-import button converting old `conversation_messages`/`stream_events` rows into threads; keep old tables intact for rollback (no drops)
 - [ ] Keep decision_request as the only human-in-the-loop UX via `on_interrupt` + resume; run pauses instead of ending
 - [ ] Replace tool-run rendering with CopilotKit's tool-call slots (default card covers generic tools; ported renderers for shell/file/delegate)
@@ -155,4 +155,4 @@ Spike-proven facts (probe server `startServer({ copilotkitProbe: true })`, `@cop
 ```
 
 ---
-*Last updated: 2026-08-09 (Phase 1 complete: runtime hosting spike + eventsource patch + UAT passed)*
+*Last updated: 2026-08-09 (Phase 2 complete: AG-UI bridge + RailyinAgentRunner + JSONL persistence)*
