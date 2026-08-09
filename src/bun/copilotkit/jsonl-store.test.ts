@@ -6,7 +6,7 @@
  * dir auto-creation on first append.
  */
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import type { BaseEvent } from "@ag-ui/client";
@@ -90,5 +90,62 @@ describe("JsonlStore", () => {
     store.append("42", ev(EventType.RUN_STARTED, { threadId: "42", runId: "r1" }));
     expect(store.exists("42")).toBe(true);
     expect(existsSync(join(tmp.dir, "threads", "42.jsonl"))).toBe(true);
+  });
+});
+
+describe("list() — index rebuild from the log (D-04/D-05)", () => {
+  test("1: scans valid .jsonl files, skips decoys, sorts by mtime desc with correct metadata", () => {
+    // Direct writes (unlike store.append) need the threads dir to exist.
+    mkdirSync(join(tmp.dir, "threads"), { recursive: true });
+    // Two valid threads with explicit, distinct mtimes.
+    writeFileSync(threadLogPath(tmp.dir, "1"), '{"type":"RUN_STARTED"}\n', "utf-8");
+    writeFileSync(threadLogPath(tmp.dir, "3"), '{"type":"RUN_STARTED"}\n', "utf-8");
+    // Decoys: tmp residue, meta sidecar, non-numeric name.
+    writeFileSync(join(tmp.dir, "threads", "7.jsonl.tmp"), "partial", "utf-8");
+    writeFileSync(join(tmp.dir, "threads", "8.meta.json"), "{}", "utf-8");
+    writeFileSync(join(tmp.dir, "threads", "abc.jsonl"), "{}", "utf-8");
+
+    const older = new Date("2026-01-01T00:00:00Z");
+    const newer = new Date("2026-02-01T00:00:00Z");
+    utimesSync(threadLogPath(tmp.dir, "1"), older, older);
+    utimesSync(threadLogPath(tmp.dir, "3"), newer, newer);
+
+    const list = store.list();
+    // Exactly the 2 valid entries, mtime desc.
+    expect(list.map((e) => e.threadId)).toEqual(["3", "1"]);
+    expect(Math.abs(list[0].mtimeMs - newer.getTime())).toBeLessThan(1000);
+    expect(Math.abs(list[1].mtimeMs - older.getTime())).toBeLessThan(1000);
+    // Correct metadata on each survivor.
+    expect(list[0].size).toBe('{"type":"RUN_STARTED"}\n'.length);
+    expect(list[1].size).toBe('{"type":"RUN_STARTED"}\n'.length);
+  });
+
+  test("2: missing threads dir → []", () => {
+    expect(store.list()).toEqual([]);
+  });
+
+  test("3: corrupt/non-conforming dir entries are skipped, never thrown", () => {
+    mkdirSync(join(tmp.dir, "threads"), { recursive: true });
+    writeFileSync(threadLogPath(tmp.dir, "5"), '{"type":"RUN_STARTED"}\n', "utf-8");
+    writeFileSync(join(tmp.dir, "threads", "evil.jsonl"), "{}", "utf-8");
+    writeFileSync(join(tmp.dir, "threads", "..jsonl"), "{}", "utf-8");
+    const list = store.list();
+    expect(list.map((e) => e.threadId)).toEqual(["5"]);
+  });
+
+  test("4: crash tolerance — a partial trailing line does not hide the thread from the index, read() still skips it", () => {
+    mkdirSync(join(tmp.dir, "threads"), { recursive: true });
+    writeFileSync(
+      threadLogPath(tmp.dir, "9"),
+      '{"type":"RUN_STARTED","threadId":"9"}\n{"type":"RUN_STARTED","th',
+      "utf-8",
+    );
+    // Index half: the thread is listed despite the corrupted tail.
+    expect(store.list().map((e) => e.threadId)).toEqual(["9"]);
+    // Read half: the partial line is skipped, the complete one survives.
+    const events = store.read("9");
+    expect(events).not.toBeNull();
+    expect(events!.length).toBe(1);
+    expect(events![0]).toMatchObject({ type: EventType.RUN_STARTED, threadId: "9" });
   });
 });
