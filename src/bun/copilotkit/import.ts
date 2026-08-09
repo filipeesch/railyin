@@ -27,6 +27,7 @@ import type { Database } from "bun:sqlite";
 import type { ImportSummary } from "../../shared/rpc-types.ts";
 import type { ConversationMessageRow } from "../db/row-types.ts";
 import type { JsonlStore } from "./jsonl-store.ts";
+import { ThreadLogExistsError } from "./jsonl-store.ts";
 
 /** Message types trimmed from the new stack (REQUIREMENTS.md Out of Scope) —
  * skipped entirely, never mapped. */
@@ -264,9 +265,16 @@ export async function runLegacyImport(db: Database, store: JsonlStore): Promise<
                 summary.skipped += 1;
                 continue;
             }
-            store.importLog(threadId, events); // atomic tmp+rename (Pattern 2)
+            store.importLog(threadId, events); // atomic no-clobber publish (Pattern 2, WR-02)
             summary.imported += 1;
         } catch (err) {
+            if (err instanceof ThreadLogExistsError) {
+                // WR-02: the log appeared between our exists() check and the
+                // publish (live-runner append / concurrent import) — the D-07
+                // marker now exists, so this is a skip, never a failure.
+                summary.skipped += 1;
+                continue;
+            }
             summary.failed += 1;
             summary.errors.push(`${threadId}: ${err instanceof Error ? err.message : String(err)}`);
         }

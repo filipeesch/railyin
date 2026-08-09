@@ -18,7 +18,7 @@
  * writes whole imported logs atomically (tmp+rename) so file existence
  * stays the honest D-07 idempotency marker (Pitfall 5).
  */
-import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from "fs";
+import { appendFileSync, existsSync, linkSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from "fs";
 import { dirname, join, resolve, sep } from "path";
 import type { BaseEvent } from "@ag-ui/client";
 
@@ -28,6 +28,20 @@ const THREAD_ID_RE = /^\d+$/;
 /** `join(dataDir, "threads", `${threadId}.jsonl`)` — the per-thread log path. */
 export function threadLogPath(dataDir: string, threadId: string): string {
   return join(dataDir, "threads", `${threadId}.jsonl`);
+}
+
+/**
+ * Thrown by importLog() when the final log file already exists (WR-02): a
+ * concurrent writer (live-runner append or another import) created the
+ * thread between the caller's existence check and the atomic publish.
+ * Callers treat this as "skipped" (the D-07 marker now exists), never as
+ * "failed" — the imported snapshot must not clobber live-appended events.
+ */
+export class ThreadLogExistsError extends Error {
+  constructor(threadId: string) {
+    super(`Thread ${threadId} log already exists — refusing to overwrite`);
+    this.name = "ThreadLogExistsError";
+  }
 }
 
 export class JsonlStore {
@@ -88,11 +102,11 @@ export class JsonlStore {
   /**
    * Atomic whole-file import write (Pattern 2, D-07): the complete event
    * array (source: SQLite, not a stream) is written to `{threadId}.jsonl.tmp`
-   * and renameSync'd over the final path — atomic on POSIX. A crashed import
-   * leaves only a `.tmp` that `list()`/`exists()` never match, so the final
-   * file's existence stays the trustworthy idempotency marker (Pitfall 5 —
-   * a partial append would make existence checks lie). This is the ONLY
-   * writer of imported logs; append() remains the live-run writer.
+   * and published to the final path WITHOUT clobbering (WR-02). A crashed
+   * import leaves only a `.tmp` that `list()`/`exists()` never match, so the
+   * final file's existence stays the trustworthy idempotency marker
+   * (Pitfall 5 — a partial append would make existence checks lie). This is
+   * the ONLY writer of imported logs; append() remains the live-run writer.
    */
   importLog(threadId: string, events: BaseEvent[]): void {
     this.assertThreadId(threadId);
@@ -101,7 +115,22 @@ export class JsonlStore {
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
     const tmpPath = filePath + ".tmp";
     writeFileSync(tmpPath, events.map((e) => JSON.stringify(e)).join("\n") + "\n", "utf-8");
-    renameSync(tmpPath, filePath);
+    try {
+      // Publish atomically WITHOUT overwriting: linkSync is one syscall that
+      // fails with EEXIST when the final file already exists. The old
+      // renameSync replaced the destination unconditionally — a thread file
+      // created concurrently (live-runner append, double invocation) between
+      // the caller's exists() check and this publish would have been
+      // clobbered wholesale, losing every live-appended event (WR-02).
+      linkSync(tmpPath, filePath);
+    } catch (err) {
+      unlinkSync(tmpPath); // never leave the .tmp behind on a refused publish
+      if ((err as ErrnoException).code === "EEXIST") {
+        throw new ThreadLogExistsError(threadId);
+      }
+      throw err;
+    }
+    unlinkSync(tmpPath);
   }
 
   /**

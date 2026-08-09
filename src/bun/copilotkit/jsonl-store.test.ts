@@ -6,12 +6,12 @@
  * dir auto-creation on first append.
  */
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import type { BaseEvent } from "@ag-ui/client";
 import { EventType } from "@ag-ui/core";
-import { JsonlStore, threadLogPath } from "./jsonl-store.ts";
+import { JsonlStore, ThreadLogExistsError, threadLogPath } from "./jsonl-store.ts";
 
 function makeTempDir(): { dir: string; cleanup: () => void } {
   const dir = mkdtempSync(join(tmpdir(), "railyn-test-"));
@@ -90,6 +90,31 @@ describe("JsonlStore", () => {
     store.append("42", ev(EventType.RUN_STARTED, { threadId: "42", runId: "r1" }));
     expect(store.exists("42")).toBe(true);
     expect(existsSync(join(tmp.dir, "threads", "42.jsonl"))).toBe(true);
+  });
+});
+
+describe("importLog() — atomic no-clobber import write (D-07, WR-02)", () => {
+  test("1: imports a whole log atomically and leaves no .tmp residue", () => {
+    const events = [
+      ev(EventType.RUN_STARTED, { threadId: "5", runId: "r1", input: { messages: [] } }),
+      ev(EventType.RUN_FINISHED, { threadId: "5", runId: "r1", result: null }),
+    ];
+    store.importLog("5", events);
+    expect(store.read("5")).toEqual(events);
+    expect(readdirSync(join(tmp.dir, "threads")).filter((f) => f.endsWith(".tmp"))).toEqual([]);
+  });
+
+  test("2: refuses to clobber a file that appeared concurrently — ThreadLogExistsError, existing content untouched", () => {
+    // A live-runner append created the final file (the WR-02 race window).
+    store.append("5", ev(EventType.RUN_STARTED, { threadId: "5", runId: "live" }));
+    const before = readFileSync(threadLogPath(tmp.dir, "5"), "utf-8");
+    const snapshot = [ev(EventType.RUN_STARTED, { threadId: "5", runId: "import" })];
+
+    expect(() => store.importLog("5", snapshot)).toThrow(ThreadLogExistsError);
+    // The live-appended file is untouched — never clobber live events.
+    expect(readFileSync(threadLogPath(tmp.dir, "5"), "utf-8")).toBe(before);
+    // No .tmp residue from the refused publish.
+    expect(readdirSync(join(tmp.dir, "threads")).filter((f) => f.endsWith(".tmp"))).toEqual([]);
   });
 });
 
