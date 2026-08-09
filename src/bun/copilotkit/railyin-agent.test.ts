@@ -128,10 +128,30 @@ describe("RailyinAgent", () => {
     expect(events[events.length - 1].type).toBe(EventType.RUN_FINISHED);
   });
 
-  test("3: abortRun() routes to coordinator.cancel(executionId)", async () => {
+  test("3: abortRun() routes to coordinator.cancel(executionId); late abort after completion is a no-op (IN-02)", async () => {
     const { conversationId } = seedChatSession(db);
     const agent = makeAgent(conversationId);
-    // Start a run (fake returns executionId 42 synchronously).
+
+    // Part 1: the run COMPLETES (default fake drives onRunEnd('done')) — a
+    // late abortRun must NOT cancel the stale executionId (IN-02 clears
+    // activeRun at the terminal).
+    const completedEvents = await collectRun(agent, runInput(String(conversationId)));
+    expect(completedEvents[completedEvents.length - 1].type).toBe(EventType.RUN_FINISHED);
+    const cancelCountAfterCompletion = cancelCalls.length;
+    agent.abortRun();
+    expect(cancelCalls.length).toBe(cancelCountAfterCompletion);
+
+    // Part 2: the run stays ACTIVE (fake never calls onRunEnd) — abortRun
+    // reaches the orchestrator with the live executionId.
+    fakeCoordinator = {
+      ...fakeCoordinator,
+      executeChatTurn: async (_s, _c, _content, _m, _mcp, _ws, _att, _ec, opts) => {
+        capturedOpts = opts;
+        if (opts) opts.onEngineEvent?.({ type: "token", content: "thinking" });
+        return { message: { id: 1 } as never, executionId: 42 };
+      },
+    };
+    agent.orchestrator = fakeCoordinator;
     const obs = agent.run(runInput(String(conversationId)));
     await new Promise((resolve) => setTimeout(resolve, 0));
     obs.subscribe({ next: () => {}, error: () => {}, complete: () => {} });

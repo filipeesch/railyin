@@ -130,6 +130,7 @@ export class RailyinAgent extends AbstractAgent {
       subject.next({ type: EventType.RUN_STARTED, threadId, runId, input });
       subject.next({ type: EventType.RUN_ERROR, message, code });
       subject.complete();
+      if (this.activeRun === run) this.activeRun = null; // IN-02: no stale pointer
     };
 
     if (!/^\d+$/.test(threadId)) {
@@ -166,6 +167,19 @@ export class RailyinAgent extends AbstractAgent {
       return subject.asObservable() as unknown as ReturnType<AbstractAgent["run"]>;
     }
 
+    // RUNR-03: per-conversation workspace resolution (task → chat_sessions →
+    // default, mirroring conversations.ts:64-76). The conversation existence
+    // check above already rejected unknown threads; a null here (defensive
+    // contract layer, T-02-15) routes through the same THREAD_NOT_FOUND path.
+    // IN-03: resolved BEFORE RUN_STARTED so this rejection cannot emit a
+    // second RUN_STARTED (verifyEvents rejects a second RUN_STARTED while a
+    // run is active — exactly-one-per-run contract).
+    const workspaceKey = resolveWorkspaceKey(this.db, conversationId);
+    if (workspaceKey == null) {
+      emitRunError(`Unknown thread: ${threadId}`, "THREAD_NOT_FOUND");
+      return subject.asObservable() as unknown as ReturnType<AbstractAgent["run"]>;
+    }
+
     // RUN_STARTED FIRST, WITH input — the runner only patches when input is
     // absent, so the persisted user turn matches the wire (State of the Art).
     subject.next({ type: EventType.RUN_STARTED, threadId, runId, input });
@@ -183,6 +197,7 @@ export class RailyinAgent extends AbstractAgent {
       for (const ev of closers) subject.next(ev);
       subject.next(terminalEvent(threadId, runId, "done"));
       subject.complete();
+      if (this.activeRun === run) this.activeRun = null; // IN-02: no stale pointer
     };
 
     const finish = (
@@ -207,17 +222,9 @@ export class RailyinAgent extends AbstractAgent {
       for (const ev of synthesized.slice(accumulated.length)) subject.next(ev);
       subject.next(terminalEvent(threadId, runId, outcome, error));
       subject.complete();
+      if (this.activeRun === run) this.activeRun = null; // IN-02: no stale pointer
     };
 
-    // RUNR-03: per-conversation workspace resolution (task → chat_sessions →
-    // default, mirroring conversations.ts:64-76). The conversation existence
-    // check above already rejected unknown threads; a null here (defensive
-    // contract layer, T-02-15) routes through the same THREAD_NOT_FOUND path.
-    const workspaceKey = resolveWorkspaceKey(this.db, conversationId);
-    if (workspaceKey == null) {
-      emitRunError(`Unknown thread: ${threadId}`, "THREAD_NOT_FOUND");
-      return subject.asObservable() as unknown as ReturnType<AbstractAgent["run"]>;
-    }
     // sessionId 0 per research A3 (ignored by ChatExecutor); model/mcpTools
     // undefined — the executor resolves conversations.model via EngineRegistry (D-10).
     void this.orchestrator
