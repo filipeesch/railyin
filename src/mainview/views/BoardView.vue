@@ -207,7 +207,7 @@
     </Dialog>
 
     <!-- Chat sidebar (right docked panel) -->
-    <ChatSidebar
+    <ChatThreadSidebar
       v-if="chatSidebarOpen"
       @close="chatSidebarOpen = false"
     />
@@ -265,7 +265,7 @@ import EnginesEditorOverlay from "../components/EnginesEditorOverlay.vue";
 import WorkflowEditorOverlay from "../components/WorkflowEditorOverlay.vue";
 import TerminalPanel from "../components/TerminalPanel.vue";
 import CodeServerOverlay from "../components/CodeServerOverlay.vue";
-import ChatSidebar from "../components/ChatSidebar.vue";
+import ChatThreadSidebar from "../components/chat/ChatThreadSidebar.vue";
 import { useDrawerStore } from "../stores/drawer";
 import { readStorage, writeStorage } from "../utils/storage";
 import type { Task } from "../../shared/rpc-types";

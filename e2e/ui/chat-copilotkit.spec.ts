@@ -22,8 +22,8 @@
  */
 
 import { test, expect } from "./fixtures";
-import { openTaskDrawer } from "./fixtures";
-import { makeTask } from "./fixtures/mock-data";
+import { openTaskDrawer, openSidebar } from "./fixtures";
+import { makeTask, makeChatSession } from "./fixtures/mock-data";
 import type { Page } from "@playwright/test";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -346,5 +346,97 @@ test.describe("C — stop, reasoning, slash, decision", () => {
         expect(resume[0].interruptId).toBe("decision-interrupt-1");
         expect(resume[0].status).toBe("resolved");
         expect(resume[0].payload.answers?.length).toBeGreaterThan(0);
+    });
+});
+
+// ─── Suite L — chat thread sidebar (ChatThreadSidebar) ────────────────────────
+
+test.describe("L — chat thread sidebar", () => {
+    test("L-1: sidebar lists sessions from chatSessions.list with thread-item rows", async ({ page, api }) => {
+        const s1 = makeChatSession({ id: 501, title: "Session Alpha" });
+        const s2 = makeChatSession({ id: 502, title: "Session Beta" });
+        api.returns("chatSessions.list", [s1, s2]);
+
+        await page.goto("/");
+        await openSidebar(page);
+
+        // The sidebar data source (planner decision, Research Open Question
+        // 1/A8): chatSessions.list via chatStore — session-only rows.
+        const row1 = page.locator('[data-testid="thread-item-501"]');
+        const row2 = page.locator('[data-testid="thread-item-502"]');
+        await expect(row1).toBeVisible({ timeout: 5_000 });
+        await expect(row1).toContainText("Session Alpha");
+        await expect(row2).toBeVisible();
+        await expect(row2).toContainText("Session Beta");
+
+        // Status dot class follows the session status.
+        await expect(row1.locator(".session-item__status-dot.status-dot--idle")).toBeVisible();
+    });
+
+    test("L-2: New Session creates via chatSessions.create and opens the drawer", async ({ page, api }) => {
+        const created = makeChatSession({ id: 510, title: "New Chat" });
+        const createCalls = api.capture("chatSessions.create", created);
+
+        await page.goto("/");
+        await openSidebar(page);
+
+        await page.locator('[data-testid="thread-new"]').click();
+
+        // chatSessions.create fired (with the active workspace key) and the
+        // new session row appears; selecting it opens the session drawer.
+        await expect.poll(() => createCalls.length).toBeGreaterThan(0);
+        expect(createCalls[0]).toMatchObject({ workspaceKey: "test-workspace" });
+        await expect(page.locator('[data-testid="thread-item-510"]')).toBeVisible({ timeout: 5_000 });
+        await expect(page.locator(".session-chat-view")).toBeVisible({ timeout: 5_000 });
+    });
+
+    test("L-3: Legacy Import triggers legacyImport.run; success, idempotent and failure toasts", async ({ page, api }) => {
+        const importCalls = api.capture("legacyImport.run", {
+            total: 3, imported: 3, skipped: 0, failed: 0, errors: [],
+        });
+
+        await page.goto("/");
+        await openSidebar(page);
+
+        const importBtn = page.locator('[data-testid="legacy-import-btn"]');
+        await expect(importBtn).toBeVisible();
+
+        // First run: imported > 0 → completion toast (IMPR-01).
+        await importBtn.click();
+        await expect.poll(() => importCalls.length).toBeGreaterThan(0);
+        await expect(page.locator(".p-toast")).toContainText("Import complete", { timeout: 5_000 });
+        await expect(page.locator(".p-toast")).toContainText("Imported 3 conversations");
+
+        // Idempotent re-run (IMPR-02): everything skipped → info toast, and
+        // the button stays re-runnable.
+        api.returns("legacyImport.run", { total: 3, imported: 0, skipped: 3, failed: 0, errors: [] });
+        await importBtn.click();
+        await expect(page.locator(".p-toast")).toContainText("Already imported", { timeout: 5_000 });
+        await expect(page.locator(".p-toast")).toContainText("no duplicates");
+
+        // Failure: failed > 0 → error toast with the error detail; the
+        // action remains re-runnable (no permanent error state).
+        api.returns("legacyImport.run", { total: 2, imported: 0, skipped: 0, failed: 2, errors: ["boom"] });
+        await importBtn.click();
+        await expect(page.locator(".p-toast")).toContainText("Import failed", { timeout: 5_000 });
+        await expect(page.locator(".p-toast")).toContainText("boom");
+        await expect(importBtn).toBeEnabled();
+    });
+
+    test("L-4: empty session list renders the empty-state copy with New session active", async ({ page, api }) => {
+        api.returns("chatSessions.list", []);
+
+        await page.goto("/");
+        await openSidebar(page);
+
+        const empty = page.locator('[data-testid="thread-empty"]');
+        await expect(empty).toBeVisible({ timeout: 5_000 });
+        await expect(empty).toContainText("No sessions yet");
+        await expect(empty).toContainText("Start a new session to begin.");
+
+        // New session button remains visible and active (Copywriting Contract).
+        const newBtn = page.locator('[data-testid="thread-new"]');
+        await expect(newBtn).toBeVisible();
+        await expect(newBtn).toBeEnabled();
     });
 });
