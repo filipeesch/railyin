@@ -492,6 +492,21 @@ export class StreamProcessor {
           }
 
           case "decision_request": {
+            // WR-01: flush accumulated tokens/reasoning BEFORE persisting the
+            // terminal — mirrors the done case. The assistant text preceding a
+            // decision was only broadcast live (text_chunk WS + AG-UI wire);
+            // without this flush it never reaches conversation_messages and
+            // vanishes from history after a reload.
+            if (reasoningAccum) {
+              convBuffer.enqueue({ taskId, conversationId, type: "reasoning", role: null, content: reasoningAccum, notify: true });
+              this.onStreamEvent?.({ taskId, conversationId, executionId, seq: 0, blockId: "", type: "reasoning", content: reasoningAccum, metadata: null, parentBlockId: callStack.at(-1) ?? null, done: false, subagentId: null });
+              reasoningAccum = "";
+            }
+            if (tokenAccum) {
+              convBuffer.enqueue({ taskId, conversationId, type: "assistant", role: "assistant", content: tokenAccum, notify: true });
+              this.onStreamEvent?.({ taskId, conversationId, executionId, seq: 0, blockId: "", type: "assistant", content: tokenAccum, metadata: null, parentBlockId: callStack.at(-1) ?? null, done: false, subagentId: null });
+              tokenAccum = "";
+            }
             convBuffer.enqueue({ taskId, conversationId, type: "decision_request_prompt", role: null, content: event.payload, notify: true });
             convBuffer.flush().forEach((msg) => this.onNewMessage(msg));
             if (taskId != null) {

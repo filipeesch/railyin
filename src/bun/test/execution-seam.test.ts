@@ -229,6 +229,32 @@ describe("executeChatTurn seam (onEngineEvent/onRunEnd)", () => {
     );
     expect(await withTimeout(runEnd, 4000, "onRunEnd")).toBe("decision");
   });
+
+  it("3e: WR-01 — decision_request persists accumulated assistant text to conversation_messages (no reload data loss)", async () => {
+    orchestrator = makeOrchestrator(new SeamEngine([
+      { type: "token", content: "I need your decision." },
+      { type: "decision_request", payload: "{}" },
+    ]));
+    const { opts, runEnd } = makeSeamOpts();
+    const { sessionId, conversationId } = seedChatSession(db);
+
+    await orchestrator.executeChatTurn(
+      sessionId, conversationId, "hello", undefined, null, undefined, undefined, undefined, opts,
+    );
+    expect(await withTimeout(runEnd, 4000, "onRunEnd")).toBe("decision");
+
+    // The assistant text preceding the decision is persisted (WR-01) — before
+    // the fix only the live stream saw it and reload history dropped it.
+    const msgs = db.query<{ type: string; content: string }, [number]>(
+      "SELECT type, content FROM conversation_messages WHERE conversation_id = ? ORDER BY id",
+    ).all(conversationId);
+    const assistant = msgs.find((m) => m.type === "assistant" && m.content === "I need your decision.");
+    expect(assistant).toBeDefined();
+    const assistantIdx = msgs.findIndex((m) => m.type === "assistant" && m.content === "I need your decision.");
+    const decisionIdx = msgs.findIndex((m) => m.type === "decision_request_prompt");
+    expect(assistantIdx).toBeGreaterThan(-1);
+    expect(assistantIdx).toBeLessThan(decisionIdx);
+  });
 });
 
 describe("executeHumanTurn seam (A6 — additive opts?: ChatTurnOpts)", () => {
