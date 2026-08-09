@@ -408,7 +408,7 @@ export async function runLegacyImport(db: Database, store: JsonlStore): Promise<
 | A6 | Legacy `decision_records`/`ask_user_prompt`/`transition_event` etc. are safe to drop from import (feature trim + decisions live in JSONL interrupts on the new stack) | Import mapping | Old decisions stay readable in frozen DB; no AG-UI equivalent per REQUIREMENTS.md Out of Scope |
 | A7 | Import RPC's lack of an origin gate (same as all RPC methods) is acceptable — import is idempotent and local-only | Security | A cross-origin POST could trigger a re-import (no-op after first run); no data loss, no engine execution — matches existing app posture |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **Run grouping granularity for import**
    - What we know: `conversation_messages` has no `execution_id`; `stream_events` does. New-stack logs group per user turn. Grouping per user-message preserves ordering and matches the runner's shape.
