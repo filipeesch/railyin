@@ -8,37 +8,30 @@
  *   CD-D — waiting_user states
  *   CD-E — Persistence and ordering
  *   CD-F — Drawer lifecycle (outside-click, loading spinner, close clears state)
- *   CD-G — Model selector (populated from boot, selection works)
- *   CD-H — Boot sequence regression (sessions/models load without WS)
  *   CD-I — Edge cases (blank rename, WS dedup, replace open session)
+ *   CD-J — Action execution (stop/abort, archive)
+ *   CD-L — Tool-call rendering regression guard
  *
- * Backend is fully mocked via ApiMock + WsMock fixtures.
+ * Migrated onto the agui fixture (Phase 6, plan 06-05): the session drawer's
+ * chat is now the CopilotKit surface (SessionChatView.vue renders RailyinChat
+ * with threadId = conversationId), so the red session-chat tests were
+ * rewritten onto the S-1/S-2/C-1 patterns (chat-copilotkit.spec.ts) scoped to
+ * .session-chat-view, with NEW INLINE session variants of the chat helpers
+ * (chatTextareaSession / submitChatMessageSession) — the shared task-drawer
+ * helpers stay untouched (Pitfall 3). In-file retires (A-6/G-1..3/H-2 model
+ * selector, D-6 submitDecisions, K-1/K-2 file chips, C-6 status_chunk) are
+ * recorded with rationale in 06-05-SUMMARY.md. The 19 already-green tests
+ * stayed byte-identical.
+ *
+ * Backend is fully mocked via ApiMock + WsMock + MockAgui fixtures.
  */
 
-import { test, expect, openSidebar, openSessionDrawer, typeInSessionEditor } from "./fixtures";
-import { makeChatSession, makeChatMessage, WORKSPACE_KEY } from "./fixtures/mock-data";
-import type { StreamEvent } from "@shared/rpc-types";
+import { test, expect, openSidebar, openSessionDrawer } from "./fixtures";
+import { makeChatSession, makeChatMessage } from "./fixtures/mock-data";
+import type { Page } from "@playwright/test";
 import type { ApiMock } from "./fixtures/mock-api";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
-
-const SESSION_EXEC_ID = 2001;
-
-function sessionTextChunk(conversationId: number, executionId: number, seq: number, content: string, done = false): StreamEvent {
-    return {
-        taskId: null,
-        conversationId,
-        executionId,
-        seq,
-        blockId: `${executionId}-text`,
-        type: "text_chunk",
-        content,
-        metadata: null,
-        parentBlockId: null,
-        subagentId: null,
-        done,
-    };
-}
 
 function stubSessionMessages(api: ApiMock, conversationId: number, messages: ReturnType<typeof makeChatMessage>[]) {
     api.handle("conversations.getMessages", ({ conversationId: requestedConversationId }) => ({
@@ -47,11 +40,22 @@ function stubSessionMessages(api: ApiMock, conversationId: number, messages: Ret
     }));
 }
 
-function sessionInterviewPrompt(conversationId: number, content: string): ReturnType<typeof makeChatMessage> {
-    return makeChatMessage(0, conversationId, content, "assistant", {
-        type: "decision_request_prompt",
-        role: null,
-    });
+/** The CopilotChat root inside the session drawer's RailyinChat. */
+function sessionChat(page: Page) {
+    return page.locator(".session-chat-view [data-testid='copilot-chat-view']");
+}
+
+/** The CopilotChatInput textarea inside the session drawer's RailyinChat. */
+function chatTextareaSession(page: Page) {
+    return page.locator(".session-chat-view [data-testid='chat-input'] textarea");
+}
+
+/** Type + Enter in the session chat input (S-1 pattern, session-scoped). */
+async function submitChatMessageSession(page: Page, text: string): Promise<void> {
+    const input = chatTextareaSession(page);
+    await input.click();
+    await input.pressSequentially(text);
+    await page.keyboard.press("Enter");
 }
 
 // ─── Suite CD-A — Opening and rendering ───────────────────────────────────────
@@ -94,19 +98,24 @@ test.describe("CD-A — Opening and rendering", () => {
         await expect(page.locator(".session-chat-view .p-tablist, .session-chat-view [role='tablist']")).toHaveCount(0);
     });
 
-    test("CD-A-4: prior messages render as bubbles", async ({ page, api }) => {
+    test("CD-A-4: prior messages render from the thread replay", async ({ page, api, agui }) => {
         const session = makeChatSession({ id: 403 });
-        const userMsg = makeChatMessage(session.id, session.conversationId, "Hello!");
-        const aiMsg = makeChatMessage(session.id, session.conversationId, "Hi there!", "assistant");
         api.returns("chatSessions.list", [session]);
         api.returns("chatSessions.get", session);
-        stubSessionMessages(api, session.conversationId, [userMsg, aiMsg]);
+        // S-2 pattern: the connect replay's MESSAGES_SNAPSHOT carries the
+        // prior session history (fixture-driven, CHAT-07).
+        agui.registerHistory(String(session.conversationId), [
+            { id: "u1", role: "user", content: "Hello!" },
+            { id: "a1", role: "assistant", content: "Hi there!" },
+        ]);
 
         await page.goto("/");
         await openSessionDrawer(page, session.id);
 
-        await expect(page.locator(".session-chat-view .msg--user")).toHaveCount(1);
-        await expect(page.locator(".session-chat-view .msg--assistant")).toHaveCount(1);
+        const chat = sessionChat(page);
+        await expect(chat).toBeVisible({ timeout: 10_000 });
+        await expect(chat).toContainText("Hello!", { timeout: 10_000 });
+        await expect(chat).toContainText("Hi there!");
     });
 
     test("CD-A-5: archive button is visible in drawer header", async ({ page, api }) => {
@@ -120,175 +129,123 @@ test.describe("CD-A — Opening and rendering", () => {
 
         await expect(page.locator(".scv-header__archive-btn, .session-chat-view [data-action='archive']")).toBeVisible();
     });
-
-    test("CD-A-6: model selector is present in the input area", async ({ page, api }) => {
-        const session = makeChatSession({ id: 405 });
-        api.returns("chatSessions.list", [session]);
-        api.returns("chatSessions.get", session);
-        stubSessionMessages(api, session.conversationId, []);
-
-        await page.goto("/");
-        await openSessionDrawer(page, session.id);
-
-        // Model selector should be present (shared feature via ConversationInput)
-        await expect(page.locator(".session-chat-view .input-model-select, .session-chat-view .model-empty-state")).toBeVisible();
-    });
 });
 
 // ─── Suite CD-B — Sending messages ────────────────────────────────────────────
 
 test.describe("CD-B — Sending messages", () => {
-    test("CD-B-1: typing and pressing Enter adds user bubble", async ({ page, api, ws }) => {
+    test("CD-B-1: typing and pressing Enter streams the message via /run", async ({ page, api }) => {
         const session = makeChatSession({ id: 410 });
-        const userMsg = makeChatMessage(session.id, session.conversationId, "Test message");
-        const messages: ReturnType<typeof makeChatMessage>[] = [];
-        
-        api.returns("chatSessions.list", [session]);
-        stubSessionMessages(api, session.conversationId, messages);
-        
-        api.handle("chatSessions.sendMessage", () => {
-            messages.push(userMsg);
-            // API returns messageId, not the full message
-            return { executionId: -1, messageId: userMsg.id };
-        });
-        
-        await page.goto("/");
-        await openSessionDrawer(page, session.id);
-        
-        const before = await page.locator(".session-chat-view .msg--user").count();
-        
-        // Send the message
-        await typeInSessionEditor(page, "Test message");
-        
-        // Simulate the WebSocket message.new event that the backend sends after creating the message
-        ws.push({ type: "message.new", payload: userMsg });
-        
-        await expect(page.locator(".session-chat-view .msg--user")).toHaveCount(before + 1, { timeout: 3_000 });
-    });
-
-    test("CD-B-2: Shift+Enter inserts newline rather than sending", async ({ page, api }) => {
-        const session = makeChatSession({ id: 411 });
-        api.returns("chatSessions.list", [session]);
-        stubSessionMessages(api, session.conversationId, []);
-        let sendCalled = false;
-        api.handle("chatSessions.sendMessage", () => { sendCalled = true; return { executionId: -1, message: null }; });
-
-        await page.goto("/");
-        await openSessionDrawer(page, session.id);
-
-        await typeInSessionEditor(page, "Line 1", "Shift+Enter");
-
-        await page.waitForTimeout(300);
-        expect(sendCalled).toBe(false);
-    });
-
-    test("CD-B-3: send button is disabled when editor is empty", async ({ page, api }) => {
-        const session = makeChatSession({ id: 412 });
-        api.returns("chatSessions.list", [session]);
-        stubSessionMessages(api, session.conversationId, []);
-
-        await page.goto("/");
-        await openSessionDrawer(page, session.id);
-
-        const sendBtn = page.locator(".session-chat-view [data-testid='send-btn']");
-        await expect(sendBtn).toBeDisabled();
-    });
-
-    test("CD-B-4: send calls chatSessions.sendMessage API endpoint", async ({ page, api }) => {
-        const session = makeChatSession({ id: 413 });
-        api.returns("chatSessions.list", [session]);
-        stubSessionMessages(api, session.conversationId, []);
-        let sendPayload: unknown = null;
-        const userMsg = makeChatMessage(session.id, session.conversationId, "API check");
-        api.handle("chatSessions.sendMessage", (body) => {
-            sendPayload = body;
-            return { executionId: -1, message: userMsg };
-        });
-
-        await page.goto("/");
-        await openSessionDrawer(page, session.id);
-
-        await typeInSessionEditor(page, "API check");
-
-        await page.waitForTimeout(300);
-        expect(sendPayload).not.toBeNull();
-    });
-
-    test("CD-B-5: can send a second message after the assistant turn completes without reopening the drawer", async ({ page, api, ws }) => {
-        const session = makeChatSession({ id: 414, status: "idle" });
-        const messages: ReturnType<typeof makeChatMessage>[] = [];
-        let sendCount = 0;
-
-        api.returns("chatSessions.list", [session]);
-        stubSessionMessages(api, session.conversationId, messages);
-        api.handle("chatSessions.sendMessage", (body) => {
-            sendCount += 1;
-            const content = String((body as { content?: unknown }).content ?? "");
-            messages.push(makeChatMessage(session.id, session.conversationId, content, "user"));
-
-            setTimeout(() => {
-                const executionId = SESSION_EXEC_ID + sendCount;
-                ws.pushChatSessionUpdated({ ...session, status: "running" });
-                ws.pushStreamEvent(sessionTextChunk(session.conversationId, executionId, sendCount, `Reply ${sendCount}`));
-                messages.push(makeChatMessage(session.id, session.conversationId, `Reply ${sendCount}`, "assistant"));
-                ws.pushStreamEvent({
-                    taskId: null,
-                    conversationId: session.conversationId,
-                    executionId,
-                    seq: 900 + sendCount,
-                    blockId: `${executionId}-done`,
-                    type: "done",
-                    content: "",
-                    metadata: null,
-                    parentBlockId: null,
-                    subagentId: null,
-                    done: true,
-                });
-                ws.pushChatSessionUpdated({ ...session, status: "idle" });
-            }, 20);
-
-            return {
-                executionId: SESSION_EXEC_ID + sendCount,
-                message: makeChatMessage(session.id, session.conversationId, content, "user"),
-            };
-        });
-
-        await page.goto("/");
-        await openSessionDrawer(page, session.id);
-
-        await typeInSessionEditor(page, "First message");
-        await expect(page.locator(".session-chat-view .scv-status-tag[data-status='idle']")).toBeVisible({ timeout: 3_000 });
-        await expect(page.locator(".session-chat-view [data-testid='send-btn']")).toBeVisible({ timeout: 3_000 });
-
-        await typeInSessionEditor(page, "Second message");
-
-        await expect.poll(() => sendCount).toBe(2);
-        await expect(page.locator(".session-chat-view .msg--user")).toHaveCount(2, { timeout: 3_000 });
-    });
-
-    test("CD-B-6: sending a session message does not blank the drawer into loading state", async ({ page, api, ws }) => {
-        const session = makeChatSession({ id: 415, status: "idle" });
-        const existingAssistant = makeChatMessage(session.id, session.conversationId, "Existing reply", "assistant");
-        const userMsg = makeChatMessage(session.id, session.conversationId, "No blink", "user");
         api.returns("chatSessions.list", [session]);
         api.returns("chatSessions.get", session);
-        stubSessionMessages(api, session.conversationId, [existingAssistant]);
-        api.handle("chatSessions.sendMessage", () => ({
-            executionId: SESSION_EXEC_ID,
-            messageId: userMsg.id,
-        }));
 
         await page.goto("/");
         await openSessionDrawer(page, session.id);
-        await expect(page.locator(".session-chat-view .msg--assistant")).toContainText("Existing reply");
 
-        await typeInSessionEditor(page, "No blink");
-        // The backend sends message.new after creating the message
-        ws.push({ type: "message.new", payload: userMsg });
+        const chat = sessionChat(page);
+        await expect(chat).toBeVisible({ timeout: 10_000 });
+        await expect(chatTextareaSession(page)).toBeEnabled();
 
-        await expect(page.locator(".session-chat-view .scv-loading")).toHaveCount(0);
-        await expect(page.locator(".session-chat-view .msg--assistant")).toContainText("Existing reply");
-        await expect(page.locator(".session-chat-view .msg--user")).toContainText("No blink");
+        await submitChatMessageSession(page, "Test message");
+
+        await expect(chat).toContainText("Test message", { timeout: 10_000 });
+        await expect(chat).toContainText("hello", { timeout: 10_000 }); // quick-script text
+    });
+
+    test("CD-B-2: Shift+Enter inserts newline rather than sending", async ({ page, api, agui }) => {
+        const session = makeChatSession({ id: 411 });
+        api.returns("chatSessions.list", [session]);
+        api.returns("chatSessions.get", session);
+
+        await page.goto("/");
+        await openSessionDrawer(page, session.id);
+
+        const input = chatTextareaSession(page);
+        await expect(input).toBeEnabled({ timeout: 10_000 });
+        await input.click();
+        await input.pressSequentially("Line 1");
+        await page.keyboard.press("Shift+Enter");
+
+        // No /run fired — Shift+Enter is a newline, not a submit.
+        expect(agui.runInputs).toHaveLength(0);
+        await expect(input).toHaveValue(/Line 1/);
+    });
+
+    test("CD-B-3: pressing Enter with an empty editor sends nothing", async ({ page, api, agui }) => {
+        const session = makeChatSession({ id: 412 });
+        api.returns("chatSessions.list", [session]);
+        api.returns("chatSessions.get", session);
+
+        await page.goto("/");
+        await openSessionDrawer(page, session.id);
+
+        const input = chatTextareaSession(page);
+        await expect(input).toBeEnabled({ timeout: 10_000 });
+        await input.click();
+        await page.keyboard.press("Enter");
+
+        // Nothing to send — an empty message never fires /run.
+        expect(agui.runInputs).toHaveLength(0);
+    });
+
+    test("CD-B-4: sending calls the /run endpoint with the message", async ({ page, api, agui }) => {
+        const session = makeChatSession({ id: 413 });
+        api.returns("chatSessions.list", [session]);
+        api.returns("chatSessions.get", session);
+
+        await page.goto("/");
+        await openSessionDrawer(page, session.id);
+
+        await submitChatMessageSession(page, "API check");
+
+        // The message reaches the AG-UI runtime in the /run request body
+        // (the fixture captures every POST /agent/default/run).
+        await expect.poll(() => agui.runInputs.length).toBe(1);
+        const messages = (agui.runInputs[0] as { messages?: Array<{ content?: string }> }).messages ?? [];
+        expect(messages.some((m) => m.content === "API check")).toBe(true);
+    });
+
+    test("CD-B-5: can send a second message after the assistant turn completes without reopening the drawer", async ({ page, api, agui }) => {
+        const session = makeChatSession({ id: 414 });
+        api.returns("chatSessions.list", [session]);
+        api.returns("chatSessions.get", session);
+
+        await page.goto("/");
+        await openSessionDrawer(page, session.id);
+
+        const chat = sessionChat(page);
+        await expect(chat).toBeVisible({ timeout: 10_000 });
+
+        await submitChatMessageSession(page, "First message");
+        await expect(chat).toContainText("First message", { timeout: 10_000 });
+        await expect(chat).toContainText("hello", { timeout: 10_000 });
+
+        await submitChatMessageSession(page, "Second message");
+        await expect(chat).toContainText("Second message", { timeout: 10_000 });
+        await expect.poll(() => agui.runInputs.length).toBe(2);
+    });
+
+    test("CD-B-6: sending a session message does not blank the drawer into loading state", async ({ page, api, agui }) => {
+        const session = makeChatSession({ id: 415 });
+        api.returns("chatSessions.list", [session]);
+        api.returns("chatSessions.get", session);
+        // S-2 pattern: the persisted assistant reply comes from the thread
+        // replay — it must survive a subsequent /run without a reload.
+        agui.registerHistory(String(session.conversationId), [
+            { id: "a1", role: "assistant", content: "Existing reply" },
+        ]);
+
+        await page.goto("/");
+        await openSessionDrawer(page, session.id);
+
+        const chat = sessionChat(page);
+        await expect(chat).toContainText("Existing reply", { timeout: 10_000 });
+
+        await submitChatMessageSession(page, "No blink");
+
+        await expect(chat).toContainText("No blink", { timeout: 10_000 });
+        await expect(chat).toContainText("Existing reply");
+        await expect(page.locator('.session-chat-view [data-testid="chat-loading"]')).toHaveCount(0);
     });
 });
 
@@ -309,128 +266,110 @@ test.describe("CD-C — Streaming and execution state", () => {
         await expect(page.locator(".session-chat-view .scv-status-tag[data-status='running']")).toBeVisible({ timeout: 2_000 });
     });
 
-    test("CD-C-2: status badge returns to idle after done event", async ({ page, api, ws }) => {
-        const session = makeChatSession({ id: 421, status: "running" });
+    test("CD-C-2: the run completes and the chat returns to the idle state", async ({ page, api }) => {
+        const session = makeChatSession({ id: 421 });
         api.returns("chatSessions.list", [session]);
-        stubSessionMessages(api, session.conversationId, []);
+        api.returns("chatSessions.get", session);
 
         await page.goto("/");
         await openSessionDrawer(page, session.id);
 
-        ws.pushStreamEvent({
-            taskId: null,
-            conversationId: session.conversationId,
-            executionId: SESSION_EXEC_ID,
-            seq: 999,
-            blockId: `${SESSION_EXEC_ID}-done`,
-            type: "done",
-            content: "",
-            metadata: null,
-            parentBlockId: null,
-            subagentId: null,
-            done: true,
-        });
+        const chat = sessionChat(page);
+        await expect(chat).toBeVisible({ timeout: 10_000 });
 
-        await expect(page.locator(".session-chat-view .scv-status-tag[data-status='idle']")).toBeVisible({ timeout: 2_000 });
-        await expect(page.locator(".session-chat-view [data-testid='send-btn']")).toBeVisible({ timeout: 2_000 });
+        await submitChatMessageSession(page, "run it");
+        await expect(chat).toContainText("hello", { timeout: 10_000 }); // quick-script text
+
+        // The run is done: no stop affordance remains and the input is usable.
+        await expect(page.locator('.session-chat-view [data-testid="stop-btn"]')).not.toBeVisible();
+        await expect(chatTextareaSession(page)).toBeEnabled();
     });
 
-    test("CD-C-3: send button disabled while session status is running", async ({ page, api, ws }) => {
-        const session = makeChatSession({ id: 422, status: "idle" });
+    test("CD-C-3: while the session is running the send affordance is replaced by stop", async ({ page, api, agui }) => {
+        const session = makeChatSession({ id: 422 });
         api.returns("chatSessions.list", [session]);
-        stubSessionMessages(api, session.conversationId, []);
+        api.returns("chatSessions.get", session);
+        agui.script = "slow"; // terminal-less run — stays isRunning
 
         await page.goto("/");
         await openSessionDrawer(page, session.id);
 
-        ws.pushChatSessionUpdated({ ...session, status: "running" });
+        await submitChatMessageSession(page, "start something long");
 
-        // When running, the send button is replaced by a cancel button
-        await expect(page.locator(".session-chat-view [data-testid='cancel-btn']")).toBeVisible({ timeout: 2_000 });
-        await expect(page.locator(".session-chat-view [data-testid='send-btn']")).not.toBeAttached({ timeout: 2_000 });
+        // Running: the stop button is the active affordance; the legacy
+        // send-btn / cancel-btn chrome no longer exists.
+        const stopBtn = page.locator('.session-chat-view [data-testid="stop-btn"]');
+        await expect(stopBtn).toBeVisible({ timeout: 5_000 });
+        await expect(page.locator('.session-chat-view [data-testid="send-btn"]')).not.toBeAttached();
+        await expect(page.locator('.session-chat-view [data-testid="cancel-btn"]')).not.toBeAttached();
+        await expect(page.locator('.session-chat-view [data-testid="chat-stopped"]')).not.toBeVisible();
     });
 
-    test("CD-C-4: cancel button appears while session is running", async ({ page, api, ws }) => {
-        const session = makeChatSession({ id: 423, status: "idle" });
+    test("CD-C-4: clicking stop aborts the run and renders the Stopped marker", async ({ page, api, agui }) => {
+        const session = makeChatSession({ id: 423 });
         api.returns("chatSessions.list", [session]);
-        stubSessionMessages(api, session.conversationId, []);
+        api.returns("chatSessions.get", session);
+        agui.script = "slow";
 
         await page.goto("/");
         await openSessionDrawer(page, session.id);
 
-        ws.pushChatSessionUpdated({ ...session, status: "running" });
+        await submitChatMessageSession(page, "start something long");
 
-        await expect(page.locator(".session-chat-view [data-testid='cancel-btn']")).toBeVisible({ timeout: 2_000 });
+        const stopBtn = page.locator('.session-chat-view [data-testid="stop-btn"]');
+        await expect(stopBtn).toBeVisible({ timeout: 5_000 });
+        await stopBtn.click();
+
+        const stopped = page.locator('.session-chat-view [data-testid="chat-stopped"]');
+        await expect(stopped).toBeVisible({ timeout: 10_000 });
+        await expect(stopped).toContainText("Stopped");
+        expect(agui.stopRequests).toContain(String(session.conversationId));
     });
 
-    test("CD-C-5: live stream chunks render in the session conversation body", async ({ page, api, ws }) => {
-        const session = makeChatSession({ id: 424, status: "idle" });
+    test("CD-C-5: the live /run stream renders in the session conversation body", async ({ page, api }) => {
+        const session = makeChatSession({ id: 424 });
         api.returns("chatSessions.list", [session]);
-        stubSessionMessages(api, session.conversationId, []);
+        api.returns("chatSessions.get", session);
 
         await page.goto("/");
         await openSessionDrawer(page, session.id);
 
-        ws.pushChatSessionUpdated({ ...session, status: "running" });
-        ws.pushStreamEvent(sessionTextChunk(session.conversationId, SESSION_EXEC_ID, 0, "Streaming session text"));
+        const chat = sessionChat(page);
+        await expect(chat).toBeVisible({ timeout: 10_000 });
 
-        await expect(page.locator(".session-chat-view .msg__bubble.streaming")).toBeVisible({ timeout: 3_000 });
-        await expect(page.locator(".session-chat-view .msg__bubble.streaming")).toContainText("Streaming session text");
+        await submitChatMessageSession(page, "Streaming session text");
+
+        await expect(chat).toContainText("Streaming session text", { timeout: 10_000 });
+        await expect(chat).toContainText("hello", { timeout: 10_000 });
     });
 
-    test("CD-C-5b: persisted history stays ahead of the live session tail in one ordered list", async ({ page, api, ws }) => {
-        const session = makeChatSession({ id: 4241, status: "idle" });
+    test("CD-C-5b: persisted history stays ahead of the live session tail in one ordered list", async ({ page, api, agui }) => {
+        const session = makeChatSession({ id: 4241 });
         api.returns("chatSessions.list", [session]);
-        stubSessionMessages(api, session.conversationId, [
-            makeChatMessage(session.id, session.conversationId, "Persisted session answer", "assistant", { id: 92_000 }),
+        api.returns("chatSessions.get", session);
+        agui.registerHistory(String(session.conversationId), [
+            { id: "a1", role: "assistant", content: "Persisted session answer" },
         ]);
 
         await page.goto("/");
         await openSessionDrawer(page, session.id);
 
-        ws.pushChatSessionUpdated({ ...session, status: "running" });
-        ws.pushStreamEvent(sessionTextChunk(session.conversationId, SESSION_EXEC_ID + 1, 0, "Live session tail"));
+        const chat = sessionChat(page);
+        await expect(chat).toContainText("Persisted session answer", { timeout: 10_000 });
 
-        await expect(page.locator(".session-chat-view .conv-body__tail")).toBeVisible({ timeout: 3_000 });
-        await expect(page.locator(".session-chat-view .msg__bubble.streaming")).toContainText("Live session tail");
+        await submitChatMessageSession(page, "Live session tail");
+        await expect(chat).toContainText("Live session tail", { timeout: 10_000 });
+        await expect(chat).toContainText("hello", { timeout: 10_000 });
 
-        const order = await page.locator(".session-chat-view .conv-body [data-index]").evaluateAll((nodes) =>
-            nodes.map((node) => {
-                const tail = node.querySelector(".conv-body__tail");
-                if (tail) return `tail:${tail.textContent?.trim() ?? ""}`;
-                const bubble = node.querySelector(".msg__bubble");
-                return `msg:${bubble?.textContent?.trim() ?? ""}`;
-            }),
+        // One ordered list: the persisted replay message renders before the
+        // live /run tail inside the same CopilotChat message list.
+        const texts = await chat.locator("[data-message-id]").evaluateAll((nodes) =>
+            nodes.map((n) => n.textContent ?? ""),
         );
-
-        expect(order).toHaveLength(2);
-        expect(order[0]).toContain("Persisted session answer");
-        expect(order[1]).toContain("Live session tail");
-    });
-
-    test("CD-C-6: only one loading indicator is shown while waiting on session status updates", async ({ page, api, ws }) => {
-        const session = makeChatSession({ id: 425, status: "running" });
-        api.returns("chatSessions.list", [session]);
-        stubSessionMessages(api, session.conversationId, []);
-
-        await page.goto("/");
-        await openSessionDrawer(page, session.id);
-
-        ws.pushStreamEvent({
-            taskId: null,
-            conversationId: session.conversationId,
-            executionId: SESSION_EXEC_ID,
-            seq: 1,
-            blockId: `${SESSION_EXEC_ID}-status`,
-            type: "status_chunk",
-            content: "Thinking…",
-            metadata: null,
-            parentBlockId: null,
-            subagentId: null,
-            done: false,
-        });
-
-        await expect(page.locator(".session-chat-view .conv-body__system")).toHaveCount(1);
+        const persistedIdx = texts.findIndex((t) => t.includes("Persisted session answer"));
+        const liveIdx = texts.findIndex((t) => t.includes("Live session tail") || t.includes("hello"));
+        expect(persistedIdx).toBeGreaterThanOrEqual(0);
+        expect(liveIdx).toBeGreaterThan(persistedIdx);
     });
 });
 
@@ -463,18 +402,17 @@ test.describe("CD-D — waiting_user states", () => {
         await expect(page.locator(".status-dot--waiting_user")).toBeVisible({ timeout: 2_000 });
     });
 
-    test("CD-D-3: send is enabled in waiting_user state (user can respond)", async ({ page, api, ws }) => {
+    test("CD-D-3: the chat input is enabled in waiting_user state (user can respond)", async ({ page, api }) => {
         const session = makeChatSession({ id: 432, status: "waiting_user" });
         api.returns("chatSessions.list", [session]);
-        stubSessionMessages(api, session.conversationId, []);
+        api.returns("chatSessions.get", session);
 
         await page.goto("/");
         await openSessionDrawer(page, session.id);
 
-        await typeInSessionEditor(page, "my response", "Shift+Enter");
-
-        const sendBtn = page.locator(".session-chat-view [data-testid='send-btn']");
-        await expect(sendBtn).not.toBeDisabled();
+        const input = chatTextareaSession(page);
+        await expect(input).toBeVisible({ timeout: 10_000 });
+        await expect(input).toBeEnabled();
     });
 
     test("CD-D-4: unread dot shown in sidebar for waiting_user session not yet opened", async ({ page, api, ws }) => {
@@ -509,61 +447,34 @@ test.describe("CD-D — waiting_user states", () => {
         await page.waitForTimeout(300);
         expect(renameCalled).toBe(true);
     });
-
-    test("CD-D-6: interview prompt submit sends the answer through chatSessions.submitDecisions", async ({ page, api }) => {
-        const session = makeChatSession({ id: 435, status: "waiting_user" });
-        const prompt = sessionInterviewPrompt(session.conversationId, JSON.stringify({
-            questions: [
-                {
-                    question: "Which option?",
-                    type: "exclusive",
-                    options: [
-                        { title: "Keep current flow", description: "Stay with the current behavior." },
-                        { title: "Use unified flow", description: "Use the shared session/task behavior." },
-                    ],
-                },
-            ],
-        }));
-        api.returns("chatSessions.list", [session]);
-        stubSessionMessages(api, session.conversationId, [prompt]);
-
-        let sentBody: Record<string, unknown> | null = null;
-        api.handle("chatSessions.submitDecisions", (body) => {
-            sentBody = body as Record<string, unknown>;
-            return { messageId: 1, executionId: SESSION_EXEC_ID };
-        });
-
-        await page.goto("/");
-        await openSessionDrawer(page, session.id);
-
-        await page.locator(".session-chat-view .interview__option-title", { hasText: "Use unified flow" }).click();
-        await page.locator(".session-chat-view .interview__submit").click();
-
-        await expect.poll(() => sentBody).toBeTruthy();
-        const answers = (sentBody?.answers as Array<{ answer: string }>) ?? [];
-        expect(answers[0].answer).toContain("Use unified flow");
-    });
 });
 
 // ─── Suite CD-E — Persistence and ordering ────────────────────────────────────
 
 test.describe("CD-E — Persistence and ordering", () => {
-    test("CD-E-1: messages render in chronological order (oldest first)", async ({ page, api }) => {
+    test("CD-E-1: messages render in chronological order (oldest first)", async ({ page, api, agui }) => {
         const session = makeChatSession({ id: 440 });
-        const msg1 = makeChatMessage(session.id, session.conversationId, "First message", "user");
-        const msg2 = makeChatMessage(session.id, session.conversationId, "Second message", "assistant");
-        msg1.createdAt = "2024-01-01T00:00:00.000Z";
-        msg2.createdAt = "2024-01-01T00:01:00.000Z";
         api.returns("chatSessions.list", [session]);
-        stubSessionMessages(api, session.conversationId, [msg1, msg2]);
+        api.returns("chatSessions.get", session);
+        // S-2 pattern + registerHistory: the replay snapshot preserves order.
+        agui.registerHistory(String(session.conversationId), [
+            { id: "u1", role: "user", content: "First message" },
+            { id: "a1", role: "assistant", content: "Second message" },
+        ]);
 
         await page.goto("/");
         await openSessionDrawer(page, session.id);
 
-        const bubbles = page.locator(".session-chat-view .msg__bubble");
-        await expect(bubbles).toHaveCount(2);
-        await expect(bubbles.first()).toContainText("First message");
-        await expect(bubbles.last()).toContainText("Second message");
+        const chat = sessionChat(page);
+        await expect(chat).toContainText("First message", { timeout: 10_000 });
+
+        const texts = await chat.locator("[data-message-id]").evaluateAll((nodes) =>
+            nodes.map((n) => n.textContent ?? ""),
+        );
+        const firstIdx = texts.findIndex((t) => t.includes("First message"));
+        const secondIdx = texts.findIndex((t) => t.includes("Second message"));
+        expect(firstIdx).toBeGreaterThanOrEqual(0);
+        expect(secondIdx).toBeGreaterThan(firstIdx);
     });
 
     test("CD-E-2: opening task drawer after session switches to task-chat-view", async ({ page, api, task }) => {
@@ -604,27 +515,30 @@ test.describe("CD-E — Persistence and ordering", () => {
         expect(panelWidth).toBeLessThanOrEqual(620);
     });
 
-    test("CD-E-4: opening a session scrolls to the latest message", async ({ page, api }) => {
+    test("CD-E-4: opening a session scrolls to the latest message", async ({ page, api, agui }) => {
         const session = makeChatSession({ id: 443 });
-        const messages = Array.from({ length: 240 }, (_, index) =>
-            makeChatMessage(
-                session.id,
-                session.conversationId,
-                `Message ${index + 1} — ${"detail ".repeat(24)}`,
-                index % 2 === 0 ? "user" : "assistant",
-            ),
-        );
+        const history = Array.from({ length: 240 }, (_, index) => ({
+            id: `m${index + 1}`,
+            role: index % 2 === 0 ? "user" : "assistant",
+            content: `Message ${index + 1} — ${"detail ".repeat(24)}`,
+        }));
         api.returns("chatSessions.list", [session]);
-        stubSessionMessages(api, session.conversationId, messages);
+        api.returns("chatSessions.get", session);
+        agui.registerHistory(String(session.conversationId), history);
 
         await page.goto("/");
         await openSessionDrawer(page, session.id);
 
-        await expect(page.locator(".session-chat-view .msg__bubble").last()).toContainText("Message 240");
-        const isAtBottom = await page.locator(".session-chat-view .conv-body").evaluate((el) => {
-            const node = el as HTMLElement;
-            return node.scrollTop + node.clientHeight >= node.scrollHeight - 40;
-        });
+        const chat = sessionChat(page);
+        await expect(chat).toContainText("Message 240", { timeout: 10_000 });
+
+        // CopilotChat scroll container (replaces the legacy .conv-body).
+        const isAtBottom = await page
+            .locator('.session-chat-view [data-testid="copilot-chat-view-scroll"]')
+            .evaluate((el) => {
+                const node = el as HTMLElement;
+                return node.scrollTop + node.clientHeight >= node.scrollHeight - 40;
+            });
         expect(isAtBottom).toBe(true);
     });
 });
@@ -686,114 +600,6 @@ test.describe("CD-F — Drawer lifecycle", () => {
     });
 });
 
-// ─── Suite CD-G — Model selector ──────────────────────────────────────────────
-
-const MODELS = [
-  {
-    id: "copilot/gpt-4o",
-    displayName: "GPT-4o",
-    contextWindow: 128_000,
-  },
-  {
-    id: "copilot/o1",
-    displayName: "o1",
-    contextWindow: 200_000,
-  },
-];
-
-function stubModelsList(api: ApiMock) {
-  api.handle("models.listEnabled", () => MODELS);
-}
-
-test.describe("CD-G — Model selector", () => {
-    test("CD-G-1: model dropdown shows options populated from boot", async ({ page, api }) => {
-        const session = makeChatSession({ id: 460 });
-        api.returns("chatSessions.list", [session]);
-        stubSessionMessages(api, session.conversationId, []);
-        stubModelsList(api);
-        // models.listEnabled is already stubbed in the base fixture
-
-        await page.goto("/");
-        await openSessionDrawer(page, session.id);
-
-        // Model select should be visible (models loaded at boot, not empty-state)
-        await expect(page.locator(".session-chat-view .input-model-select")).toBeVisible();
-
-        // Open the dropdown to verify options are present
-        await page.locator(".session-chat-view .input-model-select").click();
-        await expect(page.locator(".p-select-overlay")).toBeVisible({ timeout: 2_000 });
-        await expect(page.locator(".p-select-overlay .p-select-option")).toHaveCount(2, { timeout: 2_000 });
-
-        // Close the dropdown
-        await page.keyboard.press("Escape");
-    });
-
-    test("CD-G-2: selecting a model from the dropdown updates the displayed selection", async ({ page, api }) => {
-        const session = makeChatSession({ id: 461 });
-        api.returns("chatSessions.list", [session]);
-        stubSessionMessages(api, session.conversationId, []);
-        stubModelsList(api);
-        await page.goto("/");
-        await openSessionDrawer(page, session.id);
-        await page.locator(".session-chat-view .input-model-select").click();
-        await expect(page.locator(".p-select-overlay")).toBeVisible({ timeout: 2_000 });
-        // Click the first option
-        const option = page.locator(".p-select-overlay .p-select-option").first();
-        const optionTitle = await option.locator(".model-select__option-title").innerText();
-        await option.click();
-        // The model select value label should now show the selected model
-        await expect(page.locator(".session-chat-view .model-select__value")).toContainText(optionTitle.trim());
-    });
-
-    test("CD-G-3: selected model persists after closing and reopening the drawer", async ({ page, api, ws }) => {
-        const session = makeChatSession({ id: 462, model: null });
-        let currentSession = { ...session };
-        
-        api.returns("chatSessions.list", [currentSession]);
-        api.handle("chatSessions.get", () => currentSession);
-        stubSessionMessages(api, currentSession.conversationId, []);
-        stubModelsList(api);
-        
-        // Mock setModel to update the session and push WS event
-        api.handle("chatSessions.setModel", ({ sessionId, model }) => {
-            currentSession = { ...currentSession, model };
-            ws.push({ type: "chatSession.updated", payload: currentSession });
-            return currentSession;
-        });
-        
-        await page.goto("/");
-        
-        // Click the chat sidebar toggle button directly
-        await page.click("button.chat-sidebar-toggle, button[aria-label='Chat sessions'], .toolbar-btn--chat");
-        await page.waitForSelector(".chat-sidebar", { timeout: 5000 });
-        
-        // Click on the session to open the drawer
-        await page.click(`[data-session-id="${session.id}"]`);
-        await page.waitForSelector(".session-chat-view", { timeout: 5000 });
-        
-        // Select a model (second option)
-        await page.locator(".session-chat-view .input-model-select").click();
-        await expect(page.locator(".p-select-overlay")).toBeVisible({ timeout: 2_000 });
-        const options = page.locator(".p-select-overlay .p-select-option");
-        await options.nth(1).click(); // Select second model
-        const selectedModelText = await page.locator(".session-chat-view .model-select__value").innerText();
-        
-        // Wait for persistence
-        await page.waitForTimeout(300);
-        
-        // Close the drawer by clicking outside
-        await page.click(".board-view", { position: { x: 50, y: 50 } });
-        await page.waitForTimeout(300);
-        
-        // Reopen the same session
-        await page.click(`[data-session-id="${session.id}"]`);
-        await page.waitForSelector(".session-chat-view", { timeout: 5000 });
-        
-        // Verify the selected model is still displayed
-        await expect(page.locator(".session-chat-view .model-select__value")).toContainText(selectedModelText);
-    });
-});
-
 // ─── Suite CD-H — Boot sequence regression ────────────────────────────────────
 
 test.describe("CD-H — Boot sequence regression", () => {
@@ -809,20 +615,6 @@ test.describe("CD-H — Boot sequence regression", () => {
         // Sessions should appear from chatSessions.list called at boot
         await expect(page.locator(".session-item")).toHaveCount(2, { timeout: 3_000 });
         await expect(page.locator(".session-item__title").first()).toContainText("Boot Session");
-    });
-
-    test("CD-H-2: model dropdown is populated after page load without any manual trigger", async ({ page, api }) => {
-        const session = makeChatSession({ id: 472 });
-        api.returns("chatSessions.list", [session]);
-        stubSessionMessages(api, session.conversationId, []);
-        // models.listEnabled stub returns one model (set in base fixture)
-
-        await page.goto("/");
-        await openSessionDrawer(page, session.id);
-
-        // Model select (not empty-state) should be present — models loaded at boot
-        await expect(page.locator(".session-chat-view .input-model-select")).toBeVisible();
-        await expect(page.locator(".session-chat-view .model-empty-state")).toHaveCount(0);
     });
 });
 
@@ -901,24 +693,25 @@ test.describe("CD-I — Edge cases", () => {
 });
 
 test.describe("CD-J — action execution", () => {
-    test("CD-J-1: clicking cancel calls chatSessions.cancel and can transition to waiting_user", async ({ page, api, ws }) => {
-        const session = makeChatSession({ id: 490, status: "idle" });
+    test("CD-J-1: clicking stop aborts the session run via /stop", async ({ page, api, agui }) => {
+        const session = makeChatSession({ id: 490 });
         api.returns("chatSessions.list", [session]);
-        stubSessionMessages(api, session.conversationId, []);
-        const cancelCalls = api.capture("chatSessions.cancel", undefined);
+        api.returns("chatSessions.get", session);
+        agui.script = "slow";
 
         await page.goto("/");
         await openSessionDrawer(page, session.id);
 
-        ws.pushChatSessionUpdated({ ...session, status: "running" });
-        const cancelBtn = page.locator(".session-chat-view [data-testid='cancel-btn']");
-        await expect(cancelBtn).toBeVisible({ timeout: 2_000 });
-        await cancelBtn.click();
+        await submitChatMessageSession(page, "start something long");
 
-        expect(cancelCalls).toEqual([{ sessionId: session.id }]);
+        const stopBtn = page.locator('.session-chat-view [data-testid="stop-btn"]');
+        await expect(stopBtn).toBeVisible({ timeout: 5_000 });
+        await stopBtn.click();
 
-        ws.pushChatSessionUpdated({ ...session, status: "waiting_user" });
-        await expect(page.locator(".session-chat-view .scv-status-tag[data-status='waiting_user']")).toBeVisible({ timeout: 2_000 });
+        // The /stop round-trip hit the fixture for this thread (the legacy
+        // chatSessions.cancel flow is replaced by the AG-UI abort path).
+        await expect(page.locator('.session-chat-view [data-testid="chat-stopped"]')).toBeVisible({ timeout: 10_000 });
+        expect(agui.stopRequests).toContain(String(session.conversationId));
     });
 
     test("CD-J-2: clicking archive calls chatSessions.archive and closes the drawer", async ({ page, api }) => {
@@ -937,129 +730,27 @@ test.describe("CD-J — action execution", () => {
     });
 });
 
-// ─── Suite CD-K — File chip attachments ──────────────────────────────────────
-
-test.describe("CD-K — file chip attachments", () => {
-    test("CD-K-1: sending a #file chip in session chat includes @file attachment in chatSessions.sendMessage", async ({ page, api }) => {
-        const session = makeChatSession({ id: 495 });
-        api.returns("chatSessions.list", [session]);
-        stubSessionMessages(api, session.conversationId, []);
-        api.returns("workspace.listFiles", [{ name: "utils.ts", path: "src/utils.ts" }]);
-        api.returns("lsp.workspaceSymbol", []);
-
-        let capturedAttachments: unknown[] | undefined;
-        api.handle("chatSessions.sendMessage", (params: { attachments?: unknown[] }) => {
-            capturedAttachments = params.attachments;
-            return { executionId: -1, message: makeChatMessage(session.id, session.conversationId, "#utils.ts") };
-        });
-
-        await page.goto("/");
-        await openSessionDrawer(page, session.id);
-
-        const editor = page.locator(".session-chat-view .chat-editor .cm-content");
-        await editor.click();
-        await page.keyboard.type("#utils");
-
-        await expect(page.locator(".cm-tooltip-autocomplete")).toBeVisible({ timeout: 3_000 });
-        await expect(page.locator(".cm-tooltip-autocomplete [aria-selected]")).toBeVisible({ timeout: 1_000 });
-        await page.keyboard.press("Enter"); // select file chip
-
-        const sendResponsePromise = page.waitForResponse("**/api/chatSessions.sendMessage");
-        await page.locator(".session-chat-view [data-testid='send-btn']").click();
-        await sendResponsePromise;
-
-        expect(capturedAttachments).toBeDefined();
-        expect(capturedAttachments!.length).toBeGreaterThan(0);
-        const att = capturedAttachments![0] as { data: string; label: string; mediaType: string };
-        expect(att.data).toBe("@file:src/utils.ts");
-        expect(att.label).toBe("utils.ts");
-        expect(att.mediaType).toBe("text/plain");
-    });
-
-    test("CD-K-2: #file chip renders as styled token in session chat editor", async ({ page, api }) => {
-        const session = makeChatSession({ id: 496 });
-        api.returns("chatSessions.list", [session]);
-        stubSessionMessages(api, session.conversationId, []);
-        api.returns("workspace.listFiles", [{ name: "index.ts", path: "src/index.ts" }]);
-        api.returns("lsp.workspaceSymbol", []);
-
-        await page.goto("/");
-        await openSessionDrawer(page, session.id);
-
-        const editor = page.locator(".session-chat-view .chat-editor .cm-content");
-        await editor.click();
-        await page.keyboard.type("#index");
-
-        await expect(page.locator(".cm-tooltip-autocomplete [aria-selected]")).toBeVisible({ timeout: 3_000 });
-        await page.keyboard.press("Enter");
-
-        // Chip must render as a styled widget, not raw markup text
-        await expect(page.locator(".session-chat-view .chat-editor .chat-editor__chip")).toBeVisible({ timeout: 2_000 });
-        const rawText = await page.locator(".session-chat-view .chat-editor .cm-content").textContent();
-        expect(rawText).not.toContain("[#");
-    });
-});
-
-// ─── Suite CD-L — Orphaned tool call regression guard ────────────────────────
+// ─── Suite CD-L — Tool-call rendering regression guard ────────────────────────
 //
 // The original bug was first observed in a chat session ("brokers").
-// ConversationBody.vue is shared between task and session drawers.
-// This test guards against session-specific wrapper code diverging in future
-// and accidentally re-introducing the orphan-drop filter.
+// The legacy ConversationBody dropped orphaned tool_call children; the
+// CopilotKit surface renders every tool call through its slot renderers, so
+// this guards session-scoped tool rendering end-to-end.
 
-test.describe("CD-L — Orphaned tool calls in session render as tool entries", () => {
-    test("CD-L-1: session with orphaned tool_call children (parent absent) renders .tc cards", async ({ page, api }) => {
+test.describe("CD-L — Tool calls in session render as tool cards", () => {
+    test("CD-L-1: session tool calls render the domain tool cards", async ({ page, api, agui }) => {
         const session = makeChatSession({ id: 498 });
         api.returns("chatSessions.list", [session]);
         api.returns("chatSessions.get", session);
-
-        const delegateCallId = "tc-cdl-delegate";
-        let _nextSessionMsgId = 9000;
-
-        function makeChildCall(id: number, toolCallId: string): ReturnType<typeof makeChatMessage> {
-            return {
-                id: _nextSessionMsgId++,
-                taskId: null as unknown as number,
-                conversationId: session.conversationId,
-                type: "tool_call",
-                role: "assistant",
-                content: JSON.stringify({
-                    type: "function",
-                    function: { name: "read_file", arguments: JSON.stringify({ path: `src/f${id}.ts` }) },
-                    id: toolCallId,
-                    display: { label: "read_file", subject: `src/f${id}.ts` },
-                }),
-                metadata: { parent_tool_call_id: delegateCallId },
-                createdAt: new Date().toISOString(),
-            };
-        }
-
-        function makeChildResult(id: number, toolCallId: string): ReturnType<typeof makeChatMessage> {
-            return {
-                id: _nextSessionMsgId++,
-                taskId: null as unknown as number,
-                conversationId: session.conversationId,
-                type: "tool_result",
-                role: "user",
-                content: JSON.stringify({ tool_use_id: toolCallId, content: "ok" }),
-                metadata: null,
-                createdAt: new Date().toISOString(),
-            };
-        }
-
-        const messages = [
-            makeChildCall(1, "tc-cdl-c1"),
-            makeChildResult(1, "tc-cdl-c1"),
-            makeChildCall(2, "tc-cdl-c2"),
-            makeChildResult(2, "tc-cdl-c2"),
-        ];
-
-        stubSessionMessages(api, session.conversationId, messages);
+        agui.script = "toolcall"; // shell/delegate/write family tool calls
 
         await page.goto("/");
         await openSessionDrawer(page, session.id);
 
-        // Both orphaned children must render as visible tool call cards
-        await expect(page.locator(".session-chat-view .tc")).toHaveCount(2, { timeout: 3_000 });
+        await submitChatMessageSession(page, "run the tools");
+
+        const bashCard = page.locator('.session-chat-view [data-testid="tool-card-tc-bash"]');
+        await expect(bashCard).toBeVisible({ timeout: 10_000 });
+        await expect(bashCard).toContainText("ls -la");
     });
 });
