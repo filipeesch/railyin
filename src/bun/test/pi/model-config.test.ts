@@ -1,9 +1,9 @@
 import { describe, test, expect } from "bun:test";
 import {
   resolvePiModelConfig,
+  nativeModelIdFor,
   derivePiModelSettings,
   derivePiModelAxes,
-  canonicalThinkingLevel,
 } from "../../engine/pi/model-config.ts";
 import type { PiEngineConfig, PiModelConfig } from "../../config/index.ts";
 
@@ -43,6 +43,53 @@ describe("resolvePiModelConfig", () => {
   test("MC-RES-6: missing model returns undefined", () => {
     const cfg = makeConfig({});
     expect(resolvePiModelConfig(cfg, "lmstudio/nope")).toBeUndefined();
+  });
+
+  test("MC-RES-7: 3-part provider-bearing id resolves engine-keyed model after native strip", () => {
+    const cfg = makeConfig({ "deepseek-v4-flash": { name: "DeepSeek V4 Flash", reasoning: true, thinkingFormat: "deepseek" } });
+    // full qualified id (engineId/providerId/modelId)
+    const nativeId = nativeModelIdFor("pi-local/vllm/deepseek-v4-flash");
+    expect(nativeId).toBe("vllm/deepseek-v4-flash");
+    const m = resolvePiModelConfig(cfg, nativeId);
+    expect(m?.name).toBe("DeepSeek V4 Flash");
+    expect(m?.thinkingFormat).toBe("deepseek");
+  });
+
+  test("MC-RES-8: 4-part provider-bearing id resolves family-prefixed model after native strip", () => {
+    const cfg = makeConfig({ "deepseek/deepseek-v4-flash-0731": { name: "DeepSeek V4 Flash" } });
+    const nativeId = nativeModelIdFor("pi-openrouter/openrouter/deepseek/deepseek-v4-flash-0731");
+    expect(nativeId).toBe("openrouter/deepseek/deepseek-v4-flash-0731");
+    const m = resolvePiModelConfig(cfg, nativeId);
+    expect(m?.name).toBe("DeepSeek V4 Flash");
+  });
+
+  test("MC-RES-9: 2-part qualified id native id has no provider segment", () => {
+    expect(nativeModelIdFor("pi-lmstudio/qwen3-8b")).toBe("qwen3-8b");
+  });
+});
+
+describe("nativeModelIdFor", () => {
+  test("MC-NMID-1: strips engine from 2-part id", () => {
+    expect(nativeModelIdFor("copilot/gpt-4.1")).toBe("gpt-4.1");
+  });
+
+  test("MC-NMID-2: strips engine, keeps provider from 3-part id", () => {
+    expect(nativeModelIdFor("pi-local/vllm/deepseek-v4-flash")).toBe("vllm/deepseek-v4-flash");
+  });
+
+  test("MC-NMID-3: strips engine, keeps provider+model from 4-part id", () => {
+    expect(nativeModelIdFor("pi-openrouter/openrouter/deepseek/deepseek-v4-flash-0731")).toBe(
+      "openrouter/deepseek/deepseek-v4-flash-0731",
+    );
+  });
+
+  test("MC-NMID-4: unparseable/single-segment string falls back to itself", () => {
+    expect(nativeModelIdFor("qwen3-8b")).toBe("qwen3-8b");
+    expect(nativeModelIdFor("default")).toBe("default");
+  });
+
+  test("MC-NMID-5: undefined falls back to empty string, no throw", () => {
+    expect(nativeModelIdFor(undefined)).toBe("");
   });
 });
 
@@ -146,29 +193,4 @@ describe("derivePiModelAxes", () => {
   });
 });
 
-describe("canonicalThinkingLevel", () => {
-  test("MC-CANON-1: none maps to off", () => {
-    expect(canonicalThinkingLevel({ reasoningEffort: "none" })).toBe("off");
-    expect(canonicalThinkingLevel({ reasoning_effort: "none" })).toBe("off");
-  });
 
-  test("MC-CANON-2: valid canonical levels pass through", () => {
-    for (const level of ["minimal", "low", "medium", "high", "xhigh"] as const) {
-      expect(canonicalThinkingLevel({ reasoningEffort: level })).toBe(level);
-    }
-  });
-
-  test("MC-CANON-3: no effort, no knob → off", () => {
-    expect(canonicalThinkingLevel({})).toBe("off");
-    expect(canonicalThinkingLevel(undefined)).toBe("off");
-  });
-
-  test("MC-CANON-4: invalid effort falls back to off", () => {
-    expect(canonicalThinkingLevel({ reasoningEffort: "max" } as Record<string, unknown>)).toBe("off");
-  });
-
-  test("MC-CANON-5: provider-specific knob without effort → high (reasoning enabled)", () => {
-    expect(canonicalThinkingLevel({ enable_thinking: true })).toBe("high");
-    expect(canonicalThinkingLevel({ chat_template_kwargs: { enable_thinking: true } })).toBe("high");
-  });
-});

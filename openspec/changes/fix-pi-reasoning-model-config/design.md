@@ -19,15 +19,16 @@ Only the run path (engine.ts:289) passes the raw qualified id.
 ## Goals / Non-Goals
 
 **Goals:**
-- Restore DeepSeek reasoning bubbles for `pi-local` and `pi-openrouter` by fixing the run-path model-config resolution so Mode-selected reasoning effort is honored.
-- Make the fix consistent with the existing, correct resolution in `model-builder.ts` and `listModels()` (single normalization rule, no duplicated ad-hoc logic).
+- Restore DeepSeek reasoning bubbles for `pi-local` and `pi-openrouter` by fixing the run-path model-config resolution so Mode-selected reasoning is honored.
+- **Adopt a direct-injection reasoning architecture** (per user decision #1953): each Pi variant declares `thinking: bool` and an arbitrary `options` body fully injected into the OpenAI request, bypassing the Pi SDK `thinkingLevel`/`thinkingLevelMap` normalization. This makes the wire reasoning kwargs explicit and model-agnostic (ds4 `reasoning_effort`, booleans like `enable_thinking`, `chat_template_kwargs`, etc.).
+- Make the id→config resolution consistent with `model-builder.ts`/`listModels()` (single normalization rule).
 - Wire `requiresReasoningContentOnAssistantMessages` for OpenRouter-served DeepSeek so assistant-message reasoning stays coherent across turns.
-- Align the resolved SDK version to `^0.80.3` (as declared) and verify the reasoning surface is unchanged.
+- Keep the SDK aligned to `^0.80.3` (authoritative `bun.lock`; remove the stale npm `package-lock.json`).
 
 **Non-Goals:**
 - No migration to SDK `0.84.x` (v4 lane-based Session API churn; deferred to a separate change).
 - No UI/model-reasoning rendering changes (`ReasoningBubble`/`event-translator`/persistence already correct).
-- No changes to the inference server (ds4) or the SDK's reasoning param building (both verified correct).
+- No changes to the inference server (ds4) or to the Pi SDK's *own* reasoning param building — Railyin simply overrides/forwards the reasoning kwargs it cares about via `onPayload`, which already merges last over the SDK's `buildParams`.
 
 ## Decisions
 
@@ -57,10 +58,36 @@ Extend `model-builder.ts` so `requiresReasoningContentOnAssistantMessages` is se
 
 **Rationale:** DeepSeek streams reasoning in a separate `reasoning_content` field on assistant messages; the SDK's hostname auto-detection only matches `deepseek.com`, so OpenRouter-served DeepSeek needs the compat flag set explicitly for coherent replays across turns. This is required for the *rest* of the feature (multi-turn conversation coherence) once bubbles are fixed.
 
-### D4 — SDK lockfile bump to 0.80.3 (no API migration)
-Align the resolved `@earendil-works/pi-coding-agent` / `@earendil-works/pi-ai` / `@earendil-works/pi-agent-core` versions from `0.74.0` to `0.80.3` in the lockfile to match `package.json`'s `^0.80.3`. Verify the reasoning surface (`thinkingLevel → reasoningEffort → thinking:{enabled/disabled}` and `thinking_delta` emission) is unchanged between 0.74 and 0.80.3 (verified identical in source). No 0.84 migration.
+### D4 — SDK already on 0.80.3 via bun.lock; remove stale npm lockfile
+The authoritative `bun.lock` (Railyin uses `bun install`/`bun test` per AGENTS.md) already resolves `@earendil-works/pi-coding-agent`/`pi-ai`/`pi-agent-core` to `0.80.3` — matching `package.json`'s `^0.80.3`. The only `0.74.0` reference lives in the stale npm `package-lock.json`, which bun does not use. Per decision #1949, **remove** `package-lock.json` rather than sync it. No API migration. The reasoning surface (`thinking_delta` emission) is verified unchanged between 0.74 and 0.80.3.
 
-**Rationale:** "running 0.74 but declared 0.80.3" is a real skew (decision #1942), and 0.80.3 is the version the openspec reasoning design was validated against. It is a small, backward-compatible bump that removes a variable without the risk of the 0.84 v4 Session rewrite (deferred).
+**Rationale:** removes the false "running 0.74" premise and the unused npm lockfile; keeps Railyin on the version the reasoning design was validated against. No 0.84 migration (v4 Session rewrite deferred).
+
+### D5 — Direct-injection reasoning architecture (variant `thinking` + raw `options`)
+Adopt the user's final architecture (decision #1953). The Pi reasoning contract no longer routes through the SDK `thinkingLevel`/`thinkingLevelMap` normalization. Instead:
+
+```yaml
+models:
+  deepseek-v4-flash:
+    thinkingFormat: deepseek
+    variants:
+      none:  { label: Off,     thinking: false, options: { reasoning_effort: none } }
+      high:  { label: Normal,  thinking: true,  options: { reasoning_effort: high } }
+      max:   { label: Max,     thinking: true,  options: { reasoning_effort: max } }
+```
+
+- **Variant node name** is an opaque key (the UI Mode axis value), **not** a Pi level.
+- **`label`** is what the UI shows.
+- **`thinking: bool`** maps to the wire `thinking: { type: enabled|disabled }` when present.
+- **`options`** are arbitrary request-body params merged verbatim into the outgoing OpenAI request via `onPayload` (which already runs *after* the SDK's `buildParams`, so it overrides the SDK's default `thinking`/`reasoning_effort`). This supports ds4's native `reasoning_effort` (`none`/`high`/`max`) and boolean-only reasoning models (`enable_thinking`, `chat_template_kwargs`, …).
+
+Concretely, `PiModelConfigApplier.applyToSession`:
+- Reads the selected variant's `options` and `thinking`.
+- Maps `thinking: true` → `thinking: { type: "enabled" }`, `thinking: false` → `{ type: "disabled" }` in the merged request body (guarded: only when the variant declares `thinking`).
+- **Stops stripping** `reasoning_effort`/`reasoningEffort` from `options` — they now pass through verbatim (this reverses prior D1 "SDK owns the effort key").
+- Sets `session.agent.state.thinkingLevel` to a non-"off" sentinel when a variant declares any reasoning-independent flag? **No** — the wire reasoning is fully driven by injected `options`/`thinking`; `thinkingLevel` no longer needs to encode provider reasoning. It is left at its default; the injected `thinking:{type:enabled}` in `onPayload` overrides the SDK's disabled default.
+
+**Rationale (honest trade-off):** fully explicit, model-agnostic reasoning kwargs; no Pi canonical-level space, no clamping, no map. Cost: reverses D1/D2 (SDK-owns-effort / no-map) from the original openspec change, and touches the Pi config type, validation, applier, builder, sample config, and tests. The `requiresReasoningContentOnAssistantMessages` coherence flag (D3) is `compat`-level and independent of `thinkingLevel`, so it is unaffected.
 
 ## Risks / Trade-offs
 
@@ -71,12 +98,17 @@ Align the resolved `@earendil-works/pi-coding-agent` / `@earendil-works/pi-ai` /
 
 ## Migration Plan
 
-1. Add the shared native-id helper (D2); use it in `model-builder.ts` and the engine run path (D1).
-2. Wire openrouter+deepseek replay flag (D3) + MB tests.
-3. Bump lockfile pi packages to 0.80.3 (D4).
-4. Add regression tests for provider-bearing id resolution + `applyToSession(mode=max)` → reasoning-enabled `thinkingLevel`.
-5. Run pi test suite; live-verify a "reasoning test" (mode=max) shows a bubble and persists `reasoning` stream events.
-6. Rollback: revert the run-path normalization (configs simply remain unresolved as before) and the lockfile bump; the helper is additive, so reverting is low-risk.
+1. Add the shared native-id helper (D2); use it in `model-builder.ts` and the engine run path (D1). **Note:** the engine run-path fix (D1) is already done + tested.
+2. **Direct-injection rework (D5):** update `PiModelConfig`/`PiVariantConfig` type + validation to accept `thinking` and not reject `reasoning_effort`; update `PiModelConfigApplier.applyToSession` to inject `thinking:{type:enabled|disabled}` and stop stripping `reasoning_effort`; update sample config to the `thinking:`/`options.reasoning_effort` shape; update builder if needed.
+3. Wire openrouter+deepseek replay flag (D3) + MB tests (already merged from main — commit 5c8ac5f8).
+4. SDK: confirm bun.lock at 0.80.3; remove stale `package-lock.json` (D4, decision #1949).
+5. Update regression tests for provider-bearing id resolution + `applyToSession(mode=max)` → wire body contains `reasoning_effort:"max"` and `thinking:{type:"enabled"}`.
+6. Run pi test suite; live-verify a "reasoning test" (mode=max) shows a bubble and persists `reasoning` stream events.
+7. Rollback: revert the run-path normalization and the applier/validation changes; the helper is additive and the config change can be reverted to the prior `reasoningEffort` shape.
+
+## Open Questions
+
+- None blocking. (The direct-injection design removes the earlier "off/high/xhigh mapping" question entirely — wire value = what's in `options`.)
 
 ## Open Questions
 

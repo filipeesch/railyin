@@ -163,7 +163,11 @@ export interface PiVariantConfig {
   disabled?: boolean;
   /** Optional display label shown in the UI Mode axis; falls back to the variant id. */
   label?: string;
-  /** Request-body params applied when this variant is active (e.g. reasoning_effort). */
+  /** Direct-injection reasoning toggle: when present, sends `thinking: { type: enabled|disabled }` on the wire for this variant. Optional. */
+  thinking?: boolean;
+  /** Request-body params injected verbatim when this variant is active (e.g. reasoning_effort: max/high/none, enable_thinking, chat_template_kwargs). */
+  options?: Record<string, unknown>;
+  /** Additional per-variant request-body params set at the variant level (merged with `options`). */
   [key: string]: unknown;
 }
 
