@@ -142,4 +142,4 @@ export const test = base.extend<Fixtures>({
 });
 
 export { expect };
-export { openTaskDrawer, sendMessage, openSidebar, openSessionDrawer, typeInSessionEditor, openSessionNotesTab } from "./helpers";
+export { openTaskDrawer, sendMessage, openSidebar, openSessionDrawer, typeInSessionEditor, openSessionNotesTab, chatTextarea, submitChatMessage, collectConnectRequests } from "./helpers";
