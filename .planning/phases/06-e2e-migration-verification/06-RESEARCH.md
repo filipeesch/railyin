@@ -443,7 +443,7 @@ interview-me's notes/recordAsDecisions intents map to DecisionInterrupt's notes 
 | A6 | Interview decision-card intents (interview-me T-A..Q) map fully to DecisionInterrupt's DOM (`.di__option`, Other textarea, notes, recordAsDecisions toggle). | Baseline table (interview-me) | If DecisionInterrupt lacks a surface (e.g., checkbox-type questions), a small renderer gap appears — DecisionInterrupt.vue:37-122 verified: exclusive/Other option rows + notes + submit; checkbox question type support needs executor confirmation during migration |
 | A7 | The 4 "did not run" are delegate-rendering's serial cascade (DR-2..5), consistent across both full runs. | Verified Baseline | If a worker crash is the real cause, migrated files may still crash under full-suite load — the per-file run after migration (Pitfall 4) catches it |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **Retire-list confirmation (blocks planning):** The 11 whole-file retires (queue-messages, model-persistence, reasoning-mode-select, attachment-history, mcp-tools, conversation-pagination, sampling-preset-select, compact-button, transition-card-legacy, conversation-draft, model-picker-multi-engine) + in-file retires (~40 tests). What we know: every one tests a feature verified removed from the live UI. What's unclear: whether the user wants any of these features back (queue was a deliberate UX; model selector removal is user-visible). Recommendation: planner gates each retire behind `checkpoint:human-verify` with the one-line rationale (Pattern 2) — cheap to approve, irreversible to undo.
 
