@@ -28,6 +28,10 @@ const {
   getCommands,
   getCommandsRef,
   clearCommandsCache,
+  getCommandsForWorkspace,
+  getCommandsRefForWorkspace,
+  clearCommandsCacheForWorkspace,
+  toToolsMenu,
 } = await import("./useCommandsCache");
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -47,6 +51,8 @@ describe("useCommandsCache", () => {
   beforeEach(() => {
     clearCommandsCache(1);
     clearCommandsCache(2);
+    clearCommandsCacheForWorkspace("ws-a");
+    clearCommandsCacheForWorkspace("ws-b");
     mockApiFn = vi.fn(async () => [CMD_A]);
   });
 
@@ -148,6 +154,72 @@ describe("useCommandsCache", () => {
       // If same data comes back, the ref object reference should NOT change.
       // The only way to verify without internals is through the ref value equality.
       expect(r.value).toEqual(originalArr);
+    });
+  });
+
+  describe("workspaceKey scope", () => {
+    it("CMD-1: fetches with { workspaceKey } params and populates its own ref", async () => {
+      mockApiFn = vi.fn(async (_m, args) => (args.workspaceKey === "ws-a" ? [CMD_A] : [CMD_B]));
+      const result = await getCommandsForWorkspace("ws-a");
+      expect(result).toEqual([CMD_A]);
+      expect(mockApiFn).toHaveBeenCalledWith("engine.listCommands", { workspaceKey: "ws-a" });
+      const r = getCommandsRefForWorkspace("ws-a");
+      expect(r.value).toEqual([CMD_A]);
+    });
+
+    it("CMD-2: task and workspace scopes cache independently", async () => {
+      mockApiFn = vi.fn(async (_m, args) => (args.taskId === 1 ? [CMD_A] : [CMD_B]));
+      await getCommands(1);
+      await getCommandsForWorkspace("ws-a");
+
+      expect(getCommandsRef(1).value).toEqual([CMD_A]);
+      expect(getCommandsRefForWorkspace("ws-a").value).toEqual([CMD_B]);
+
+      // Warm hit on the workspace scope — no second fetch within TTL
+      mockApiFn = vi.fn(async () => []);
+      await getCommandsForWorkspace("ws-a");
+      expect(mockApiFn).not.toHaveBeenCalled();
+      // Task scope still intact
+      expect(getCommandsRef(1).value).toEqual([CMD_A]);
+    });
+
+    it("CMD-3: different workspace keys do not share cache entries", async () => {
+      mockApiFn = vi.fn(async (_m, args) => (args.workspaceKey === "ws-a" ? [CMD_A] : [CMD_B]));
+      await getCommandsForWorkspace("ws-a");
+      await getCommandsForWorkspace("ws-b");
+      expect(getCommandsRefForWorkspace("ws-a").value).toEqual([CMD_A]);
+      expect(getCommandsRefForWorkspace("ws-b").value).toEqual([CMD_B]);
+    });
+
+    it("CMD-4: clearCommandsCacheForWorkspace forces a fresh fetch", async () => {
+      mockApiFn = vi.fn(async () => [CMD_A]);
+      await getCommandsForWorkspace("ws-a");
+      clearCommandsCacheForWorkspace("ws-a");
+
+      mockApiFn = vi.fn(async () => [CMD_B]);
+      const result = await getCommandsForWorkspace("ws-a");
+      expect(result).toEqual([CMD_B]);
+    });
+  });
+
+  describe("toToolsMenu", () => {
+    it("CMD-5: maps commands to { label: '/name', action } and the action invokes insert with the slash text", () => {
+      const insert = vi.fn();
+      const menu = toToolsMenu([CMD_A, CMD_B], insert);
+      expect(menu).toHaveLength(2);
+      expect(menu[0].label).toBe("/opsx:apply");
+      expect(menu[1].label).toBe("/opsx:propose");
+      menu[0].action!();
+      expect(insert).toHaveBeenCalledWith("/opsx:apply");
+    });
+
+    it("CMD-6: action is callable without an insert callback (no-op)", () => {
+      const menu = toToolsMenu([CMD_A]);
+      expect(() => menu[0].action!()).not.toThrow();
+    });
+
+    it("CMD-7: zero commands map to an empty array (menu affordance hidden)", () => {
+      expect(toToolsMenu([])).toEqual([]);
     });
   });
 });
