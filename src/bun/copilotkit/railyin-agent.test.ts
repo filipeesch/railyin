@@ -206,8 +206,8 @@ describe("RailyinAgent", () => {
 
     // Both END events must precede the terminal — no active message when
     // RUN_FINISHED is emitted (verifyEvents contract).
-    const textEnd = types.indexOf("TEXT_MESSAGE_END");
-    const reasoningEnd = types.indexOf("REASONING_MESSAGE_END");
+    const textEnd = types.indexOf(EventType.TEXT_MESSAGE_END);
+    const reasoningEnd = types.indexOf(EventType.REASONING_MESSAGE_END);
     const finished = types.lastIndexOf(EventType.RUN_FINISHED);
     expect(textEnd).toBeGreaterThan(-1);
     expect(reasoningEnd).toBeGreaterThan(-1);
@@ -235,8 +235,8 @@ describe("RailyinAgent", () => {
     const events = await collectRun(agent, runInput(String(conversationId)));
     const types = events.map((e) => e.type);
 
-    const textEnd = types.indexOf("TEXT_MESSAGE_END");
-    const resultIdx = types.indexOf("TOOL_CALL_RESULT");
+    const textEnd = types.indexOf(EventType.TEXT_MESSAGE_END);
+    const resultIdx = types.indexOf(EventType.TOOL_CALL_RESULT);
     const finished = types.lastIndexOf(EventType.RUN_FINISHED);
     expect(textEnd).toBeGreaterThan(-1);
     expect(resultIdx).toBeGreaterThan(-1);
@@ -271,7 +271,7 @@ describe("RailyinAgent", () => {
     expect(types[0]).toBe(EventType.RUN_STARTED);
     expect(types[types.length - 1]).toBe(EventType.RUN_FINISHED);
     // The async text block is closed before the terminal (WR-01 shape).
-    const textEnd = types.indexOf("TEXT_MESSAGE_END");
+    const textEnd = types.indexOf(EventType.TEXT_MESSAGE_END);
     expect(textEnd).toBeGreaterThan(-1);
     expect(textEnd).toBeLessThan(types.lastIndexOf(EventType.RUN_FINISHED));
   });
