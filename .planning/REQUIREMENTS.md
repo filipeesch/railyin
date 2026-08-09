@@ -9,13 +9,13 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### Chat & Protocol (CHAT)
 
-- [ ] **CHAT-01**: User sees agent responses stream token-by-token in the board chat (AG-UI text events, no custom StreamEvent protocol)
-- [ ] **CHAT-02**: User sees markdown + code blocks rendered with stable layout, at parity with the old editor for coding output
-- [ ] **CHAT-03**: User sees every tool call as an expandable card with name, status, args, and result
-- [ ] **CHAT-04**: User can stop/cancel a running agent response; the stop propagates to the engine (best-effort) and the partial response is labeled
-- [ ] **CHAT-05**: User sees agent reasoning/thinking display (zero-config reasoning card, pi thinking routed through)
-- [ ] **CHAT-06**: User can use slash commands and `/prompt-name` refs with parity (ref must be the entire leading value)
-- [ ] **CHAT-07**: User can reopen a card or session and see its full conversation history, including across app restarts
+- [x] **CHAT-01**: User sees agent responses stream token-by-token in the board chat (AG-UI text events, no custom StreamEvent protocol)
+- [x] **CHAT-02**: User sees markdown + code blocks rendered with stable layout, at parity with the old editor for coding output
+- [x] **CHAT-03**: User sees every tool call as an expandable card with name, status, args, and result
+- [x] **CHAT-04**: User can stop/cancel a running agent response; the stop propagates to the engine (best-effort) and the partial response is labeled
+- [x] **CHAT-05**: User sees agent reasoning/thinking display (zero-config reasoning card, pi thinking routed through)
+- [x] **CHAT-06**: User can use slash commands and `/prompt-name` refs with parity (ref must be the entire leading value)
+- [x] **CHAT-07**: User can reopen a card or session and see its full conversation history, including across app restarts
 - [x] **CHAT-08**: User can list and navigate thread conversations via Railyin's own thread-index endpoint (self-hosted; `useThreads` not usable)
 - [x] **CHAT-09**: User can approve/reject a decision request as structured cards; the agent run genuinely pauses and resumes with the decision payload
 
@@ -46,14 +46,14 @@ Requirements for initial release. Each maps to roadmap phases.
 
 - [x] **IMPR-01**: User can trigger a legacy import button that converts old `conversation_messages`/`stream_events` rows into JSONL threads
 - [x] **IMPR-02**: Old chat tables are frozen, not dropped; import is on-demand and idempotent
-- [ ] **IMPR-03**: Rollback is possible until the swap is proven — old chat stack code stays alive until the UI swap phase passes E2E
+- [x] **IMPR-03**: Rollback is possible until the swap is proven — old chat stack code stays alive until the UI swap phase passes E2E
 
 ### Chat UI (UI)
 
-- [ ] **UI-01**: Board chat UI is replaced with CopilotKit components (input, messages, streaming) preserving the existing board layout and conversation store contract for live stream blocks
-- [ ] **UI-02**: Domain tool renderers exist for shell output, file changes, and delegate task summaries (not raw JSON cards)
+- [x] **UI-01**: Board chat UI is replaced with CopilotKit components (input, messages, streaming) preserving the existing board layout and conversation store contract for live stream blocks
+- [x] **UI-02**: Domain tool renderers exist for shell output, file changes, and delegate task summaries (not raw JSON cards)
 - [x] **UI-03**: Decision-request UX renders as interrupt cards with structured approve/reject and payload
-- [ ] **UI-04**: Board `/ws` reactivity (task.updated, code.ref, lsp) keeps working alongside the chat connection
+- [x] **UI-04**: Board `/ws` reactivity (task.updated, code.ref, lsp) keeps working alongside the chat connection
 
 ### Verification (VERF)
 
@@ -106,13 +106,13 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| CHAT-01 | Phase 5 | Pending |
-| CHAT-02 | Phase 5 | Pending |
-| CHAT-03 | Phase 5 | Pending |
-| CHAT-04 | Phase 5 | Pending |
-| CHAT-05 | Phase 5 | Pending |
-| CHAT-06 | Phase 5 | Pending |
-| CHAT-07 | Phase 5 | Pending |
+| CHAT-01 | Phase 5 | Complete |
+| CHAT-02 | Phase 5 | Complete |
+| CHAT-03 | Phase 5 | Complete |
+| CHAT-04 | Phase 5 | Complete |
+| CHAT-05 | Phase 5 | Complete |
+| CHAT-06 | Phase 5 | Complete |
+| CHAT-07 | Phase 5 | Complete |
 | CHAT-08 | Phase 4 | Complete |
 | CHAT-09 | Phase 3 | Complete |
 | RUNR-01 | Phase 2 | Complete |
@@ -131,11 +131,11 @@ Which phases cover which requirements. Updated during roadmap creation.
 | BRDG-03 | Phase 2 | Complete |
 | IMPR-01 | Phase 4 | Complete |
 | IMPR-02 | Phase 4 | Complete |
-| IMPR-03 | Phase 5 | Pending |
-| UI-01 | Phase 5 | Pending |
-| UI-02 | Phase 5 | Pending |
+| IMPR-03 | Phase 5 | Complete |
+| UI-01 | Phase 5 | Complete |
+| UI-02 | Phase 5 | Complete |
 | UI-03 | Phase 3 | Complete |
-| UI-04 | Phase 5 | Pending |
+| UI-04 | Phase 5 | Complete |
 | VERF-01 | Phase 3 | Complete |
 | VERF-02 | Phase 6 | Pending |
 | VERF-03 | Phase 6 | Pending |
