@@ -6,9 +6,9 @@ current_phase: 4
 current_phase_name: JSONL Persistence & Legacy Import
 status: executing
 stopped_at: Phase 1 context gathered
-last_updated: "2026-08-09T08:23:27.716Z"
+last_updated: "2026-08-09T08:23:37.636Z"
 last_activity: 2026-08-09
-last_activity_desc: Phase 3 complete, transitioned to Phase 4
+last_activity_desc: Phase 4 execution started
 progress:
   total_phases: 4
   completed_phases: 3
@@ -23,14 +23,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-08-08)
 
 **Core value:** The board + task card workflow with decision-request UX, powered by pluggable engine adapters, must keep working end-to-end while the chat stack underneath is swapped for AG-UI + CopilotKit.
-**Current focus:** Phase 3 — Decision Interrupts & Resume
+**Current focus:** Phase 4 — JSONL Persistence & Legacy Import
 
 ## Current Position
 
-Phase: 4 — JSONL Persistence & Legacy Import
-Plan: Not started
-Status: Ready to execute
-Last activity: 2026-08-09 — Phase 3 complete, transitioned to Phase 4
+Phase: 4 (JSONL Persistence & Legacy Import) — EXECUTING
+Plan: 1 of 3
+Status: Executing Phase 4
+Last activity: 2026-08-09 — Phase 4 execution started
 
 Progress: [░░░░░░░░░░] 0%
 
