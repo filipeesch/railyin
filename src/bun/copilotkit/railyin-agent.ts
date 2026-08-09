@@ -394,7 +394,17 @@ export class RailyinAgent extends AbstractAgent {
           // Pitfall 8: clear the registry entry ONLY after delivery started —
           // a duplicate resume now fails with INVALID_INTERRUPT (the second
           // run finds no open entry).
-          interruptRegistry.clear(threadId);
+          // WR-04: clear only when the pending entry still holds the ORIGINAL
+          // interrupt id. A continuation decision_request can register
+          // SYNCHRONOUSLY inside delivery (onRunEnd("decision") fires before
+          // the .then hook — exactly what the unit-test fakes do), minting a
+          // NEW entry; an unconditional clear() would wipe it and the follow-up
+          // resume would fail with INVALID_INTERRUPT while the client holds
+          // the fresh id (silently breaking the D-05 dedup contract).
+          const pending = interruptRegistry.get(threadId);
+          if (pending?.interruptId === open.interruptId) {
+            interruptRegistry.clear(threadId);
+          }
           if (run.abortRequested) {
             this.orchestrator.cancel(executionId);
             return;

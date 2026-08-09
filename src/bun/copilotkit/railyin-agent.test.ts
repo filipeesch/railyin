@@ -1104,4 +1104,45 @@ describe("resume branch (D-05/D-07 — 03-02)", () => {
     // retryable once the engine config is fixed (WR-03 keeps the entry open).
     expect(interruptRegistry.hasOpen(threadId)).toBe(true);
   });
+
+  test("R11: WR-04 — a continuation decision_request registered synchronously inside delivery survives the .then clear guard", async () => {
+    const { conversationId } = seedChatSession(db);
+    const threadId = String(conversationId);
+    const interruptId = await openPendingDecision(conversationId);
+
+    // The continuation parks again IMMEDIATELY (synchronously inside
+    // executeChatTurn): decision_request → onRunEnd("decision") mints a NEW
+    // registry entry BEFORE the .then hook runs. An unconditional clear()
+    // would wipe it — the follow-up resume would then fail with
+    // INVALID_INTERRUPT while the client holds the fresh id.
+    fakeCoordinator = {
+      ...fakeCoordinator,
+      executeChatTurn: async (_s, _c, _content, _m, _mcp, _ws, _att, _ec, opts) => {
+        capturedOpts = opts;
+        if (opts) {
+          opts.onEngineEvent?.({ type: "token", content: "continuing" });
+          opts.onEngineEvent?.({ type: "decision_request", payload: DECISION_PAYLOAD });
+          opts.onRunEnd?.("decision");
+        }
+        return { message: { id: 1 } as never, executionId: 45 };
+      },
+    };
+    const agent = makeAgent(conversationId);
+    agent.orchestrator = fakeCoordinator;
+
+    const events = await collectRun(
+      agent,
+      resumeInput(threadId, [{ interruptId, status: "resolved", payload: RESUME_PAYLOAD }]),
+    );
+    expect(events[events.length - 1].type).toBe(EventType.RUN_FINISHED);
+    const terminal = events[events.length - 1] as unknown as {
+      outcome?: { interrupts?: Array<{ id: string }> };
+    };
+    const continuationId = terminal.outcome?.interrupts?.[0]?.id;
+    expect(continuationId).toBeDefined();
+    // The .then hook must NOT have cleared the fresh continuation entry — the
+    // follow-up resume can still address it (D-05 dedup contract intact).
+    expect(interruptRegistry.get(threadId)?.interruptId).toBe(continuationId);
+    expect(interruptRegistry.hasOpen(threadId)).toBe(true);
+  });
 });
