@@ -1145,4 +1145,38 @@ describe("resume branch (D-05/D-07 — 03-02)", () => {
     expect(interruptRegistry.get(threadId)?.interruptId).toBe(continuationId);
     expect(interruptRegistry.hasOpen(threadId)).toBe(true);
   });
+
+  test("R12: WR-05 — malformed resume answers (weight: 123) → RUN_ERROR INVALID_PAYLOAD, no crash, no executor call", async () => {
+    const { conversationId } = seedChatSession(db);
+    const threadId = String(conversationId);
+    const interruptId = await openPendingDecision(conversationId);
+    const agent = makeAgent(conversationId);
+
+    let executeChatTurnCalls = 0;
+    fakeCoordinator = {
+      ...fakeCoordinator,
+      executeChatTurn: async (_s, _c, _content, _m, _mcp, _ws, _att, _ec, opts) => {
+        executeChatTurnCalls += 1;
+        opts?.onRunEnd?.("done");
+        return { message: { id: 1 } as never, executionId: 1 };
+      },
+    };
+    agent.orchestrator = fakeCoordinator;
+
+    // The old code threw TypeError: weight.toUpperCase is not a function AFTER
+    // RUN_STARTED — a crash on the wire. Now it rejects with INVALID_PAYLOAD.
+    const events = await collectRun(
+      agent,
+      resumeInput(threadId, [
+        { interruptId, status: "resolved", payload: { decision: "approved", answers: [{ question: "Q", answer: "A", weight: 123 }] } },
+      ]),
+    );
+    expect(executeChatTurnCalls).toBe(0);
+    expect(events[events.length - 1].type).toBe(EventType.RUN_ERROR);
+    expect(events[events.length - 1]).toMatchObject({ code: "INVALID_PAYLOAD" });
+    // CR-01 shape: exactly one RUN_STARTED even on this rejection.
+    expect(events.filter((e) => e.type === EventType.RUN_STARTED)).toHaveLength(1);
+    // The entry survives — the client can retry with a proper payload.
+    expect(interruptRegistry.hasOpen(threadId)).toBe(true);
+  });
 });

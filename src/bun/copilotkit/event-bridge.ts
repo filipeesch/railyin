@@ -393,7 +393,23 @@ export function buildInterruptOutcome(
  */
 export function translateResumeToSubmission(payload: unknown): { userContent: string; engineContent: string } | null {
   if (typeof payload !== "object" || payload === null || Array.isArray(payload)) return null;
-  const p = payload as { answers?: unknown; generalNotes?: string; recordAsDecisions?: boolean };
+  const p = payload as { answers?: unknown; generalNotes?: unknown; recordAsDecisions?: boolean };
   if (!Array.isArray(p.answers) || p.answers.length === 0) return null;
+  // WR-05: the resume payload is client-controlled input on a published
+  // endpoint (ASVS L1 input validation). Validate every answer element BEFORE
+  // delegation — a malformed payload (weight: 123 → .toUpperCase() crash, null
+  // elements → property access crash, non-string generalNotes → .trim() crash)
+  // must yield null here and INVALID_PAYLOAD at the agent, never an exception
+  // thrown after RUN_STARTED was emitted.
+  const malformed = p.answers.some(
+    (a) =>
+      a === null ||
+      typeof a !== "object" ||
+      typeof (a as DecisionAnswer).question !== "string" ||
+      typeof (a as DecisionAnswer).answer !== "string" ||
+      ((a as DecisionAnswer).weight !== undefined && typeof (a as DecisionAnswer).weight !== "string"),
+  );
+  if (malformed) return null;
+  if (p.generalNotes !== undefined && typeof p.generalNotes !== "string") return null;
   return buildDecisionSubmission(p.answers as DecisionAnswer[], p.generalNotes, p.recordAsDecisions ?? true);
 }

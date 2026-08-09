@@ -494,6 +494,20 @@ describe("event-bridge: resume translation (D-07 — resume payload → decision
     expect(translateResumeToSubmission(undefined)).toBeNull();
   });
 
+  test("3a: WR-05 — malformed answer elements → null, no throw (client-controlled input validation)", () => {
+    // weight: 123 would crash .toUpperCase() in buildDecisionSubmission.
+    expect(translateResumeToSubmission({ decision: "approved", answers: [{ question: "Q", answer: "A", weight: 123 }] })).toBeNull();
+    // null element would crash on a.weight access.
+    expect(translateResumeToSubmission({ decision: "approved", answers: [null] })).toBeNull();
+    // Non-string question / answer.
+    expect(translateResumeToSubmission({ decision: "approved", answers: [{ question: 1, answer: "A" }] })).toBeNull();
+    expect(translateResumeToSubmission({ decision: "approved", answers: [{ question: "Q", answer: null }] })).toBeNull();
+    // Non-string generalNotes would crash .trim().
+    expect(translateResumeToSubmission({ decision: "approved", answers: [{ question: "Q", answer: "A" }], generalNotes: 123 })).toBeNull();
+    // notes of any type is string-coerced safely — still accepted.
+    expect(translateResumeToSubmission({ decision: "approved", answers: [{ question: "Q", answer: "A", notes: 5 }] })).not.toBeNull();
+  });
+
   test("4: recordAsDecisions false → engineContent carries the NO_RECORD variant (no record_decision text)", () => {
     const answers = [{ question: "Q?", answer: "A" }];
     const result = translateResumeToSubmission({
