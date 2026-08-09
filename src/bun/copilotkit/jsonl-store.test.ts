@@ -116,6 +116,12 @@ describe("importLog() — atomic no-clobber import write (D-07, WR-02)", () => {
     // No .tmp residue from the refused publish.
     expect(readdirSync(join(tmp.dir, "threads")).filter((f) => f.endsWith(".tmp"))).toEqual([]);
   });
+
+  test("3: an empty events array is never persisted — no lying marker file (IN-03)", () => {
+    store.importLog("5", []);
+    expect(store.exists("5")).toBe(false);
+    expect(existsSync(join(tmp.dir, "threads", "5.jsonl"))).toBe(false);
+  });
 });
 
 describe("list() — index rebuild from the log (D-04/D-05)", () => {

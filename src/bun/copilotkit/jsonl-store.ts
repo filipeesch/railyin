@@ -105,11 +105,14 @@ export class JsonlStore {
    * and published to the final path WITHOUT clobbering (WR-02). A crashed
    * import leaves only a `.tmp` that `list()`/`exists()` never match, so the
    * final file's existence stays the trustworthy idempotency marker
-   * (Pitfall 5 — a partial append would make existence checks lie). This is
-   * the ONLY writer of imported logs; append() remains the live-run writer.
+   * (Pitfall 5 — a partial append would make existence checks lie). An empty
+   * events array is refused (IN-03): persisting it would create a marker for
+   * a thread with no events. This is the ONLY writer of imported logs;
+   * append() remains the live-run writer.
    */
   importLog(threadId: string, events: BaseEvent[]): void {
     this.assertThreadId(threadId);
+    if (events.length === 0) return; // never persist an empty log (lying marker, IN-03)
     const filePath = threadLogPath(this.dataDir, threadId);
     const dir = dirname(filePath);
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
