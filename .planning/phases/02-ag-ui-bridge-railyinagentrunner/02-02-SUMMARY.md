@@ -194,3 +194,15 @@ None - no external service configuration required.
 ---
 *Phase: 02-ag-ui-bridge-railyinagentrunner*
 *Completed: 2026-08-09*
+
+## Self-Check: PASSED
+
+- All 4 new source/test files + SUMMARY exist on disk (verified with `[ -f ]`)
+- All 5 commit hashes present in git history (RED+GREEN per tdd task + Task 3)
+- All plan-level `<verification>` commands pass:
+  - `bun test src/bun/copilotkit/jsonl-store.test.ts` — 5/5
+  - `bun test src/bun/copilotkit/railyin-runner.test.ts` — 9/9
+  - `bun test e2e/api/copilotkit/railyin.test.ts` — 10/10 (tests a-f + 7-10)
+  - `bun test e2e/api/copilotkit/copilotkit.test.ts` — 8/8 (Phase 1 probe regression)
+  - `bun run typecheck` — 0 errors
+- Full backend regression: `bun test src/bun --timeout 20000` — 2310 pass / 2 skip / 0 fail
