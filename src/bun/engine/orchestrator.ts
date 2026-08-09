@@ -169,8 +169,9 @@ export class Orchestrator implements ExecutionCoordinator {
     workspaceKey = getDefaultWorkspaceKey(),
     attachments?: import("../../shared/rpc-types.ts").Attachment[],
     engineContent?: string,
+    opts?: import("./coordinator.ts").ChatTurnOpts,
   ): Promise<{ message: ConversationMessage; executionId: number }> {
-    return this.chatExecutor.execute(sessionId, conversationId, content, model, enabledMcpTools, workspaceKey, attachments, engineContent);
+    return this.chatExecutor.execute(sessionId, conversationId, content, model, enabledMcpTools, workspaceKey, attachments, engineContent, opts);
   }
 
   // ─── Cancellation ──────────────────────────────────────────────────────────

@@ -42,6 +42,7 @@ export class ChatExecutor {
     workspaceKey = getDefaultWorkspaceKey(),
     attachments?: Attachment[],
     engineContent?: string,
+    opts?: import("../coordinator.ts").ChatTurnOpts,
   ): Promise<{ message: ConversationMessage; executionId: number }> {
     const db = this.db;
     const config = getWorkspaceConfig(workspaceKey);
@@ -184,7 +185,7 @@ export class ChatExecutor {
         })
       : chatBase;
 
-    this.streamProcessor.runNonNative(null, conversationId, executionId, engine, execParams);
+    this.streamProcessor.runNonNative(null, conversationId, executionId, engine, execParams, opts);
     db.run("UPDATE conversations SET last_engine_type = ? WHERE id = ?", [engineId, conversationId]);
 
     const msgRow = db

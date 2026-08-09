@@ -147,25 +147,25 @@ describe("executeChatTurn seam (onEngineEvent/onRunEnd)", () => {
     // Stream completes asynchronously (runNonNative is fire-and-forget) — poll the DB.
     await waitFor(() => {
       const row = db.query<{ status: string }, [number]>(
-        "SELECT status FROM executions WHERE id = ?", [executionId],
-      ).get();
+        "SELECT status FROM executions WHERE id = ?",
+      ).get(executionId);
       return row?.status === "completed";
     });
 
     const execRow = db.query<{ status: string }, [number]>(
-      "SELECT status FROM executions WHERE id = ?", [executionId],
-    ).get()!;
+      "SELECT status FROM executions WHERE id = ?",
+    ).get(executionId)!;
     expect(execRow.status).toBe("completed");
 
     const sessRow = db.query<{ status: string }, [number]>(
-      "SELECT status FROM chat_sessions WHERE conversation_id = ?", [conversationId],
-    ).get()!;
+      "SELECT status FROM chat_sessions WHERE conversation_id = ?",
+    ).get(conversationId)!;
     expect(sessRow.status).toBe("idle");
 
     // The user message was persisted as before.
     const msgCount = db.query<{ n: number }, [number]>(
-      "SELECT COUNT(*) AS n FROM conversation_messages WHERE conversation_id = ?", [conversationId],
-    ).get()!;
+      "SELECT COUNT(*) AS n FROM conversation_messages WHERE conversation_id = ?",
+    ).get(conversationId)!;
     expect(msgCount.n).toBeGreaterThanOrEqual(1);
   });
 

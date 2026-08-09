@@ -127,9 +127,10 @@ export class StreamProcessor {
     executionId: number,
     engine: ExecutionEngine,
     params: ExecutionParams,
+    opts?: import("../coordinator.ts").ChatTurnOpts,
   ): void {
     const stream = engine.execute(params);
-    this.consume(taskId, conversationId, executionId, stream).catch((err) => {
+    this.consume(taskId, conversationId, executionId, stream, opts).catch((err) => {
       console.error(
         `[stream-processor] Unhandled error from consume (task=${taskId}, execution=${executionId}):`,
         err,
@@ -146,6 +147,7 @@ export class StreamProcessor {
     conversationId: number,
     executionId: number,
     stream: AsyncIterable<EngineEvent>,
+    opts?: import("../coordinator.ts").ChatTurnOpts,
   ): Promise<void> {
     const db = this.db;
     const convBuffer = new ConvMessageBuffer(db);
@@ -198,8 +200,14 @@ export class StreamProcessor {
           );
           this.onToken(taskId, conversationId, executionId, "", true);
           this.onStreamEvent?.({ taskId, conversationId, executionId, seq: 0, blockId: `${executionId}-done`, type: "done", content: "", metadata: null, parentBlockId: null, done: true, subagentId: null });
+          opts?.onRunEnd?.("aborted");
           return;
         }
+
+        // BRDG-01: fire the AG-UI bridge tap for EVERY raw engine event in exact
+        // order, before the legacy switch (which owns the /ws broadcast + DB
+        // dual-write). Absent opts → byte-identical behavior.
+        opts?.onEngineEvent?.(event);
 
         switch (event.type) {
           case "token": {
@@ -439,6 +447,7 @@ export class StreamProcessor {
             );
             this.onToken(taskId, conversationId, executionId, "", true);
             this.onStreamEvent?.({ taskId, conversationId, executionId, seq: 0, blockId: `${executionId}-done`, type: "done", content: "", metadata: null, parentBlockId: null, done: true, subagentId: null });
+            opts?.onRunEnd?.("done");
             break;
           }
 
@@ -456,6 +465,7 @@ export class StreamProcessor {
               this.onError(taskId, conversationId, executionId, event.message);
               this.abortControllers.get(executionId)?.abort();
               this.onStreamEvent?.({ taskId, conversationId, executionId, seq: 0, blockId: `${executionId}-done`, type: "done", content: "", metadata: null, parentBlockId: null, done: true, subagentId: null });
+              opts?.onRunEnd?.("error");
               return;
             }
             this.onError(taskId, conversationId, executionId, event.message);
@@ -493,6 +503,7 @@ export class StreamProcessor {
             );
             this.onStreamEvent?.({ taskId, conversationId, executionId, seq: 0, blockId: `${executionId}-done`, type: "done", content: "", metadata: null, parentBlockId: null, done: true, subagentId: null });
             this.onToken(taskId, conversationId, executionId, "", true);
+            opts?.onRunEnd?.("decision");
             return;
           }
 
@@ -544,6 +555,7 @@ export class StreamProcessor {
         );
         this.onToken(taskId, conversationId, executionId, "", true);
         this.onStreamEvent?.({ taskId, conversationId, executionId, seq: 0, blockId: `${executionId}-done`, type: "done", content: "", metadata: null, parentBlockId: null, done: true, subagentId: null });
+        opts?.onRunEnd?.("aborted");
       }
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
@@ -559,6 +571,7 @@ export class StreamProcessor {
       this.abortControllers.get(executionId)?.abort();
       this.onError(taskId, conversationId, executionId, errMsg);
       this.onStreamEvent?.({ taskId, conversationId, executionId, seq: 0, blockId: `${executionId}-done`, type: "done", content: "", metadata: null, parentBlockId: null, done: true, subagentId: null });
+      opts?.onRunEnd?.("error");
     } finally {
       this.abortControllers.delete(executionId);
       this.rawMessageSeq.delete(executionId);
