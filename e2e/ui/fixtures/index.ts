@@ -6,6 +6,11 @@
  *   api   — ApiMock instance with baseline workspace/board/models pre-registered.
  *            Tests add task-specific handlers before calling page.goto('/').
  *   ws    — WsMock instance, installed and ready to push server events.
+ *   agui  — MockAgui instance intercepting /api/copilotkit/* (the CopilotRuntime
+ *            AG-UI prefix) for the CopilotChat surface; ApiMock's
+ *            route.fallback() hands /api/copilotkit/* to it (install order
+ *            independent). Legacy specs never call /api/copilotkit/* so they
+ *            are unaffected.
  *   task  — A pre-made Task object for the common single-task case.
  *
  * Usage:
@@ -21,12 +26,14 @@
 import { test as base, expect } from "@playwright/test";
 import { ApiMock } from "./mock-api";
 import { WsMock } from "./mock-ws";
+import { MockAgui } from "./mock-agui";
 import { makeBoard, makeTask, makeWorkspace, makeChatSession } from "./mock-data";
 import type { Task, ChatSession } from "@shared/rpc-types";
 
 type Fixtures = {
     api: ApiMock;
     ws: WsMock;
+    agui: MockAgui;
     task: Task;
     session: ChatSession;
 };
@@ -37,6 +44,15 @@ export const test = base.extend<Fixtures>({
         const ws = new WsMock(page);
         await ws.install();
         await use(ws);
+    }, { auto: true }],
+
+    // ── MockAgui (CopilotRuntime AG-UI SSE) ────────────────────────────────────
+    // Safe before/after api.install() — ApiMock's route.fallback() defers
+    // /api/copilotkit/* to this fixture's route (mock-api.ts:95-98).
+    agui: [async ({ page }, use) => {
+        const agui = new MockAgui(page);
+        await agui.install();
+        await use(agui);
     }, { auto: true }],
 
     // ── ApiMock ─────────────────────────────────────────────────────────────────
