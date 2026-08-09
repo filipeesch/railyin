@@ -53,11 +53,6 @@ export class StreamProcessor {
     this.abortControllers.get(executionId)?.abort();
   }
 
-  /** Emits a final done token event — used by cancel() when no active stream is running. */
-  emitDone(taskId: number | null, conversationId: number, executionId: number): void {
-    this.onToken(taskId, conversationId, executionId, "", true);
-  }
-
   /** Starts the engine and pipes its event stream to consume(). */
   runNonNative(
     taskId: number | null,

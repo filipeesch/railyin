@@ -200,7 +200,6 @@ export class Orchestrator implements ExecutionCoordinator {
         if (taskRow) {
           this.onTaskUpdated(taskRow);
         }
-        this.streamProcessor.emitDone(taskId, conversationId, executionId);
       }
     } else if (execRow.status === "running" && execRow.finished_at == null) {
       db.run("UPDATE executions SET status = 'cancelled', finished_at = datetime('now') WHERE id = ?", [executionId]);
@@ -214,7 +213,6 @@ export class Orchestrator implements ExecutionCoordinator {
         // and the sidebar would stay stuck on 'running' (Pitfall-2 gap).
         this.sessionStatusCb(conversationId);
       }
-      this.streamProcessor.emitDone(null, conversationId, executionId);
     }
   }
 
