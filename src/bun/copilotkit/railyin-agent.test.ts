@@ -39,11 +39,37 @@ function runInput(threadId: string, text = "hello"): RunAgentInput {
   };
 }
 
+/** Resume-run input: history-only messages + the canonical RunAgentInput.resume[]. */
+function resumeInput(threadId: string, resume: NonNullable<RunAgentInput["resume"]>): RunAgentInput {
+  return {
+    threadId,
+    runId: "run-resume-1",
+    state: [],
+    tools: [],
+    context: [],
+    messages: [
+      { id: "a1", role: "assistant", content: [{ type: "text", text: "I need your decision." }] },
+      { id: "u1", role: "user", content: [{ type: "text", text: "history" }] },
+    ],
+    resume,
+  };
+}
+
 /** Serialized DecisionRequestPayload used by the decision-cycle fakes. */
 const DECISION_PAYLOAD = JSON.stringify({
   context: "mock context",
   questions: [{ question: "Q1", type: "exclusive", options: [{ title: "A", description: "" }] }],
 });
+
+/** Phase-5 resume payload (A1/Open Question 2 contract): the question text is
+ * the __SCRIPT_DECISION__ Phase B marker — translated engineContent MUST carry
+ * the formatted question (proof the engine received the decision). */
+const RESUME_PAYLOAD = {
+  decision: "approved",
+  answers: [{ question: "Choose __DECISION_OPTION__", answer: "A", weight: "medium" }],
+  generalNotes: "n",
+  recordAsDecisions: true,
+};
 
 /**
  * Decision-cycle fake: drives onEngineEvent(token) →
@@ -66,11 +92,77 @@ function setDecisionCycleFake(): void {
   };
 }
 
+/**
+ * Resume fake (chat routing): captures the TRANSLATED submission args and
+ * drives the continuation (token + onRunEnd("done")) synchronously.
+ */
+function setResumeChatFake(): void {
+  fakeCoordinator = {
+    ...fakeCoordinator,
+    executeChatTurn: async (_s, _c, content, _m, _mcp, ws, _att, engineContent, opts) => {
+      capturedChatContent = content ?? null;
+      capturedChatEngineContent = engineContent ?? null;
+      capturedWorkspaceKey = ws ?? null;
+      capturedOpts = opts;
+      if (opts) {
+        opts.onEngineEvent?.({ type: "token", content: "Decision received, continuing." });
+        opts.onRunEnd?.("done");
+      }
+      return { message: { id: 1 } as never, executionId: 43 };
+    },
+  };
+}
+
+/**
+ * Resume fake (task-linked routing, A6): captures the executeHumanTurn args
+ * including the additive opts param.
+ */
+function setResumeTaskFake(): void {
+  fakeCoordinator = {
+    ...fakeCoordinator,
+    executeHumanTurn: async (taskId, content, _att, engineContent, opts) => {
+      capturedHumanTurnArgs = { taskId, content, engineContent: engineContent ?? undefined, opts };
+      if (opts) {
+        opts.onEngineEvent?.({ type: "token", content: "Decision received, continuing." });
+        opts.onRunEnd?.("done");
+      }
+      return { message: { id: 1 } as never, executionId: 44 };
+    },
+  };
+}
+
+/** Seed the decision-paused DB state: a 'waiting_user' executions row with the
+ * registry's executionId (the orphan stream-processor.ts:494-506 writes and no
+ * existing code closes — Pitfall 2). */
+function seedWaitingUserRow(conversationId: number, executionId: number): void {
+  db.run(
+    "INSERT INTO executions (id, conversation_id, from_state, to_state, status) VALUES (?, ?, 'backlog', 'plan', 'waiting_user')",
+    [executionId, conversationId],
+  );
+}
+
+/** Run one full decision cycle (fake) so the registry holds an OPEN interrupt
+ * with the resolved executionId attached via the .then hook. */
+async function openPendingDecision(conversationId: number): Promise<string> {
+  const threadId = String(conversationId);
+  setDecisionCycleFake(); // BEFORE makeAgent — the agent captures the fake by reference
+  const agent = makeAgent(conversationId);
+  const events = await collectRun(agent, runInput(threadId));
+  expect(events[events.length - 1].type).toBe(EventType.RUN_FINISHED);
+  const id = (events[events.length - 1] as unknown as { outcome: { interrupts: Array<{ id: string }> } })
+    .outcome.interrupts[0].id;
+  expect(interruptRegistry.get(threadId)?.executionId).toBe(42); // .then hook ran
+  return id;
+}
+
 let db: Database;
 let fakeCoordinator: ExecutionCoordinator;
 let cancelCalls: number[];
 let capturedWorkspaceKey: string | null;
 let capturedOpts: { onEngineEvent?: (e: EngineEvent) => void; onRunEnd?: (o: "done" | "error" | "aborted" | "decision") => void } | undefined;
+let capturedChatContent: string | null;
+let capturedChatEngineContent: string | null;
+let capturedHumanTurnArgs: { taskId: number; content: string; engineContent: string | undefined; opts: unknown } | null;
 
 function makeAgent(conversationId: number): RailyinAgent {
   return new RailyinAgent(db, fakeCoordinator);
@@ -83,6 +175,9 @@ beforeEach(() => {
   cancelCalls = [];
   capturedWorkspaceKey = null;
   capturedOpts = undefined;
+  capturedChatContent = null;
+  capturedChatEngineContent = null;
+  capturedHumanTurnArgs = null;
   fakeCoordinator = {
     executeTransition: async () => { throw new Error("not implemented"); },
     executeHumanTurn: async () => { throw new Error("not implemented"); },
@@ -351,8 +446,9 @@ describe("RailyinAgent", () => {
     const realFake = fakeCoordinator;
     fakeCoordinator = {
       ...realFake,
-      executeChatTurn: async () => {
+      executeChatTurn: async (_s, _c, _content, _m, _mcp, _ws, _att, _ec, opts) => {
         executeChatTurnCalls += 1;
+        opts?.onRunEnd?.("done");
         return { message: { id: 1 } as never, executionId: 1 };
       },
     };
@@ -370,8 +466,9 @@ describe("RailyinAgent", () => {
     let executeChatTurnCalls = 0;
     fakeCoordinator = {
       ...fakeCoordinator,
-      executeChatTurn: async () => {
+      executeChatTurn: async (_s, _c, _content, _m, _mcp, _ws, _att, _ec, opts) => {
         executeChatTurnCalls += 1;
+        opts?.onRunEnd?.("done");
         return { message: { id: 1 } as never, executionId: 1 };
       },
     };
@@ -649,5 +746,293 @@ describe("RailyinAgent", () => {
     expect(terminal.outcome?.interrupts?.[0]?.message).toBe("mock context");
     // The decision is registered as pending — resumable, not swallowed.
     expect(interruptRegistry.hasOpen(String(conversationId))).toBe(true);
+  });
+});
+
+describe("resume branch (D-05/D-07 — 03-02)", () => {
+  test("R1: full resume cycle — translated submission reaches the executor, continuation streams, registry cleared, old row finalized (Pitfalls 2/8)", async () => {
+    const { conversationId } = seedChatSession(db);
+    const threadId = String(conversationId);
+    // Decision-paused state: the orphaned waiting_user row (Pitfall 2) + open
+    // registry entry with executionId 42 attached.
+    seedWaitingUserRow(conversationId, 42);
+    const interruptId = await openPendingDecision(conversationId);
+
+    setResumeChatFake();
+    const agent = makeAgent(conversationId);
+    const events = await collectRun(
+      agent,
+      resumeInput(threadId, [{ interruptId, status: "resolved", payload: RESUME_PAYLOAD }]),
+    );
+
+    // RUN_STARTED FIRST, RUN_FINISHED LAST, no error.
+    const types = events.map((e) => e.type);
+    expect(types[0]).toBe(EventType.RUN_STARTED);
+    expect(types[types.length - 1]).toBe(EventType.RUN_FINISHED);
+    expect(types).not.toContain(EventType.RUN_ERROR);
+
+    // The fake received the TRANSLATED submission: formatted question text in
+    // userContent + the hidden record_decision instruction in engineContent
+    // (proves translateResumeToSubmission → buildDecisionSubmission delivery).
+    expect(capturedChatContent).toContain("**Q [MEDIUM]:** Choose __DECISION_OPTION__");
+    expect(capturedChatEngineContent).toContain("Choose __DECISION_OPTION__");
+    expect(capturedChatEngineContent).toContain("record_decision");
+    // The branch resolves its own workspaceKey — never undefined (TDZ guard).
+    expect(capturedWorkspaceKey).toBe("default");
+
+    // Pitfall 8: registry cleared after delivery started.
+    expect(interruptRegistry.hasOpen(threadId)).toBe(false);
+    // Pitfall 2: the orphaned row was finalized to 'completed'.
+    const row = db.query<{ status: string }, [number]>(
+      "SELECT status FROM executions WHERE id = ?",
+    ).get(42)!;
+    expect(row.status).toBe("completed");
+  });
+
+  test("R2: D-05 validation — unknown id / partial resume / extra unknown id → RUN_ERROR INVALID_INTERRUPT, no executor call", async () => {
+    const { conversationId } = seedChatSession(db);
+    const threadId = String(conversationId);
+    const interruptId = await openPendingDecision(conversationId);
+    const agent = makeAgent(conversationId);
+
+    // Unknown interruptId.
+    let executeChatTurnCalls = 0;
+    fakeCoordinator = {
+      ...fakeCoordinator,
+      executeChatTurn: async (_s, _c, _content, _m, _mcp, _ws, _att, _ec, opts) => {
+        executeChatTurnCalls += 1;
+        opts?.onRunEnd?.("done");
+        return { message: { id: 1 } as never, executionId: 1 };
+      },
+    };
+    agent.orchestrator = fakeCoordinator;
+    let events = await collectRun(
+      agent,
+      resumeInput(threadId, [{ interruptId: "decision-999-99", status: "resolved", payload: RESUME_PAYLOAD }]),
+    );
+    expect(executeChatTurnCalls).toBe(0);
+    expect(events[events.length - 1].type).toBe(EventType.RUN_ERROR);
+    expect(events[events.length - 1]).toMatchObject({ code: "INVALID_INTERRUPT" });
+
+    // Partial resume — the open interrupt is NOT addressed (another id only).
+    events = await collectRun(
+      agent,
+      resumeInput(threadId, [{ interruptId: `decision-${conversationId}-99`, status: "resolved", payload: RESUME_PAYLOAD }]),
+    );
+    expect(executeChatTurnCalls).toBe(0);
+    expect(events[events.length - 1]).toMatchObject({ code: "INVALID_INTERRUPT" });
+
+    // Extra unknown id alongside the valid one.
+    events = await collectRun(
+      agent,
+      resumeInput(threadId, [
+        { interruptId, status: "resolved", payload: RESUME_PAYLOAD },
+        { interruptId: "decision-888-88", status: "resolved", payload: RESUME_PAYLOAD },
+      ]),
+    );
+    expect(executeChatTurnCalls).toBe(0);
+    expect(events[events.length - 1]).toMatchObject({ code: "INVALID_INTERRUPT" });
+    // The open entry survived the failed validations — the client can retry.
+    expect(interruptRegistry.hasOpen(threadId)).toBe(true);
+  });
+
+  test("R3: cancelled resume (A4) — registry cleared, row 'cancelled', plain RUN_FINISHED, no engine call; follow-up run succeeds", async () => {
+    const { conversationId } = seedChatSession(db);
+    const threadId = String(conversationId);
+    seedWaitingUserRow(conversationId, 42);
+    const interruptId = await openPendingDecision(conversationId);
+    const agent = makeAgent(conversationId);
+
+    let executeChatTurnCalls = 0;
+    fakeCoordinator = {
+      ...fakeCoordinator,
+      executeChatTurn: async (_s, _c, _content, _m, _mcp, _ws, _att, _ec, opts) => {
+        executeChatTurnCalls += 1;
+        opts?.onRunEnd?.("done");
+        return { message: { id: 1 } as never, executionId: 1 };
+      },
+    };
+    agent.orchestrator = fakeCoordinator;
+
+    const events = await collectRun(
+      agent,
+      resumeInput(threadId, [{ interruptId, status: "cancelled" }]),
+    );
+    // Plain RUN_FINISHED — NO engine call (A4: dismissal delivers nothing).
+    expect(events[events.length - 1].type).toBe(EventType.RUN_FINISHED);
+    expect(executeChatTurnCalls).toBe(0);
+    expect(interruptRegistry.hasOpen(threadId)).toBe(false);
+    const row = db.query<{ status: string }, [number]>(
+      "SELECT status FROM executions WHERE id = ?",
+    ).get(42)!;
+    expect(row.status).toBe("cancelled");
+
+    // The thread is NOT wedged — a subsequent plain run succeeds.
+    const followUp = await collectRun(agent, runInput(threadId, "hello"));
+    expect(executeChatTurnCalls).toBe(1);
+    expect(followUp[followUp.length - 1].type).toBe(EventType.RUN_FINISHED);
+  });
+
+  test("R4: Pitfall 1 — the resume run bypasses the advisory lock; a plain run against the same waiting_user row still gets THREAD_BUSY", async () => {
+    const { conversationId } = seedChatSession(db);
+    const threadId = String(conversationId);
+    seedWaitingUserRow(conversationId, 42);
+    const interruptId = await openPendingDecision(conversationId);
+
+    setResumeChatFake();
+    const agent = makeAgent(conversationId);
+    const events = await collectRun(
+      agent,
+      resumeInput(threadId, [{ interruptId, status: "resolved", payload: RESUME_PAYLOAD }]),
+    );
+    expect(events[events.length - 1].type).toBe(EventType.RUN_FINISHED);
+    expect(events).not.toContain(EventType.RUN_ERROR);
+
+    // Regression (03-01 Task 3): a plain run against a fresh waiting_user row
+    // (no open registry entry) is still rejected by the advisory lock.
+    db.run(
+      "INSERT INTO executions (conversation_id, from_state, to_state, status) VALUES (?, 'backlog', 'plan', 'waiting_user')",
+      [conversationId],
+    );
+    let executeChatTurnCalls = 0;
+    fakeCoordinator = {
+      ...fakeCoordinator,
+      executeChatTurn: async (_s, _c, _content, _m, _mcp, _ws, _att, _ec, opts) => {
+        executeChatTurnCalls += 1;
+        opts?.onRunEnd?.("done");
+        return { message: { id: 1 } as never, executionId: 1 };
+      },
+    };
+    agent.orchestrator = fakeCoordinator;
+    const events2 = await collectRun(agent, runInput(threadId, "hello"));
+    expect(executeChatTurnCalls).toBe(0);
+    expect(events2[events2.length - 1]).toMatchObject({ code: "THREAD_BUSY" });
+  });
+
+  test("R5: Pitfall 2 wedge gone — after a resolved resume, a NEW plain run delivers (no THREAD_BUSY)", async () => {
+    const { conversationId } = seedChatSession(db);
+    const threadId = String(conversationId);
+    seedWaitingUserRow(conversationId, 42);
+    const interruptId = await openPendingDecision(conversationId);
+
+    setResumeChatFake();
+    const agent = makeAgent(conversationId);
+    const resumeEvents = await collectRun(
+      agent,
+      resumeInput(threadId, [{ interruptId, status: "resolved", payload: RESUME_PAYLOAD }]),
+    );
+    expect(resumeEvents[resumeEvents.length - 1].type).toBe(EventType.RUN_FINISHED);
+
+    // The old row is now 'completed' — a plain run no longer wedges.
+    let executeChatTurnCalls = 0;
+    fakeCoordinator = {
+      ...fakeCoordinator,
+      executeChatTurn: async (_s, _c, _content, _m, _mcp, _ws, _att, _ec, opts) => {
+        executeChatTurnCalls += 1;
+        opts?.onRunEnd?.("done");
+        return { message: { id: 1 } as never, executionId: 1 };
+      },
+    };
+    agent.orchestrator = fakeCoordinator;
+    const followUp = await collectRun(agent, runInput(threadId, "hello"));
+    expect(executeChatTurnCalls).toBe(1);
+    expect(followUp[followUp.length - 1].type).toBe(EventType.RUN_FINISHED);
+  });
+
+  test("R6: duplicate resume — the second run gets INVALID_INTERRUPT (registry cleared after first delivery started)", async () => {
+    const { conversationId } = seedChatSession(db);
+    const threadId = String(conversationId);
+    const interruptId = await openPendingDecision(conversationId);
+
+    setResumeChatFake();
+    const agent = makeAgent(conversationId);
+    const first = await collectRun(
+      agent,
+      resumeInput(threadId, [{ interruptId, status: "resolved", payload: RESUME_PAYLOAD }]),
+    );
+    expect(first[first.length - 1].type).toBe(EventType.RUN_FINISHED);
+    expect(interruptRegistry.hasOpen(threadId)).toBe(false);
+
+    // Replay of the same resume id — the entry cleared → INVALID_INTERRUPT.
+    let executeChatTurnCalls = 0;
+    fakeCoordinator = {
+      ...fakeCoordinator,
+      executeChatTurn: async (_s, _c, _content, _m, _mcp, _ws, _att, _ec, opts) => {
+        executeChatTurnCalls += 1;
+        opts?.onRunEnd?.("done");
+        return { message: { id: 1 } as never, executionId: 1 };
+      },
+    };
+    agent.orchestrator = fakeCoordinator;
+    const second = await collectRun(
+      agent,
+      resumeInput(threadId, [{ interruptId, status: "resolved", payload: RESUME_PAYLOAD }]),
+    );
+    expect(executeChatTurnCalls).toBe(0);
+    expect(second[second.length - 1]).toMatchObject({ code: "INVALID_INTERRUPT" });
+  });
+
+  test("R7: routing — task-linked conversation → executeHumanTurn with translated args + opts; chat → executeChatTurn", async () => {
+    // Task-linked conversation.
+    const seeded = seedProjectAndTask(db, "/tmp/x");
+    const taskThreadId = String(seeded.conversationId);
+    const taskInterruptId = await openPendingDecision(seeded.conversationId);
+    setResumeTaskFake();
+    const agent = makeAgent(seeded.conversationId);
+    const taskEvents = await collectRun(
+      agent,
+      resumeInput(taskThreadId, [{ interruptId: taskInterruptId, status: "resolved", payload: RESUME_PAYLOAD }]),
+    );
+    expect(taskEvents[taskEvents.length - 1].type).toBe(EventType.RUN_FINISHED);
+    expect(capturedHumanTurnArgs).not.toBeNull();
+    expect(capturedHumanTurnArgs!.taskId).toBe(seeded.taskId);
+    expect(capturedHumanTurnArgs!.content).toContain("**Q [MEDIUM]:** Choose __DECISION_OPTION__");
+    expect(capturedHumanTurnArgs!.engineContent).toContain("record_decision");
+    // A6: opts reached executeHumanTurn.
+    expect(capturedHumanTurnArgs!.opts).toBeDefined();
+    expect(interruptRegistry.hasOpen(taskThreadId)).toBe(false);
+
+    // Chat conversation → executeChatTurn.
+    const { conversationId } = seedChatSession(db);
+    const chatThreadId = String(conversationId);
+    const chatInterruptId = await openPendingDecision(conversationId);
+    setResumeChatFake();
+    const chatAgent = makeAgent(conversationId);
+    const chatEvents = await collectRun(
+      chatAgent,
+      resumeInput(chatThreadId, [{ interruptId: chatInterruptId, status: "resolved", payload: RESUME_PAYLOAD }]),
+    );
+    expect(chatEvents[chatEvents.length - 1].type).toBe(EventType.RUN_FINISHED);
+    expect(capturedChatContent).toContain("Choose __DECISION_OPTION__");
+    expect(capturedWorkspaceKey).toBe("default");
+  });
+
+  test("R8: resolved resume without answers → RUN_ERROR INVALID_PAYLOAD, no executor call, entry survives for retry", async () => {
+    const { conversationId } = seedChatSession(db);
+    const threadId = String(conversationId);
+    const interruptId = await openPendingDecision(conversationId);
+    const agent = makeAgent(conversationId);
+
+    let executeChatTurnCalls = 0;
+    fakeCoordinator = {
+      ...fakeCoordinator,
+      executeChatTurn: async (_s, _c, _content, _m, _mcp, _ws, _att, _ec, opts) => {
+        executeChatTurnCalls += 1;
+        opts?.onRunEnd?.("done");
+        return { message: { id: 1 } as never, executionId: 1 };
+      },
+    };
+    agent.orchestrator = fakeCoordinator;
+
+    const events = await collectRun(
+      agent,
+      resumeInput(threadId, [{ interruptId, status: "resolved", payload: { decision: "approved" } }]),
+    );
+    expect(executeChatTurnCalls).toBe(0);
+    expect(events[events.length - 1].type).toBe(EventType.RUN_ERROR);
+    expect(events[events.length - 1]).toMatchObject({ code: "INVALID_PAYLOAD" });
+    // Delivery never started — the entry stays open so the client can retry
+    // with a proper payload (Pitfall 8: clear only after delivery starts).
+    expect(interruptRegistry.hasOpen(threadId)).toBe(true);
   });
 });
