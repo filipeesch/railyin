@@ -11,6 +11,7 @@
 </template>
 
 <script setup lang="ts">
+import { onUnmounted } from "vue";
 import { useInterrupt } from "@copilotkit/vue/v2";
 import { interruptBridgeState, getRecordedInterruptOutcome } from "./interruptBridge";
 
@@ -33,4 +34,11 @@ const myState = useInterrupt({
 // hasInterrupt input disable (the #interrupt slot's resolve/cancel come from
 // CopilotChat's own slot props).
 interruptBridgeState.value = myState;
+
+// IN-05: clear the module holder on unmount so a later mount never reads a
+// stale hook from the previous chat (one-frame wrongly-disabled input flash
+// when the previous thread had a pending interrupt).
+onUnmounted(() => {
+  if (interruptBridgeState.value === myState) interruptBridgeState.value = null;
+});
 </script>
