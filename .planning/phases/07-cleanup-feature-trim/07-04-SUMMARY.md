@@ -205,3 +205,23 @@ None - no external service configuration required.
 
 *Phase: 07-cleanup-feature-trim*
 *Completed: 2026-08-09*
+
+## Self-Check: PASSED
+
+- SUMMARY.md exists at `.planning/phases/07-cleanup-feature-trim/07-04-SUMMARY.md` ✓
+- Task 1 commit `f8da5d0a` exists ✓
+- Task 2 commit `71030b7b` exists ✓
+- Task 3 commit `779adf67` exists ✓
+- Metadata commit `c00889ee` exists ✓
+- All 3 plan tasks executed ✓
+- MessageType has exactly 7 live members ✓
+- bun run typecheck exit 0 ✓
+- bun test handlers 44 pass / 0 fail ✓
+- bun test context-estimator + cross-engine-context 26 pass / 0 fail (unmodified) ✓
+- bun run build ok ✓
+- Tripwire Playwright 56 pass / 0 fail ✓
+- bun test e2e/api 84 pass / 0 fail ✓
+- bun test src/bun 2254 pass / 2 skip / 0 fail ✓
+- Trim grep gate: contextUsage/respondShellApproval/tasks.compact/chatSessions.compact zero; getStreamEvents only D-04-protected migration comment ✓
+- resolveContextWindow exported + used by tasks.ts; ContextEstimator + cross-engine-context live ✓
+- tasks.getFileDiff kept as live review RPC (documented deviation) ✓
