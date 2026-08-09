@@ -345,14 +345,13 @@ test.describe("E — Auto-scroll", () => {
         expect(distBefore).toBeGreaterThan(100);
 
         // A new run streams while the user is scrolled up — the viewport must
-        // NOT be dragged back to the bottom.
+        // NOT be dragged back to the bottom. Poll until the streamed tail
+        // settles: a fixed sleep could measure a transient state mid-settle
+        // (WR-05, the E-1/E-7 pattern).
         await submitChatMessage(page, "stream more");
         await expect(chat).toContainText("stream more", { timeout: 10_000 });
         await expect.poll(() => agui.runInputs.length).toBe(1);
-        await page.waitForTimeout(800); // let the stream + terminal settle
-
-        const distAfter = await distFromBottom(scroll);
-        expect(distAfter).toBeGreaterThan(100);
+        await expect.poll(() => distFromBottom(scroll), { timeout: 3_000 }).toBeGreaterThan(100);
         await expect(page.locator('[data-testid="copilot-chat-view-scroll-to-bottom"]')).toBeVisible();
     });
 
@@ -382,14 +381,13 @@ test.describe("E — Auto-scroll", () => {
         });
 
         // New content arrives while pinned at the bottom — autoscroll keeps the
-        // viewport at the bottom.
+        // viewport at the bottom. Poll for the re-engagement (WR-05 — never a
+        // fixed settle sleep: on a loaded CI the client's scroll work can
+        // exceed any fixed window).
         await submitChatMessage(page, "stream more");
         await expect(chat).toContainText("stream more", { timeout: 10_000 });
         await expect.poll(() => agui.runInputs.length).toBe(1);
-        await page.waitForTimeout(800);
-
-        const distAfter = await distFromBottom(scroll);
-        expect(distAfter).toBeLessThanOrEqual(60);
+        await expect.poll(() => distFromBottom(scroll), { timeout: 3_000 }).toBeLessThanOrEqual(60);
         await expect(page.locator('[data-testid="copilot-chat-view-scroll-to-bottom"]')).toHaveCount(0);
     });
 
@@ -418,13 +416,13 @@ test.describe("E — Auto-scroll", () => {
         expect(info.sh - scrollTopBefore - info.ch).toBeGreaterThan(50); // not at the bottom
 
         // A run streams below the fold — the reading position must not drift.
+        // Poll until the streamed tail settles (WR-05, the E-1/E-7 pattern).
         await submitChatMessage(page, "stream below the fold");
         await expect(chat).toContainText("stream below the fold", { timeout: 10_000 });
         await expect.poll(() => agui.runInputs.length).toBe(1);
-        await page.waitForTimeout(800);
-
-        const scrollTopAfter = await scroll.evaluate((el) => el.scrollTop);
-        expect(Math.abs(scrollTopAfter - scrollTopBefore)).toBeLessThanOrEqual(5);
+        await expect
+            .poll(() => scroll.evaluate((el) => Math.abs(el.scrollTop - scrollTopBefore)), { timeout: 3_000 })
+            .toBeLessThanOrEqual(5);
     });
 
     test("E-6: an upward wheel near the bottom does not snap the viewport back", async ({ page, api, agui }) => {
@@ -455,14 +453,13 @@ test.describe("E — Auto-scroll", () => {
         const distBefore = await distFromBottom(scroll);
         expect(distBefore).toBeGreaterThan(20);
 
-        // New content arrives — the viewport must NOT be snapped back to the bottom.
+        // New content arrives — the viewport must NOT be snapped back to the
+        // bottom. Poll until the streamed tail settles (WR-05, the E-1/E-7
+        // pattern).
         await submitChatMessage(page, "stream after wheel");
         await expect(chat).toContainText("stream after wheel", { timeout: 10_000 });
         await expect.poll(() => agui.runInputs.length).toBe(1);
-        await page.waitForTimeout(800);
-
-        const distAfter = await distFromBottom(scroll);
-        expect(distAfter).toBeGreaterThan(20);
+        await expect.poll(() => distFromBottom(scroll), { timeout: 3_000 }).toBeGreaterThan(20);
     });
 
     test("E-7: scroll stays at bottom after the stream ends and persisted history arrives", async ({ page, api, agui }) => {

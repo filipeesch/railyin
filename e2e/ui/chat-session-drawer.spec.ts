@@ -539,14 +539,17 @@ test.describe("CD-E — Persistence and ordering", () => {
         const chat = sessionChat(page);
         await expect(chat).toContainText("Message 240", { timeout: 10_000 });
 
-        // CopilotChat scroll container (replaces the legacy .conv-body).
-        const isAtBottom = await page
-            .locator('.session-chat-view [data-testid="copilot-chat-view-scroll"]')
-            .evaluate((el) => {
-                const node = el as HTMLElement;
-                return node.scrollTop + node.clientHeight >= node.scrollHeight - 40;
-            });
-        expect(isAtBottom).toBe(true);
+        // CopilotChat scroll container (replaces the legacy .conv-body). The
+        // autoscroll pinning runs after layout/nextTick — poll until pinned
+        // instead of a single-shot evaluate (WR-05, the E-1/E-7 pattern).
+        await expect
+            .poll(() => page
+                .locator('.session-chat-view [data-testid="copilot-chat-view-scroll"]')
+                .evaluate((el) => {
+                    const node = el as HTMLElement;
+                    return node.scrollTop + node.clientHeight >= node.scrollHeight - 40;
+                }))
+            .toBe(true);
     });
 });
 
