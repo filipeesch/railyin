@@ -30,7 +30,7 @@ The board + task card workflow with decision-request UX, powered by pluggable en
 - ✓ Legacy import (`legacyImport.run`) converting old rows into JSONL threads, idempotent via atomic publish, SELECT-only frozen tables — Phase 4 (UI button in Phase 5)
 - ✓ Keep decision_request as the only human-in-the-loop UX via canonical AG-UI interrupts (`RUN_FINISHED` interrupt outcome + `RunAgentInput.resume[]`) — Phase 3 (runs genuinely pause/resume; legacy on_interrupt rejected)
 - ✓ Replace tool-run rendering with CopilotKit tool-call slots + ported domain renderers (shell/file/delegate) — Phase 5
-- [ ] Remove features: file_diff, code_review, transition_event, status/status_chunk, usage display, compaction_summary, ask_user, shell_approval (trim enforced in Phase 7; spec retirement + selector removal landed in Phase 6)
+- ✓ Remove features: file_diff, code_review, transition_event, status/status_chunk, usage display, compaction_summary, ask_user, shell_approval — Phase 7 (trimmed; shell approval auto-approve posture)
 - [ ] Keep board reactivity on `/ws` (task.updated, code.ref, lsp) while chat push moves to the CopilotKit connection
 - ✓ Host CopilotRuntime inside Bun.serve via fetch-native handler — Phase 1 (spike proven: single origin, `/api/copilotkit/*`, SSE round-trip, >32s silence survival)
 
@@ -155,4 +155,4 @@ Spike-proven facts (probe server `startServer({ copilotkitProbe: true })`, `@cop
 ```
 
 ---
-*Last updated: 2026-08-09 (Phase 6 complete: E2E suite migrated onto mock foundation — 517 pass / 0 fail)*
+*Last updated: 2026-08-09 (Phase 7 complete: cleanup & feature trim — milestone v1.0 complete)*
