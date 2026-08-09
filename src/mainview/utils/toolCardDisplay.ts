@@ -75,7 +75,11 @@ export function isErrorResult(result: string | undefined): boolean {
   } catch {
     // not JSON — fall through to the raw-text heuristic
   }
-  return /^\s*(error|failed|failure|exit code)/i.test(result);
+  // WR-03: bare `error`/`failed`/`failure` prefixes false-positive on
+  // SUCCESSFUL tool output (grep -i error, `ls error*`, a script echoing
+  // "exit code 0"). Only a leading `exit code N` with a NON-ZERO code is a
+  // reliable text marker; structured failures are caught by the JSON branch.
+  return /^\s*exit code [1-9]\d*/i.test(result);
 }
 
 /**

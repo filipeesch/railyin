@@ -118,10 +118,18 @@ describe("isErrorResult", () => {
     expect(isErrorResult(JSON.stringify({ status: "complete" }))).toBe(false);
   });
 
-  it("TCD-17: plain output text is not an error unless it starts with an error marker", () => {
+  it("TCD-17: plain output text flags only a leading non-zero exit code (WR-03)", () => {
     expect(isErrorResult("everything went fine")).toBe(false);
-    expect(isErrorResult("Error: command exited with 1")).toBe(true);
+    // Bare error/failed/failure prefixes are NOT reliable markers — they
+    // false-positive on successful grep/ls/echo output (WR-03).
+    expect(isErrorResult("Error: command exited with 1")).toBe(false);
+    expect(isErrorResult("error: no match found")).toBe(false);
+    expect(isErrorResult("failed to connect")).toBe(false);
+    // Non-zero exit codes remain real failures.
     expect(isErrorResult("exit code 1")).toBe(true);
+    expect(isErrorResult("exit code 127")).toBe(true);
+    // `exit code 0` is a SUCCESS report — must not flag.
+    expect(isErrorResult("exit code 0")).toBe(false);
   });
 });
 
