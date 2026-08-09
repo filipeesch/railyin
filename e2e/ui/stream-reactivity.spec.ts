@@ -128,7 +128,12 @@ test.describe("B — Rendering isolation", () => {
         await openTaskDrawer(page, task1.id);
         const chat = page.locator('[data-testid="copilot-chat-view"]');
         await expect(chat).toBeVisible({ timeout: 10_000 });
-        await page.waitForTimeout(200); // let the initial mount settle before observing
+
+        // Settle the initial render DETERMINISTICALLY before observing (WR-03):
+        // task1 is a never-run thread, so the connect round trip resolves into
+        // the empty state — waiting for it (instead of a fixed sleep) ensures
+        // the observer can never count a late initial render as a mutation.
+        await expect(page.locator('[data-testid="chat-empty-state"]')).toBeVisible({ timeout: 10_000 });
 
         // Attach a MutationObserver to the live chat surface (the legacy
         // .conv-body observer target no longer exists — the isolation intent
