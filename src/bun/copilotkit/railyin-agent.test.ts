@@ -48,8 +48,8 @@ function resumeInput(threadId: string, resume: NonNullable<RunAgentInput["resume
     tools: [],
     context: [],
     messages: [
-      { id: "a1", role: "assistant", content: [{ type: "text", text: "I need your decision." }] },
-      { id: "u1", role: "user", content: [{ type: "text", text: "history" }] },
+      { id: "a1", role: "assistant", content: "I need your decision." },
+      { id: "u1", role: "user", content: "history" },
     ],
     resume,
   };
@@ -753,10 +753,11 @@ describe("resume branch (D-05/D-07 — 03-02)", () => {
   test("R1: full resume cycle — translated submission reaches the executor, continuation streams, registry cleared, old row finalized (Pitfalls 2/8)", async () => {
     const { conversationId } = seedChatSession(db);
     const threadId = String(conversationId);
-    // Decision-paused state: the orphaned waiting_user row (Pitfall 2) + open
-    // registry entry with executionId 42 attached.
-    seedWaitingUserRow(conversationId, 42);
+    // Decision-paused state: the orphaned waiting_user row (Pitfall 2 — the
+    // stream-processor writes it DURING the decision run) + open registry
+    // entry with executionId 42 attached.
     const interruptId = await openPendingDecision(conversationId);
+    seedWaitingUserRow(conversationId, 42);
 
     setResumeChatFake();
     const agent = makeAgent(conversationId);
@@ -839,8 +840,8 @@ describe("resume branch (D-05/D-07 — 03-02)", () => {
   test("R3: cancelled resume (A4) — registry cleared, row 'cancelled', plain RUN_FINISHED, no engine call; follow-up run succeeds", async () => {
     const { conversationId } = seedChatSession(db);
     const threadId = String(conversationId);
-    seedWaitingUserRow(conversationId, 42);
     const interruptId = await openPendingDecision(conversationId);
+    seedWaitingUserRow(conversationId, 42);
     const agent = makeAgent(conversationId);
 
     let executeChatTurnCalls = 0;
@@ -876,8 +877,8 @@ describe("resume branch (D-05/D-07 — 03-02)", () => {
   test("R4: Pitfall 1 — the resume run bypasses the advisory lock; a plain run against the same waiting_user row still gets THREAD_BUSY", async () => {
     const { conversationId } = seedChatSession(db);
     const threadId = String(conversationId);
-    seedWaitingUserRow(conversationId, 42);
     const interruptId = await openPendingDecision(conversationId);
+    seedWaitingUserRow(conversationId, 42);
 
     setResumeChatFake();
     const agent = makeAgent(conversationId);
@@ -912,8 +913,8 @@ describe("resume branch (D-05/D-07 — 03-02)", () => {
   test("R5: Pitfall 2 wedge gone — after a resolved resume, a NEW plain run delivers (no THREAD_BUSY)", async () => {
     const { conversationId } = seedChatSession(db);
     const threadId = String(conversationId);
-    seedWaitingUserRow(conversationId, 42);
     const interruptId = await openPendingDecision(conversationId);
+    seedWaitingUserRow(conversationId, 42);
 
     setResumeChatFake();
     const agent = makeAgent(conversationId);

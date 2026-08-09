@@ -27,6 +27,7 @@ import {
   translateEngineEvent,
   synthesizeMissingToolResults,
   terminalEvent,
+  translateResumeToSubmission,
   type TranslateState,
 } from "./event-bridge.ts";
 import * as interruptRegistry from "./interrupt-registry.ts";
@@ -141,73 +142,18 @@ export class RailyinAgent extends AbstractAgent {
       if (this.activeRun === run) this.activeRun = null; // IN-02: no stale pointer
     };
 
-    if (!/^\d+$/.test(threadId)) {
-      emitRunError(`Unknown thread: ${threadId}`, "THREAD_NOT_FOUND");
-      return subject.asObservable() as unknown as ReturnType<AbstractAgent["run"]>;
-    }
-    const conversationId = Number(threadId);
-    const conversation = this.db
-      .query("SELECT 1 FROM conversations WHERE id = ?")
-      .get(conversationId);
-    if (!conversation) {
-      emitRunError(`Unknown thread: ${threadId}`, "THREAD_NOT_FOUND");
-      return subject.asObservable() as unknown as ReturnType<AbstractAgent["run"]>;
-    }
-
-    // D-04 (CHAT-09 SC3): a pending decision interrupt blocks NEW input
-    // server-side. Runs WITHOUT resume[] are rejected with the advisory
-    // THREAD_BUSY code (e2e asserts the code — stays stable; the registry adds
-    // the precise message per research). The resume branch that bypasses this
-    // check occupies the same region (03-02 Task 3, before extractUserText).
-    if (!input.resume?.length && interruptRegistry.hasOpen(threadId)) {
-      emitRunError("A decision interrupt is pending for this thread", "THREAD_BUSY");
-      return subject.asObservable() as unknown as ReturnType<AbstractAgent["run"]>;
-    }
-
-    const content = extractUserText(input.messages);
-    if (content == null) {
-      emitRunError("No user text message in input", "NO_USER_MESSAGE");
-      return subject.asObservable() as unknown as ReturnType<AbstractAgent["run"]>;
-    }
-
-    // Advisory cross-path lock (RUNR-04, research Open Question 2): reject a
-    // run while ANOTHER execution (e.g. a board transition) is active on the
-    // same conversation. Layering: the runner lock still fires FIRST for
-    // same-thread AG-UI concurrency (200 + empty body — e2e unchanged); this
-    // check only catches cross-path cases. 'completed'/'failed' rows never
-    // block (status filter). One indexed lookup, no policy machinery —
-    // queue-vs-reject stays reject for v1.
-    const active = this.db
-      .query("SELECT 1 FROM executions WHERE conversation_id = ? AND status IN ('running','waiting_user')")
-      .get(conversationId);
-    if (active) {
-      emitRunError("Thread already has an active execution", "THREAD_BUSY");
-      return subject.asObservable() as unknown as ReturnType<AbstractAgent["run"]>;
-    }
-
-    // RUNR-03: per-conversation workspace resolution (task → chat_sessions →
-    // default, mirroring conversations.ts:64-76). The conversation existence
-    // check above already rejected unknown threads; a null here (defensive
-    // contract layer, T-02-15) routes through the same THREAD_NOT_FOUND path.
-    // IN-03: resolved BEFORE RUN_STARTED so this rejection cannot emit a
-    // second RUN_STARTED (verifyEvents rejects a second RUN_STARTED while a
-    // run is active — exactly-one-per-run contract).
-    const workspaceKey = resolveWorkspaceKey(this.db, conversationId);
-    if (workspaceKey == null) {
-      emitRunError(`Unknown thread: ${threadId}`, "THREAD_NOT_FOUND");
-      return subject.asObservable() as unknown as ReturnType<AbstractAgent["run"]>;
-    }
-
-    // RUN_STARTED FIRST, WITH input — the runner only patches when input is
-    // absent, so the persisted user turn matches the wire (State of the Art).
-    subject.next({ type: EventType.RUN_STARTED, threadId, runId, input });
-
     // Pitfall 3 completion guard: the subject must NEVER complete without a
     // terminal (finalizeRunEvents would append INCOMPLETE_STREAM RUN_ERROR).
     // All completion paths go through guardedComplete(); when no terminal was
     // emitted (pause paths where consume ends without an outcome), it closes
     // open text/reasoning blocks (verifyEvents rejects RUN_FINISHED with active
     // messages) and appends RUN_FINISHED before completing.
+    //
+    // NOTE: these terminal closures are defined BEFORE the resume branch (not
+    // at the bottom of run()) because the resume branch's synchronous tap
+    // wiring (same shape as the main path) references `finish` — a const
+    // declared later would be in the TDZ when a synchronous fake fires
+    // onRunEnd inside the delivery call.
     const guardedComplete = (): void => {
       if (terminalEmitted) return;
       terminalEmitted = true;
@@ -258,6 +204,199 @@ export class RailyinAgent extends AbstractAgent {
       subject.complete();
       if (this.activeRun === run) this.activeRun = null; // IN-02: no stale pointer
     };
+
+    if (!/^\d+$/.test(threadId)) {
+      emitRunError(`Unknown thread: ${threadId}`, "THREAD_NOT_FOUND");
+      return subject.asObservable() as unknown as ReturnType<AbstractAgent["run"]>;
+    }
+    const conversationId = Number(threadId);
+    const conversation = this.db
+      .query("SELECT 1 FROM conversations WHERE id = ?")
+      .get(conversationId);
+    if (!conversation) {
+      emitRunError(`Unknown thread: ${threadId}`, "THREAD_NOT_FOUND");
+      return subject.asObservable() as unknown as ReturnType<AbstractAgent["run"]>;
+    }
+
+    // D-07 resume branch (03-02): a client resume run carries the user's
+    // decision payload via RunAgentInput.resume[] (the canonical channel,
+    // D-01). Placement matters — BEFORE extractUserText (a resume run's
+    // messages are history; the main path would reject NO_USER_MESSAGE) and
+    // BEFORE the advisory lock (Pitfall 1 — the pending decision left a
+    // 'waiting_user' row that would reject the resume itself with THREAD_BUSY).
+    if (input.resume?.length) {
+      const open = interruptRegistry.get(threadId);
+      const openIds = open ? [open.interruptId] : []; // v1: one interrupt per batch (D-02)
+      const addressed = new Set(input.resume.map((r) => r.interruptId));
+      // D-05: all-or-nothing — every resume id must be an OPEN interrupt for
+      // this thread AND every open interrupt must be addressed. Unknown,
+      // partial, or duplicate-after-clear resumes → INVALID_INTERRUPT
+      // (Pitfall 8: the entry clears only after delivery starts, so a replay
+      // of an old id fails here).
+      const allResolved =
+        openIds.every((id) => addressed.has(id)) && input.resume.every((r) => openIds.includes(r.interruptId));
+      if (!open || !allResolved) {
+        emitRunError("Resume does not match open decision interrupt(s)", "INVALID_INTERRUPT");
+        return subject.asObservable() as unknown as ReturnType<AbstractAgent["run"]>;
+      }
+
+      subject.next({ type: EventType.RUN_STARTED, threadId, runId, input });
+      const entry = input.resume.find((r) => r.interruptId === open.interruptId)!;
+
+      // A4: a cancelled resume is a dismissal — clear the registry, close the
+      // execution row as 'cancelled', and complete with a plain RUN_FINISHED.
+      // NO engine call: the rejection/dismissal delivers nothing (v1).
+      if (entry.status === "cancelled") {
+        interruptRegistry.clear(threadId);
+        if (open.executionId != null) {
+          this.db.run(
+            "UPDATE executions SET status = 'cancelled', finished_at = datetime('now') WHERE id = ? AND status = 'waiting_user'",
+            [open.executionId],
+          );
+        }
+        subject.next(terminalEvent(threadId, runId, "done"));
+        subject.complete();
+        if (this.activeRun === run) this.activeRun = null; // IN-02: no stale pointer
+        return subject.asObservable() as unknown as ReturnType<AbstractAgent["run"]>;
+      }
+
+      // Resolved: translate through the existing decision-submission path.
+      // translateResumeToSubmission delegates to buildDecisionSubmission — the
+      // Q/A pairs and hidden record_decision instructions are NEVER
+      // re-formatted here (Don't Hand-Roll row 3).
+      const sub = translateResumeToSubmission(entry.payload);
+      if (sub == null) {
+        // Planner's discretion (recorded in the plan objective): a resolved
+        // resume whose payload lacks answers is a distinct error — clearer for
+        // Phase 5 debugging than reusing INVALID_INTERRUPT.
+        emitRunError("Resume payload missing decision answers", "INVALID_PAYLOAD");
+        return subject.asObservable() as unknown as ReturnType<AbstractAgent["run"]>;
+      }
+
+      // Pitfall 2: finalize the OLD orphaned 'waiting_user' execution row
+      // BEFORE delivery — stream-processor.ts:494-506 is its only writer and no
+      // existing code closes it; the advisory lock would otherwise wedge the
+      // thread forever after the resume.
+      if (open.executionId != null) {
+        this.db.run(
+          "UPDATE executions SET status = 'completed', finished_at = datetime('now') WHERE id = ? AND status = 'waiting_user'",
+          [open.executionId],
+        );
+      }
+
+      // TDZ guard: the main-path workspaceKey const (below, after the advisory
+      // lock) is out of scope at this insertion point — resolve our own copy.
+      const resumeWorkspaceKey = resolveWorkspaceKey(this.db, conversationId);
+      if (resumeWorkspaceKey == null) {
+        emitRunError(`Unknown thread: ${threadId}`, "THREAD_NOT_FOUND");
+        return subject.asObservable() as unknown as ReturnType<AbstractAgent["run"]>;
+      }
+
+      // The SAME tap wiring as the main path: translate every engine event and
+      // push into the subject, capture lastEngineError, map onRunEnd through
+      // finish()/finishInterrupt(). A continuation decision_request parks
+      // again (register + interrupt terminal).
+      const resumeOpts = {
+        onEngineEvent: (event: EngineEvent) => {
+          anyEventSeen = true;
+          if (event.type === "error") lastEngineError = event.message;
+          if (event.type === "decision_request") capturedDecisionPayload = event.payload;
+          const translated = translateEngineEvent(event, state);
+          accumulated.push(...translated);
+          for (const ev of translated) subject.next(ev);
+        },
+        onRunEnd: (outcome: "done" | "error" | "aborted" | "decision") => {
+          if (outcome === "error") {
+            finish("error", { message: lastEngineError ?? "Run failed", code: "ENGINE_ERROR" });
+          } else if (outcome === "decision") {
+            const id = interruptRegistry.register(conversationId, capturedDecisionPayload ?? "");
+            finishInterrupt(id);
+          } else {
+            finish(outcome);
+          }
+        },
+      };
+
+      // Routing: task-linked conversations deliver through executeHumanTurn
+      // (the A6 opts seam carries the tap wiring); chat conversations through
+      // executeChatTurn — the legacy decision-path semantics, engine-side
+      // (D-07; research Pattern 3).
+      const taskRow = this.db
+        .query<{ task_id: number | null }, [number]>("SELECT task_id FROM conversations WHERE id = ?")
+        .get(conversationId);
+      const delivery = taskRow?.task_id != null
+        ? this.orchestrator.executeHumanTurn(taskRow.task_id, sub.userContent, undefined, sub.engineContent, resumeOpts)
+        : this.orchestrator.executeChatTurn(0, conversationId, sub.userContent, undefined, null, resumeWorkspaceKey, undefined, sub.engineContent, resumeOpts);
+
+      delivery
+        .then(({ executionId }) => {
+          run.executionId = executionId;
+          // Pitfall 8: clear the registry entry ONLY after delivery started —
+          // a duplicate resume now fails with INVALID_INTERRUPT (the second
+          // run finds no open entry).
+          interruptRegistry.clear(threadId);
+          if (run.abortRequested) {
+            this.orchestrator.cancel(executionId);
+            return;
+          }
+        })
+        .catch((err) => {
+          finish("error", {
+            message: err instanceof Error ? err.message : String(err),
+            code: "ENGINE_ERROR",
+          });
+        });
+
+      return subject.asObservable() as unknown as ReturnType<AbstractAgent["run"]>;
+    }
+
+    // D-04 (CHAT-09 SC3): a pending decision interrupt blocks NEW input
+    // server-side. Runs WITHOUT resume[] are rejected with the advisory
+    // THREAD_BUSY code (e2e asserts the code — stays stable; the registry adds
+    // the precise message per research). The resume branch that bypasses this
+    // check occupies the same region (03-02 Task 3, before extractUserText).
+    if (!input.resume?.length && interruptRegistry.hasOpen(threadId)) {
+      emitRunError("A decision interrupt is pending for this thread", "THREAD_BUSY");
+      return subject.asObservable() as unknown as ReturnType<AbstractAgent["run"]>;
+    }
+
+    const content = extractUserText(input.messages);
+    if (content == null) {
+      emitRunError("No user text message in input", "NO_USER_MESSAGE");
+      return subject.asObservable() as unknown as ReturnType<AbstractAgent["run"]>;
+    }
+
+    // Advisory cross-path lock (RUNR-04, research Open Question 2): reject a
+    // run while ANOTHER execution (e.g. a board transition) is active on the
+    // same conversation. Layering: the runner lock still fires FIRST for
+    // same-thread AG-UI concurrency (200 + empty body — e2e unchanged); this
+    // check only catches cross-path cases. 'completed'/'failed' rows never
+    // block (status filter). One indexed lookup, no policy machinery —
+    // queue-vs-reject stays reject for v1.
+    const active = this.db
+      .query("SELECT 1 FROM executions WHERE conversation_id = ? AND status IN ('running','waiting_user')")
+      .get(conversationId);
+    if (active) {
+      emitRunError("Thread already has an active execution", "THREAD_BUSY");
+      return subject.asObservable() as unknown as ReturnType<AbstractAgent["run"]>;
+    }
+
+    // RUNR-03: per-conversation workspace resolution (task → chat_sessions →
+    // default, mirroring conversations.ts:64-76). The conversation existence
+    // check above already rejected unknown threads; a null here (defensive
+    // contract layer, T-02-15) routes through the same THREAD_NOT_FOUND path.
+    // IN-03: resolved BEFORE RUN_STARTED so this rejection cannot emit a
+    // second RUN_STARTED (verifyEvents rejects a second RUN_STARTED while a
+    // run is active — exactly-one-per-run contract).
+    const workspaceKey = resolveWorkspaceKey(this.db, conversationId);
+    if (workspaceKey == null) {
+      emitRunError(`Unknown thread: ${threadId}`, "THREAD_NOT_FOUND");
+      return subject.asObservable() as unknown as ReturnType<AbstractAgent["run"]>;
+    }
+
+    // RUN_STARTED FIRST, WITH input — the runner only patches when input is
+    // absent, so the persisted user turn matches the wire (State of the Art).
+    subject.next({ type: EventType.RUN_STARTED, threadId, runId, input });
 
     // sessionId 0 per research A3 (ignored by ChatExecutor); model/mcpTools
     // undefined — the executor resolves conversations.model via EngineRegistry (D-10).

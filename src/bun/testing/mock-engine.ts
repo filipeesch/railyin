@@ -65,8 +65,7 @@ function scriptedEvents(prompt: string): { events: EngineEvent[]; pauseMs?: numb
     // with the interrupt outcome (RUN_FINISHED outcome.interrupt), NOT an
     // error, and no events after it. Deliberately NO done event: the run ends
     // at the decision (stream-processor maps decision_request →
-    // onRunEnd("decision")). Phase B (resume continuation) lands in 03-02
-    // Task 3.
+    // onRunEnd("decision")).
     return { events: [
       { type: "token", content: "I need your decision." },
       { type: "decision_request", payload: JSON.stringify({
@@ -74,6 +73,17 @@ function scriptedEvents(prompt: string): { events: EngineEvent[]; pauseMs?: numb
           questions: [{ question: "Choose __DECISION_OPTION__", type: "exclusive",
                         options: [{ title: "A", description: "" }, { title: "B", description: "" }] }],
         }) },
+    ] };
+  }
+  if (prompt.includes("Choose __DECISION_OPTION__")) {
+    // Phase B (resume run): the translated submission text contains the
+    // question (buildDecisionSubmission formats "**Q [MEDIUM]:** Choose
+    // __DECISION_OPTION__"). Phase B fires ONLY when the formatted decision
+    // text reached params.prompt via the engineContent path — the proof that
+    // the engine received the translated decision (research Pattern 4).
+    return { events: [
+      { type: "token", content: "Decision received, continuing." },
+      { type: "done" },
     ] };
   }
   return null;
