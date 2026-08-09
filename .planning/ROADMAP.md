@@ -117,7 +117,7 @@ Plans:
   4. Old chat tables remain intact and readable throughout (frozen, not dropped)
   5. Interrupted or corrupted JSONL writes never lose a thread: the store tolerates trailing partial lines and the index rebuilds from the log
 
-**Plans**: 2/3 plans executed
+**Plans**: 3/3 plans executed
 Plans:
 **Wave 1**
 
@@ -129,7 +129,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 04-03-PLAN.md — Crash-tolerance e2e proof (corrupted log still lists + replays, .tmp residue invisible), phase gate + 04-COVERAGE/04-VALIDATION close-out (CHAT-08, IMPR-01, IMPR-02)
+- [x] 04-03-PLAN.md — Crash-tolerance e2e proof (corrupted log still lists + replays, .tmp residue invisible), phase gate + 04-COVERAGE/04-VALIDATION close-out (CHAT-08, IMPR-01, IMPR-02)
 
 ### Phase 5: Chat UI Replacement (Vue)
 
@@ -201,7 +201,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 | 1. CopilotRuntime Hosting & Thread APIs (Spike) | 3/3 | Complete    | 2026-08-09 |
 | 2. AG-UI Bridge & RailyinAgentRunner | 3/3 | Complete    | 2026-08-09 |
 | 3. Decision Interrupts & Resume | 3/3 | Complete    | 2026-08-09 |
-| 4. JSONL Persistence & Legacy Import | 2/3 | In Progress|  |
+| 4. JSONL Persistence & Legacy Import | 3/3 | In Progress|  |
 | 5. Chat UI Replacement (Vue) | 0/TBD | Not started | - |
 | 6. E2E Migration & Verification | 0/TBD | Not started | - |
 | 7. Cleanup & Feature Trim | 0/TBD | Not started | - |
