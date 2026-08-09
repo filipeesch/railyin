@@ -35,7 +35,9 @@ export interface OpenCodeSdkAdapter {
   /**
    * Reply to a pending OpenCode permission request so the agent loop can
    * continue. The decision comes from the A3 onPermissionAsked callback — the
-   * engine never waits for a permission reply.
+   * engine never waits for a permission reply. The requestId is the
+   * permission.asked event's own id (WR-03): parallel asks each answer their
+   * own id; there is no per-execution pending map to race or throw on.
    */
-  respondPermission(executionId: number, decision: "approve_once" | "approve_all" | "deny"): Promise<void>;
+  respondPermission(requestId: string, decision: "approve_once" | "approve_all" | "deny"): Promise<void>;
 }

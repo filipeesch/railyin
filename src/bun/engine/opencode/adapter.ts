@@ -26,8 +26,6 @@ export class DefaultOpenCodeSdkAdapter implements OpenCodeSdkAdapter {
   private readonly sessionMap = new Map<number, string>();
   /** conversationId → execution context for MCP tool dispatch */
   private readonly contextMap: Map<number, McpContextEntry> = new Map();
-  /** executionId → pending OpenCode permission request info */
-  private readonly pendingPermissions = new Map<number, { requestId: string; sessionId: string }>();
   private startPromise: Promise<void> | null = null;
 
   constructor(engineConfig: OpenCodeEngineConfig) {
@@ -156,17 +154,15 @@ export class DefaultOpenCodeSdkAdapter implements OpenCodeSdkAdapter {
 
           onRawEvent?.(sanitizeForLogging(event as Record<string, unknown>));
 
-          // Store permission info so respondPermission() can call permission.reply() later.
           // A3 posture: reply deterministically via onPermissionAsked (auto-approve
           // when shellAutoApprove is set, deny otherwise) — never wait for a resume
-          // that no UI can answer.
+          // that no UI can answer. The requestId travels DIRECTLY into the reply
+          // (WR-03): a second permission.asked before the first reply completes is
+          // processed sequentially by this event loop, so each request answers its
+          // OWN id — no single-slot map overwrite, no 'No pending permission' throw.
           if (event.type === "permission.asked" && event.properties.sessionID === sessionId) {
-            this.pendingPermissions.set(executionId, {
-              requestId: event.properties.id,
-              sessionId: event.properties.sessionID,
-            });
             const decision = params.onPermissionAsked ? await params.onPermissionAsked(executionId) : "deny";
-            await this.respondPermission(executionId, decision);
+            await this.respondPermission(event.properties.id, decision);
           }
 
           const engineEvents = translateEvent(event, sessionId);
@@ -193,7 +189,6 @@ export class DefaultOpenCodeSdkAdapter implements OpenCodeSdkAdapter {
         entry.pendingQuestion = null;
       }
       this.contextMap.delete(conversationId);
-      this.pendingPermissions.delete(executionId);
     }
   }
 
@@ -203,14 +198,17 @@ export class DefaultOpenCodeSdkAdapter implements OpenCodeSdkAdapter {
     void executionId;
   }
 
-  async respondPermission(executionId: number, decision: "approve_once" | "approve_all" | "deny"): Promise<void> {
+  /**
+   * Reply to a pending OpenCode permission request so the agent loop can
+   * continue. The requestId comes from the permission.asked event itself
+   * (WR-03): no per-execution map lookup, so parallel asks each answer their
+   * own id and an already-replied request can never throw.
+   */
+  async respondPermission(requestId: string, decision: "approve_once" | "approve_all" | "deny"): Promise<void> {
     await this.ensureStarted();
-    const pending = this.pendingPermissions.get(executionId);
-    if (!pending) throw new Error(`No pending permission for execution ${executionId}`);
-    this.pendingPermissions.delete(executionId);
     const reply = decision === "approve_all" ? "always" : decision === "approve_once" ? "once" : "reject" as const;
     await this.client!.permission.reply({
-      requestID: pending.requestId,
+      requestID: requestId,
       reply,
     });
   }

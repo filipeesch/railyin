@@ -28,7 +28,7 @@ export class MockOpenCodeSdkAdapter implements OpenCodeSdkAdapter {
     resumeCalls: [] as Array<{ conversationId: number; sessionId: string }>,
     listModelsCalls: 0,
     listCommandsCalls: [] as Array<{ directory: string }>,
-    respondPermissionCalls: [] as Array<{ executionId: number; decision: string }>,
+    respondPermissionCalls: [] as Array<{ requestId: string; decision: string }>,
   };
 
   /** Set of conversationIds currently registered in an active run */
@@ -134,8 +134,8 @@ export class MockOpenCodeSdkAdapter implements OpenCodeSdkAdapter {
     this.activeControllers.get(executionId)?.abort();
   }
 
-  async respondPermission(executionId: number, decision: "approve_once" | "approve_all" | "deny"): Promise<void> {
-    this.trace.respondPermissionCalls.push({ executionId, decision });
+  async respondPermission(requestId: string, decision: "approve_once" | "approve_all" | "deny"): Promise<void> {
+    this.trace.respondPermissionCalls.push({ requestId, decision });
   }
 
   async listModels(_workingDirectory: string): Promise<EngineModelInfo[]> {
