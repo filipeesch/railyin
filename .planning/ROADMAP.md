@@ -209,7 +209,7 @@ Plans:
   3. `git grep` shows zero references to the custom StreamEvent protocol and deleted modules; build and all suites stay green after deletion
   4. Legacy import is retired behind a flag once imports are complete
 
-**Plans**: 2/5 plans executed
+**Plans**: 3/5 plans executed
 Plans:
 **Wave 1**
 
@@ -218,7 +218,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 07-03-PLAN.md — Dead chat stack deletion (19 components + Group C modules, D-01), store/rpc/App.vue strips, protocol type removal, e2e fixture strips + session-status spec
+- [x] 07-03-PLAN.md — Dead chat stack deletion (19 components + Group C modules, D-01), store/rpc/App.vue strips, protocol type removal, e2e fixture strips + session-status spec
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
@@ -255,4 +255,4 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 | 4. JSONL Persistence & Legacy Import | 3/3 | Complete    | 2026-08-09 |
 | 5. Chat UI Replacement (Vue) | 5/5 | Complete    | 2026-08-09 |
 | 6. E2E Migration & Verification | 8/7 | Complete    | 2026-08-09 |
-| 7. Cleanup & Feature Trim | 2/5 | In Progress|  |
+| 7. Cleanup & Feature Trim | 3/5 | In Progress|  |
