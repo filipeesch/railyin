@@ -195,7 +195,12 @@ test.describe("N — execution state in the UI", () => {
         await page.keyboard.press("Enter");
 
         // Empty submit attempts never reach the agent — zero /run requests.
-        await expect.poll(() => agui.runInputs.length).toBe(0);
+        // Bound the negative window: a buggy submit is recorded by the route
+        // handler ASYNCHRONOUSLY (browser → Playwright route dispatch → push),
+        // so give any stray /run time to arrive before asserting absence
+        // (WR-02 — a bare poll passes immediately when the count is already 0).
+        await page.waitForTimeout(500);
+        expect(agui.runInputs).toHaveLength(0);
     });
 
     test("N-9: editor stays enabled while AI is running (queue button half retired)", async ({ page, api, agui }) => {

@@ -119,8 +119,12 @@ test.describe("AC — autocomplete", () => {
         await input.pressSequentially("hello");
         await page.keyboard.press("Shift+Enter");
 
-        // Newline lands in the textarea and nothing is submitted.
+        // Newline lands in the textarea and nothing is submitted. Bound the
+        // negative window: a buggy submit is recorded by the route handler
+        // asynchronously, so give it time to arrive before asserting absence
+        // (WR-02).
         await expect(input).toHaveValue(/hello\n/);
+        await page.waitForTimeout(500);
         expect(agui.runInputs).toHaveLength(0);
     });
 

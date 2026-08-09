@@ -166,7 +166,11 @@ test.describe("CD-B — Sending messages", () => {
         await input.pressSequentially("Line 1");
         await page.keyboard.press("Shift+Enter");
 
-        // No /run fired — Shift+Enter is a newline, not a submit.
+        // No /run fired — Shift+Enter is a newline, not a submit. Bound the
+        // negative window: a buggy submit is recorded by the route handler
+        // asynchronously, so give it time to arrive before asserting absence
+        // (WR-02).
+        await page.waitForTimeout(500);
         expect(agui.runInputs).toHaveLength(0);
         await expect(input).toHaveValue(/Line 1/);
     });
@@ -184,7 +188,9 @@ test.describe("CD-B — Sending messages", () => {
         await input.click();
         await page.keyboard.press("Enter");
 
-        // Nothing to send — an empty message never fires /run.
+        // Nothing to send — an empty message never fires /run. Bound the
+        // negative window (the route handler records asynchronously — WR-02).
+        await page.waitForTimeout(500);
         expect(agui.runInputs).toHaveLength(0);
     });
 
