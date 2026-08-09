@@ -32,7 +32,7 @@ The board + task card workflow with decision-request UX, powered by pluggable en
 - [ ] Replace tool-run rendering with CopilotKit's tool-call slots (default card covers generic tools; ported renderers for shell/file/delegate)
 - [ ] Remove features: file_diff, code_review, transition_event, status/status_chunk, usage display, compaction_summary, ask_user, shell_approval
 - [ ] Keep board reactivity on `/ws` (task.updated, code.ref, lsp) while chat push moves to the CopilotKit connection
-- [ ] Host CopilotRuntime inside Bun.serve (hono handler) without a second server
+- ✓ Host CopilotRuntime inside Bun.serve via fetch-native handler — Phase 1 (spike proven: single origin, `/api/copilotkit/*`, SSE round-trip, >32s silence survival)
 
 ### Out of Scope
 
@@ -155,4 +155,4 @@ Spike-proven facts (probe server `startServer({ copilotkitProbe: true })`, `@cop
 ```
 
 ---
-*Last updated: 2026-08-08 (Phase 1 spike evidence appended)*
+*Last updated: 2026-08-09 (Phase 1 complete: runtime hosting spike + eventsource patch + UAT passed)*
