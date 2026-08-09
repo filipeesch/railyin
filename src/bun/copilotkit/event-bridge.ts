@@ -16,6 +16,7 @@
 import { EventType } from "@ag-ui/core";
 import type { BaseEvent } from "@ag-ui/client";
 import type { EngineEvent } from "../engine/types.ts";
+import type { DecisionRequestPayload } from "../../shared/rpc-types.ts";
 
 /** Per-run mutable translation state. Owned by the agent's run closure —
  * NEVER agent instance fields (the runtime clones per request). */
@@ -322,4 +323,46 @@ export function terminalEvent(
     return { type: EventType.RUN_ERROR, message: error?.message ?? "Run failed", code: error?.code };
   }
   return { type: EventType.RUN_FINISHED, threadId, runId, result: null };
+}
+
+/**
+ * Build the canonical AG-UI interrupt terminal (RUNR-08, D-01/D-02/D-06):
+ * RUN_FINISHED with `outcome: { type: "interrupt", interrupts: [...] }` — a
+ * NORMAL completion (D-03), never an error. The bridge stays terminal-free
+ * (Pitfall 3): this helper only BUILDS the shape; the agent emits it via
+ * finishInterrupt().
+ *
+ * Payload parsing is defensive (T-03-01): a malformed engine payload yields
+ * `metadata: undefined` + the message fallback, never a crash. `metadata`
+ * carries the parsed DecisionRequestPayload — the Phase 5 decision card data
+ * (UI-03 event-contract split).
+ */
+export function buildInterruptOutcome(
+  threadId: string,
+  runId: string,
+  payload: string,
+  interruptId: string,
+): BaseEvent {
+  let parsed: DecisionRequestPayload | null = null;
+  try {
+    parsed = JSON.parse(payload) as DecisionRequestPayload;
+  } catch {
+    /* keep null — metadata optional */
+  }
+  return {
+    type: EventType.RUN_FINISHED,
+    threadId,
+    runId,
+    outcome: {
+      type: "interrupt",
+      interrupts: [
+        {
+          id: interruptId,
+          reason: "decision_request",
+          message: parsed?.context ?? "A decision is required.",
+          metadata: parsed ?? undefined,
+        },
+      ],
+    },
+  };
 }

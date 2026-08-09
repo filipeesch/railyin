@@ -8,8 +8,11 @@
  * (A3) — NEVER derived from executionId, which is still null at terminal time
  * during synchronous fake dispatch (Pitfall 3).
  *
- * RED stub: register() is unimplemented — the decision-cycle tests drive the
- * behavior. Real implementation lands in the GREEN commit.
+ * Lifecycle: register() at the interrupt terminal; updateExecutionId() once
+ * the execution resolves; clear() on resume/cancel (03-02); reset() between
+ * tests (Pattern 6). clear() removes the entry but KEEPS the per-thread seq so
+ * consecutive decision batches on one thread mint -1, -2, … (pinned by the
+ * registry-lifecycle test).
  */
 export interface PendingInterrupt {
   interruptId: string;
@@ -19,24 +22,50 @@ export interface PendingInterrupt {
   createdAt: number;
 }
 
-/** Mint `decision-${conversationId}-${seq}` (per-thread seq), store the entry
- * with executionId null, return the id. */
+const pending = new Map<string, PendingInterrupt>();
+const seqByThread = new Map<string, number>();
+
+/**
+ * Mint `decision-${conversationId}-${seq}` (per-thread seq), store the entry
+ * with executionId null, return the id. The entry payload is the raw
+ * serialized DecisionRequestPayload string — parsing stays in the bridge
+ * helper (buildInterruptOutcome).
+ */
 export function register(conversationId: number, payload: string): string {
-  throw new Error("interrupt-registry: register not implemented (RED)");
+  const threadId = String(conversationId);
+  const seq = (seqByThread.get(threadId) ?? 0) + 1;
+  seqByThread.set(threadId, seq);
+  const interruptId = `decision-${conversationId}-${seq}`;
+  pending.set(threadId, {
+    interruptId,
+    conversationId,
+    executionId: null,
+    payload,
+    createdAt: Date.now(),
+  });
+  return interruptId;
 }
 
 export function get(threadId: string): PendingInterrupt | undefined {
-  return undefined;
+  return pending.get(threadId);
 }
 
 export function hasOpen(threadId: string): boolean {
-  return false;
+  return pending.has(threadId);
 }
 
-export function clear(threadId: string): void {}
+export function clear(threadId: string): void {
+  pending.delete(threadId);
+}
 
-/** No-op when no entry exists. */
-export function updateExecutionId(threadId: string, executionId: number): void {}
+/** Attach the resolved executionId to an existing entry; no-op when none. */
+export function updateExecutionId(threadId: string, executionId: number): void {
+  const entry = pending.get(threadId);
+  if (entry) entry.executionId = executionId;
+}
 
 /** Test hook (Pattern 6) — empties ALL threads, including seq counters. */
-export function reset(): void {}
+export function reset(): void {
+  pending.clear();
+  seqByThread.clear();
+}

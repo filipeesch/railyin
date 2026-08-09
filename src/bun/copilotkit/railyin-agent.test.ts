@@ -486,7 +486,7 @@ describe("RailyinAgent", () => {
 
     const types = events.map((e) => e.type);
     expect(types[0]).toBe(EventType.RUN_STARTED);
-    expect(types[1]).toBe("TEXT_MESSAGE_START");
+    expect(types[1]).toBe(EventType.TEXT_MESSAGE_START);
     expect(types[types.length - 1]).toBe(EventType.RUN_FINISHED);
     // Exactly one terminal; the interrupt is a NORMAL completion (D-03).
     expect(types.filter((t) => t === EventType.RUN_FINISHED || t === EventType.RUN_ERROR)).toHaveLength(1);

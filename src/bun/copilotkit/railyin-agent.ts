@@ -22,12 +22,14 @@ import type { ExecutionCoordinator } from "../engine/coordinator.ts";
 import type { EngineEvent } from "../engine/types.ts";
 import { getDefaultWorkspaceKey } from "../workspace-context.ts";
 import {
+  buildInterruptOutcome,
   createTranslateState,
   translateEngineEvent,
   synthesizeMissingToolResults,
   terminalEvent,
   type TranslateState,
 } from "./event-bridge.ts";
+import * as interruptRegistry from "./interrupt-registry.ts";
 
 /** Last user text message (string content or text part) — the chat turn body. */
 function extractUserText(messages: RunAgentInput["messages"]): string | null {
@@ -116,6 +118,12 @@ export class RailyinAgent extends AbstractAgent {
     const accumulated: BaseEvent[] = [];
     let terminalEmitted = false;
     let lastEngineError: string | null = null;
+    // D-06 (Pitfall 5): the decision_request payload captured in the
+    // onEngineEvent tap — it fires immediately BEFORE onRunEnd("decision")
+    // (stream-processor.ts:494-507), so it is visible at terminal time. The
+    // registry entry carries the raw serialized payload; parsing stays in
+    // buildInterruptOutcome.
+    let capturedDecisionPayload: string | null = null;
     // WR-02: any engine event seen since run start (NOT "during the
     // synchronous dispatch tick") — real engines dispatch asynchronously, so
     // a dispatch-scoped flag is dead code for them and lets streams that end
@@ -225,6 +233,22 @@ export class RailyinAgent extends AbstractAgent {
       if (this.activeRun === run) this.activeRun = null; // IN-02: no stale pointer
     };
 
+    // D-06: the interrupt terminal (RUNR-08, D-01/D-03). Mirrors finish()
+    // exactly — closer/synthesize/complete/clear sequence — with
+    // buildInterruptOutcome as the terminal: a NORMAL completion carrying
+    // outcome.interrupts, never a RUN_ERROR.
+    const finishInterrupt = (interruptId: string): void => {
+      if (terminalEmitted) return;
+      terminalEmitted = true;
+      const closers = translateEngineEvent({ type: "done" }, state);
+      for (const ev of closers) subject.next(ev);
+      const synthesized = synthesizeMissingToolResults(state, accumulated);
+      for (const ev of synthesized.slice(accumulated.length)) subject.next(ev);
+      subject.next(buildInterruptOutcome(threadId, runId, capturedDecisionPayload ?? "", interruptId));
+      subject.complete();
+      if (this.activeRun === run) this.activeRun = null; // IN-02: no stale pointer
+    };
+
     // sessionId 0 per research A3 (ignored by ChatExecutor); model/mcpTools
     // undefined — the executor resolves conversations.model via EngineRegistry (D-10).
     void this.orchestrator
@@ -232,6 +256,10 @@ export class RailyinAgent extends AbstractAgent {
         onEngineEvent: (event: EngineEvent) => {
           anyEventSeen = true;
           if (event.type === "error") lastEngineError = event.message;
+          // D-06 (Pitfall 5): capture the decision payload BEFORE translation —
+          // it fires immediately BEFORE onRunEnd("decision") and is needed at
+          // terminal time (buildInterruptOutcome + registry.register).
+          if (event.type === "decision_request") capturedDecisionPayload = event.payload;
           const translated = translateEngineEvent(event, state);
           accumulated.push(...translated);
           for (const ev of translated) subject.next(ev);
@@ -260,6 +288,12 @@ export class RailyinAgent extends AbstractAgent {
         onRunEnd: (outcome) => {
           if (outcome === "error") {
             finish("error", { message: lastEngineError ?? "Run failed", code: "ENGINE_ERROR" });
+          } else if (outcome === "decision") {
+            // D-06: register the pending interrupt (id minted per-thread
+            // counter — Pitfall 3: NEVER decision-${executionId}, null during
+            // synchronous dispatch) and emit the interrupt terminal.
+            const id = interruptRegistry.register(conversationId, capturedDecisionPayload ?? "");
+            finishInterrupt(id);
           } else {
             finish(outcome);
           }
@@ -267,6 +301,12 @@ export class RailyinAgent extends AbstractAgent {
       })
       .then(({ executionId }) => {
         run.executionId = executionId;
+        // D-06: attach the resolved executionId to the pending interrupt entry
+        // (no-op when no decision was captured). Runs before the abortRequested
+        // handling — the executionId is known by the time the user can resume.
+        if (capturedDecisionPayload != null) {
+          interruptRegistry.updateExecutionId(threadId, executionId);
+        }
         // WR-02: the Pi pre-flight fail-fast path (chat-executor.ts) returns
         // executionId -1 with NO events and NO onRunEnd — no execution was
         // started and nothing will ever emit. Complete the stream so the

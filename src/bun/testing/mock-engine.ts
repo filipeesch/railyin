@@ -24,6 +24,7 @@ const SCRIPT_MARKERS = [
   "__SCRIPT_DANGLING_TOOL__",
   "__SCRIPT_SLOW__",
   "__SCRIPT_ERROR__",
+  "__SCRIPT_DECISION__",
 ] as const;
 
 function scriptedEvents(prompt: string): { events: EngineEvent[]; pauseMs?: number } | null {
@@ -57,6 +58,22 @@ function scriptedEvents(prompt: string): { events: EngineEvent[]; pauseMs?: numb
     return { events: [
       { type: "token", content: "about to fail" },
       { type: "error", message: "scripted failure", fatal: true },
+    ] };
+  }
+  if (prompt.includes("__SCRIPT_DECISION__")) {
+    // Phase A (original run): text then the decision request — the run must end
+    // with the interrupt outcome (RUN_FINISHED outcome.interrupt), NOT an
+    // error, and no events after it. Deliberately NO done event: the run ends
+    // at the decision (stream-processor maps decision_request →
+    // onRunEnd("decision")). Phase B (resume continuation) lands in 03-02
+    // Task 3.
+    return { events: [
+      { type: "token", content: "I need your decision." },
+      { type: "decision_request", payload: JSON.stringify({
+          context: "mock context",
+          questions: [{ question: "Choose __DECISION_OPTION__", type: "exclusive",
+                        options: [{ title: "A", description: "" }, { title: "B", description: "" }] }],
+        }) },
     ] };
   }
   return null;
