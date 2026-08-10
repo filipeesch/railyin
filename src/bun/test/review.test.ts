@@ -57,6 +57,7 @@ function makeWorktreeManager(db: Database) {
 
 function makeHandlers() {
   class NoopEngine implements ExecutionEngine {
+    readonly type = "scripted";
     async *execute(_params: ExecutionParams): AsyncIterable<EngineEvent> {
       yield { type: "done" };
     }

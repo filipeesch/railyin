@@ -33,6 +33,7 @@ interface ExecutionState {
 }
 
 export class CursorEngine implements ExecutionEngine {
+  readonly type = "cursor";
   private readonly adapter: CursorSdkAdapter;
   private readonly onTaskUpdated: OnTaskUpdated;
   private readonly dialect: SlashCommandDialect;
@@ -75,6 +76,8 @@ export class CursorEngine implements ExecutionEngine {
       qualifiedId: `cursor/${m.value}`,
       displayName: m.displayName,
       description: m.description,
+      contextWindow: m.contextWindow,
+      supportsManualCompact: true,
       settings: buildCursorSettings(m),
     }));
   }
@@ -112,6 +115,26 @@ export class CursorEngine implements ExecutionEngine {
 
   async shutdown(_options?: unknown): Promise<void> {
     await this.adapter.shutdownAll?.();
+  }
+
+  async compact(
+    taskId: number | null,
+    conversationId: number,
+    _workingDirectory: string,
+    _workspaceKey: string,
+  ): Promise<void> {
+    if (taskId == null) {
+      throw new Error("Cursor does not currently support chat-session compaction");
+    }
+    // The @cursor/sdk compacts the agent's own context autonomously; this stores
+    // Railyin's `compaction_summary` so the Railyin-side context gauge and prompt
+    // assembly reflect the compacted conversation.
+    const { compactConversation } = await import("../../conversation/context.ts");
+    const { getDb } = await import("../../db/index.ts");
+    await compactConversation(getDb(), taskId);
+    // Keep the conversation's agent warm (Cursor handles context autonomously).
+    const agentId = cursorAgentIdForConversation(taskId, conversationId);
+    await this.adapter.compact?.(agentId);
   }
 
   private async *_run(params: ExecutionParams): AsyncGenerator<EngineEvent> {
@@ -172,16 +195,13 @@ export class CursorEngine implements ExecutionEngine {
       runtime: {
         lspManager: lspManager ?? undefined,
         worktreePath: workingDirectory,
+        mcpRegistry: params.mcpRegistry ?? undefined,
+        mcpEnabledTools: params.enabledMcpTools ?? null,
       },
       workspaceKey: params.workspaceKey!,
     };
 
-    const customTools = buildCursorTools(
-      toolContext,
-      params.mcpRegistry ?? null,
-      params.enabledMcpTools ?? [],
-      onSuspend,
-    );
+    const customTools = buildCursorTools(toolContext, onSuspend);
 
     // The Cursor SDK has no system-message slot — inline the task context and
     // stage instructions as a prefix to the user prompt.
@@ -201,9 +221,11 @@ export class CursorEngine implements ExecutionEngine {
       "- Read (fallback) → `railyin_read`",
       "Use the built-in `Read` only for single, known files; otherwise use the Railyn tools.",
     ].join("\n");
-    // Resolve slash-command references (e.g. /create-or-update-pr → XML-wrapped body)
-    const resolvedPrompt = await this.dialect.resolvePrompt(prompt, workingDirectory);
-    const effectivePrompt = resolvedPrompt.content;
+    // Slash-command references (e.g. /create-or-update-pr) are resolved upstream by the
+    // executor layer's SlashCommandResolver, BEFORE historyBlock/decisionsBlock/
+    // stageInstructionsBlock are joined into `prompt` — resolving here (on the full
+    // composed string) would fail to match the dialect's leading "/command" pattern.
+    const effectivePrompt = prompt;
 
     // Resolve projectPath from DB for skill loading
     let projectPath: string | undefined;

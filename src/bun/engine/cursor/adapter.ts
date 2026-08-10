@@ -20,6 +20,13 @@ export interface CursorSdkAdapter {
   cancel(executionId: number): Promise<void>;
   listModels(workingDirectory: string): Promise<CursorSdkModelInfo[]>;
   listCommands(workingDirectory: string): Promise<Array<{ name: string; description: string }>>;
+  /**
+   * Signal compaction for the given conversation's agent. The `@cursor/sdk`
+   * manages Cursor context compaction autonomously, so this is a no-op hook
+   * (it keeps the agent warm in the pool); Railyin stores its own
+   * `compaction_summary` at the engine level.
+   */
+  compact?(agentId: string): Promise<void>;
   shutdownAll?(): Promise<void>;
 }
 
@@ -30,6 +37,8 @@ export interface CursorSdkModelInfo {
   supportsThinking?: boolean;
   variants?: unknown[];
   parameters?: unknown[];
+  /** Real context window in tokens, when derivable from the SDK metadata. */
+  contextWindow?: number;
 }
 
 export interface CursorRunConfig {

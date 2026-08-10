@@ -20,6 +20,12 @@ export interface ConversationRow {
   model_params: string | null;
 }
 
+export interface ConversationInjectionStateRow {
+  conversation_id: number;
+  injection_type: string;
+  last_injected_after_compaction_id: number | null;
+}
+
 export interface TaskRow {
   id: number;
   board_id: number;

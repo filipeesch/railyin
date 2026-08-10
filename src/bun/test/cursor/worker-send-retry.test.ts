@@ -92,44 +92,49 @@ describe("sendPromptWithRecovery", () => {
         return { send, close };
     }
 
+    /** Build a lifecycle whose `acquire` pops the next agent from `agents`. */
+    function makeLifecycle(agents: Array<{ send: ReturnType<typeof vi.fn>; close?: ReturnType<typeof vi.fn> }>) {
+        const release = vi.fn(async () => {});
+        const evict = vi.fn(async () => {});
+        const acquire = vi.fn(async () => {
+            const agent = agents.shift();
+            if (!agent) throw new Error("no agent queued");
+            return agent;
+        });
+        return { lifecycle: { acquire, release, evict }, release, evict };
+    }
+
     it("recreates the same agent id and resends when the force retry stays busy", async () => {
-        const resumeAgent = makeAgent([
+        const initialAgent = makeAgent([
             new AgentBusyError("busy"),
             new AgentBusyError("still busy"),
         ]);
         const recreatedAgent = makeAgent([{ kind: "recovered" }]);
         const log = vi.fn();
-        const Agent = {
-            resume: vi.fn(async () => resumeAgent),
-            create: vi.fn(async () => recreatedAgent),
-        };
+        const { lifecycle, release, evict } = makeLifecycle([initialAgent, recreatedAgent]);
 
         const result = await sendPromptWithRecovery(
-            Agent,
-            "agent-id-123",
-            { apiKey: "k", local: { cwd: "/tmp", customTools: {}, settingSources: ["project"] } },
+            lifecycle as Parameters<typeof sendPromptWithRecovery>[0],
             "prompt",
             { runId: "run-1", executionId: 11, taskId: 7, conversationId: 9, log },
         );
 
         expect(result.run).toEqual({ kind: "recovered" });
         expect(result.agent).toBe(recreatedAgent);
-        expect(Agent.resume).toHaveBeenCalledWith("agent-id-123", expect.any(Object));
-        expect(Agent.create).toHaveBeenCalledWith(expect.objectContaining({ agentId: "agent-id-123" }));
-        expect(resumeAgent.close).toHaveBeenCalledTimes(1);
+        expect(lifecycle.acquire).toHaveBeenCalledTimes(2);
+        // The busy initial agent is returned to the pool (released), not closed.
+        expect(release).toHaveBeenCalledTimes(1);
+        expect(release).toHaveBeenCalledWith(initialAgent);
+        expect(evict).not.toHaveBeenCalled();
         expect(recreatedAgent.close).not.toHaveBeenCalled();
         expect(log).toHaveBeenCalledWith(
             "warn",
             expect.stringContaining("cursor_busy_retry_exhausted"),
         );
-        expect(log).toHaveBeenCalledWith(
-            "warn",
-            expect.stringContaining("cursor_busy_recovery_succeeded"),
-        );
     });
 
     it("fails with a persistent-busy error when the recreated agent is still busy", async () => {
-        const resumeAgent = makeAgent([
+        const initialAgent = makeAgent([
             new AgentBusyError("busy"),
             new AgentBusyError("still busy"),
         ]);
@@ -138,50 +143,44 @@ describe("sendPromptWithRecovery", () => {
             new AgentBusyError("still busy again"),
         ]);
         const log = vi.fn();
-        const Agent = {
-            resume: vi.fn(async () => resumeAgent),
-            create: vi.fn(async () => recreatedAgent),
-        };
+        const { lifecycle, evict } = makeLifecycle([initialAgent, recreatedAgent]);
 
         await expect(sendPromptWithRecovery(
-            Agent,
-            "agent-id-123",
-            { apiKey: "k", local: { cwd: "/tmp", customTools: {}, settingSources: ["project"] } },
+            lifecycle as Parameters<typeof sendPromptWithRecovery>[0],
             "prompt",
             { runId: "run-2", executionId: 22, taskId: 8, conversationId: 10, log },
         )).rejects.toBeInstanceOf(PersistentBusyError);
 
-        expect(recreatedAgent.close).toHaveBeenCalledTimes(1);
+        // The unusable recreated agent is evicted (closed), not kept warm.
+        expect(evict).toHaveBeenCalledTimes(1);
+        expect(evict).toHaveBeenCalledWith(recreatedAgent);
         expect(log).toHaveBeenCalledWith(
             "warn",
             expect.stringContaining("cursor_busy_recovery_failed"),
         );
     });
 
-    it("recovers when resume/create path throws a plain busy-like error before send", async () => {
-        const recreatedAgent = makeAgent([{ kind: "recovered-after-resume-failure" }]);
+    it("recovers when the initial acquire path throws a busy-like error before send", async () => {
+        const recreatedAgent = makeAgent([{ kind: "recovered-after-acquire-failure" }]);
         const log = vi.fn();
-        const Agent = {
-            resume: vi.fn(async () => {
-                throw new Error("resume failed");
-            }),
-            create: vi
-                .fn()
-                .mockRejectedValueOnce(new Error("Agent 13f9e45e-019e-5dfe-a9cb-04d036157036 already has active run"))
+        const lifecycle = {
+            acquire: vi.fn().mockRejectedValueOnce(new Error("Agent 13f9e45e-019e-5dfe-a9cb-04d036157036 already has active run"))
                 .mockResolvedValueOnce(recreatedAgent),
+            release: vi.fn(async () => {}),
+            evict: vi.fn(async () => {}),
         };
 
         const result = await sendPromptWithRecovery(
-            Agent,
-            "agent-id-123",
-            { apiKey: "k", local: { cwd: "/tmp", customTools: {}, settingSources: ["project"] } },
+            lifecycle as Parameters<typeof sendPromptWithRecovery>[0],
             "prompt",
             { runId: "run-3", executionId: 33, taskId: 9, conversationId: 11, log },
         );
 
-        expect(result.run).toEqual({ kind: "recovered-after-resume-failure" });
+        expect(result.run).toEqual({ kind: "recovered-after-acquire-failure" });
         expect(result.agent).toBe(recreatedAgent);
-        expect(Agent.create).toHaveBeenCalledTimes(2);
+        expect(lifecycle.acquire).toHaveBeenCalledTimes(2);
+        expect(lifecycle.evict).not.toHaveBeenCalled();
+        expect(recreatedAgent.close).not.toHaveBeenCalled();
         expect(log).toHaveBeenCalledWith(
             "warn",
             expect.stringContaining("resume_or_create"),

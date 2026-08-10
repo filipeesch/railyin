@@ -77,18 +77,18 @@ describe("ExecutionParamsBuilder.build", () => {
     expect(params.enabledMcpTools).toEqual(["tool-a", "tool-b"]);
   });
 
-  it("sets enabledMcpTools to [] when enabled_mcp_tools is null", () => {
+  it("sets enabledMcpTools to null when enabled_mcp_tools is null (unfiltered/all visible by default)", () => {
     const task = makeTask({ enabled_mcp_tools: null });
     const params = builder.build(task, 1, 1, "prompt", undefined, "/w", new AbortController().signal, noop);
 
-    expect(params.enabledMcpTools).toEqual([]);
+    expect(params.enabledMcpTools).toBeNull();
   });
 
-  it("sets enabledMcpTools to [] when enabled_mcp_tools is invalid JSON", () => {
+  it("sets enabledMcpTools to null when enabled_mcp_tools is invalid JSON", () => {
     const task = makeTask({ enabled_mcp_tools: "not-json" });
     const params = builder.build(task, 1, 1, "prompt", undefined, "/w", new AbortController().signal, noop);
 
-    expect(params.enabledMcpTools).toEqual([]);
+    expect(params.enabledMcpTools).toBeNull();
   });
 
   // EPB-PRESET-2: build() does not set samplingPresetName (it is injected externally by TransitionExecutor)
@@ -138,6 +138,16 @@ describe("ExecutionParamsBuilder.buildForChat", () => {
     );
 
     expect(params.enabledMcpTools).toEqual(tools);
+  });
+
+  it("passes null enabled_mcp_tools through as null (unfiltered/all visible by default)", () => {
+    const params = builder.buildForChat(
+      5, 42, "hello", "/workspace", "fake/model",
+      "default",
+      new AbortController().signal, noop, null,
+    );
+
+    expect(params.enabledMcpTools).toBeNull();
   });
 
   it("passes the AbortSignal through", () => {

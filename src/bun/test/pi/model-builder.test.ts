@@ -107,4 +107,90 @@ describe("PiModelBuilder", () => {
     console.warn = originalWarn;
     expect(warnings).toHaveLength(0);
   });
+
+  test("MB-8: reasoning false from config maps to model.reasoning", () => {
+    const config: PiEngineConfig = {
+      type: "pi",
+      providers: { deepseek: { base_url: "https://openrouter.ai/api/v1" } },
+      models: { "deepseek/deepseek-chat": { reasoning: false } },
+    };
+    const builder = new PiModelBuilder(config);
+    const model = builder.build("pi/deepseek/deepseek-chat", 128_000);
+    expect(model.reasoning).toBe(false);
+  });
+
+  test("MB-9: reasoning defaults to true when config omits it", () => {
+    const config: PiEngineConfig = {
+      type: "pi",
+      providers: { deepseek: { base_url: "https://openrouter.ai/api/v1" } },
+      models: { "deepseek/deepseek-chat": {} },
+    };
+    const builder = new PiModelBuilder(config);
+    const model = builder.build("pi/deepseek/deepseek-chat", 128_000);
+    expect(model.reasoning).toBe(true);
+  });
+
+  test("MB-10: thinkingFormat deepseek maps to compat.thinkingFormat + requiresReasoningContentOnAssistantMessages", () => {
+    const config: PiEngineConfig = {
+      type: "pi",
+      providers: { deepseek: { base_url: "https://openrouter.ai/api/v1" } },
+      models: { "deepseek/deepseek-chat": { thinkingFormat: "deepseek" } },
+    };
+    const builder = new PiModelBuilder(config);
+    const model = builder.build("pi/deepseek/deepseek-chat", 128_000) as unknown as {
+      compat?: Record<string, unknown>;
+    };
+    expect(model.compat?.thinkingFormat).toBe("deepseek");
+    expect(model.compat?.requiresReasoningContentOnAssistantMessages).toBe(true);
+  });
+
+  test("MB-11: thinkingFormat omitted leaves compat unset (SDK auto-detects)", () => {
+    const config: PiEngineConfig = {
+      type: "pi",
+      providers: { openrouter: { base_url: "https://openrouter.ai/api/v1" } },
+      models: { "openrouter/deepseek-chat": {} },
+    };
+    const builder = new PiModelBuilder(config);
+    const model = builder.build("pi/openrouter/deepseek-chat", 128_000) as unknown as {
+      compat?: Record<string, unknown>;
+    };
+    expect(model.compat?.thinkingFormat).toBeUndefined();
+  });
+
+  test("MB-14: openrouter + deepseek model sets requiresReasoningContentOnAssistantMessages", () => {
+    const config: PiEngineConfig = {
+      type: "pi",
+      providers: { openrouter: { base_url: "https://openrouter.ai/api/v1" } },
+      models: {
+        "deepseek/deepseek-v4-flash": {
+          thinkingFormat: "openrouter",
+        },
+      },
+    };
+    const builder = new PiModelBuilder(config);
+    const model = builder.build("pi/openrouter/deepseek/deepseek-v4-flash", 128_000) as unknown as {
+      compat?: { thinkingFormat?: string; requiresReasoningContentOnAssistantMessages?: boolean };
+    };
+    expect(model.compat?.thinkingFormat).toBe("openrouter");
+    expect(model.compat?.requiresReasoningContentOnAssistantMessages).toBe(true);
+  });
+
+  test("MB-15: openrouter + non-deepseek model does NOT set requiresReasoningContentOnAssistantMessages", () => {
+    const config: PiEngineConfig = {
+      type: "pi",
+      providers: { openrouter: { base_url: "https://openrouter.ai/api/v1" } },
+      models: {
+        "z-ai/glm-5": {
+          thinkingFormat: "openrouter",
+        },
+      },
+    };
+    const builder = new PiModelBuilder(config);
+    const model = builder.build("pi/openrouter/z-ai/glm-5", 128_000) as unknown as {
+      compat?: { thinkingFormat?: string; requiresReasoningContentOnAssistantMessages?: boolean };
+    };
+    expect(model.compat?.thinkingFormat).toBe("openrouter");
+    expect(model.compat?.requiresReasoningContentOnAssistantMessages).toBeUndefined();
+  });
+
 });

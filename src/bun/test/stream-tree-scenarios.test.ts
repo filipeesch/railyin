@@ -227,23 +227,23 @@ describe("S-17 [stream-tree]: cancel mid-text flushes assistant block into tree"
 // Stream:  reasoning("pre") → tool_start("c1") → reasoning("in-tool") →
 //          tool_result("c1") → token("Done") → done
 //
-// parentBlockId propagation (reasoningBlockId + callStack):
+// parentBlockId propagation (callStack):
 //   reasoning "pre"     → parentBlockId=null  (callStack=[])
-//   --- tool_start flushes reasoning as "pre-r1" with deterministic blockId ---
-//   tool_call "c1"      → parentBlockId=null  (parentCallId is null, no longer inherits reasoningBlockId)
+//   --- tool_start flushes reasoning as "r1" via the StreamEventEnricher blockId ---
+//   tool_call "c1"      → parentBlockId=null  (parentCallId is null)
 //   reasoning "in-tool" → parentBlockId="c1"  (callStack=["c1"])
-//   tool_result "c1"    → parentBlockId=null  (parentCallId is null, no longer inherits reasoningBlockId)
-//   assistant           → parentBlockId=null  (reasoningBlockId cleared by token)
+//   tool_result "c1"    → parentBlockId=null  (parentCallId is null)
+//   assistant           → parentBlockId=null
 //
-// DB:   [reasoning pre-r1 pBid=null, tool_call c1 pBid=null,
+// DB:   [reasoning r1 pBid=null, tool_call c1 pBid=null,
 //        reasoning r2 pBid="c1", tool_result c1 pBid=null, assistant t1]
-// Tree: roots=[pre-r1, c1, t1]
-//       pre-r1.children=[]
+// Tree: roots=[r1, c1, t1]
+//       r1.children=[]
 //       c1.children=["r2"]
 // ---------------------------------------------------------------------------
 
 describe("S-18 [stream-tree]: tool call appears as sibling of reasoning bubble, not nested inside it", () => {
-    it("roots=[pre-r1, c1, t1]; pre-r1.children=[]; c1.children=[r2]", async () => {
+    it("roots=[r1, c1, t1]; r1.children=[]; c1.children=[r2]", async () => {
         const engine = new ScriptedEngine();
         engine.queueTurn([
             scriptReasoning("pre-tool thinking"),
@@ -262,7 +262,7 @@ describe("S-18 [stream-tree]: tool call appears as sibling of reasoning bubble, 
         const db = runtime.getDbStreamEvents(executionId);
         const tree = buildStreamTree(db);
 
-        const preR1 = `${executionId}-pre-r1`;
+        const preR1 = `${executionId}-r1`;
         const r2 = `${executionId}-r2`;
         const t1 = `${executionId}-t1`;
 

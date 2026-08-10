@@ -1,0 +1,196 @@
+import { describe, test, expect } from "bun:test";
+import {
+  resolvePiModelConfig,
+  nativeModelIdFor,
+  derivePiModelSettings,
+  derivePiModelAxes,
+} from "../../engine/pi/model-config.ts";
+import type { PiEngineConfig, PiModelConfig } from "../../config/index.ts";
+
+function makeConfig(models: Record<string, PiModelConfig> = {}): PiEngineConfig {
+  return { type: "pi", models };
+}
+
+describe("resolvePiModelConfig", () => {
+  test("MC-RES-1: provider/model key resolves directly", () => {
+    const cfg = makeConfig({ "lmstudio/qwen3-8b": { name: "Qwen 8B" } });
+    expect(resolvePiModelConfig(cfg, "lmstudio/qwen3-8b")?.name).toBe("Qwen 8B");
+  });
+
+  test("MC-RES-2: bare model id key resolves directly", () => {
+    const cfg = makeConfig({ "qwen3-8b": { name: "Qwen 8B" } });
+    expect(resolvePiModelConfig(cfg, "qwen3-8b")?.name).toBe("Qwen 8B");
+  });
+
+  test("MC-RES-3: provider/model falls back to bare id when no qualified key", () => {
+    const cfg = makeConfig({ "qwen3-8b": { name: "Bare key" } });
+    expect(resolvePiModelConfig(cfg, "lmstudio/qwen3-8b")?.name).toBe("Bare key");
+  });
+
+  test("MC-RES-4: qualified key wins over bare id", () => {
+    const cfg = makeConfig({
+      "qwen3-8b": { name: "bare" },
+      "lmstudio/qwen3-8b": { name: "qualified" },
+    });
+    expect(resolvePiModelConfig(cfg, "lmstudio/qwen3-8b")?.name).toBe("qualified");
+  });
+
+  test("MC-RES-5: undefined model id returns undefined", () => {
+    const cfg = makeConfig({ "qwen3-8b": { name: "Qwen" } });
+    expect(resolvePiModelConfig(cfg, undefined)).toBeUndefined();
+  });
+
+  test("MC-RES-6: missing model returns undefined", () => {
+    const cfg = makeConfig({});
+    expect(resolvePiModelConfig(cfg, "lmstudio/nope")).toBeUndefined();
+  });
+
+  test("MC-RES-7: 3-part provider-bearing id resolves engine-keyed model after native strip", () => {
+    const cfg = makeConfig({ "deepseek-v4-flash": { name: "DeepSeek V4 Flash", reasoning: true, thinkingFormat: "deepseek" } });
+    // full qualified id (engineId/providerId/modelId)
+    const nativeId = nativeModelIdFor("pi-local/vllm/deepseek-v4-flash");
+    expect(nativeId).toBe("vllm/deepseek-v4-flash");
+    const m = resolvePiModelConfig(cfg, nativeId);
+    expect(m?.name).toBe("DeepSeek V4 Flash");
+    expect(m?.thinkingFormat).toBe("deepseek");
+  });
+
+  test("MC-RES-8: 4-part provider-bearing id resolves family-prefixed model after native strip", () => {
+    const cfg = makeConfig({ "deepseek/deepseek-v4-flash-0731": { name: "DeepSeek V4 Flash" } });
+    const nativeId = nativeModelIdFor("pi-openrouter/openrouter/deepseek/deepseek-v4-flash-0731");
+    expect(nativeId).toBe("openrouter/deepseek/deepseek-v4-flash-0731");
+    const m = resolvePiModelConfig(cfg, nativeId);
+    expect(m?.name).toBe("DeepSeek V4 Flash");
+  });
+
+  test("MC-RES-9: 2-part qualified id native id has no provider segment", () => {
+    expect(nativeModelIdFor("pi-lmstudio/qwen3-8b")).toBe("qwen3-8b");
+  });
+});
+
+describe("nativeModelIdFor", () => {
+  test("MC-NMID-1: strips engine from 2-part id", () => {
+    expect(nativeModelIdFor("copilot/gpt-4.1")).toBe("gpt-4.1");
+  });
+
+  test("MC-NMID-2: strips engine, keeps provider from 3-part id", () => {
+    expect(nativeModelIdFor("pi-local/vllm/deepseek-v4-flash")).toBe("vllm/deepseek-v4-flash");
+  });
+
+  test("MC-NMID-3: strips engine, keeps provider+model from 4-part id", () => {
+    expect(nativeModelIdFor("pi-openrouter/openrouter/deepseek/deepseek-v4-flash-0731")).toBe(
+      "openrouter/deepseek/deepseek-v4-flash-0731",
+    );
+  });
+
+  test("MC-NMID-4: unparseable/single-segment string falls back to itself", () => {
+    expect(nativeModelIdFor("qwen3-8b")).toBe("qwen3-8b");
+    expect(nativeModelIdFor("default")).toBe("default");
+  });
+
+  test("MC-NMID-5: undefined falls back to empty string, no throw", () => {
+    expect(nativeModelIdFor(undefined)).toBe("");
+  });
+});
+
+describe("derivePiModelSettings", () => {
+  test("MC-SET-1: model limit context wins over override and engine default", () => {
+    const cfg = makeConfig({ "lmstudio/qwen3-8b": { limit: { context: 64_000 } } });
+    const m = resolvePiModelConfig(cfg, "lmstudio/qwen3-8b");
+    const s = derivePiModelSettings(cfg, m, 32_000);
+    expect(s.contextWindow).toBe(64_000);
+  });
+
+  test("MC-SET-2: override wins over engine context_window", () => {
+    const cfg: PiEngineConfig = { type: "pi", context_window: 128_000 };
+    const s = derivePiModelSettings(cfg, undefined, 8_000);
+    expect(s.contextWindow).toBe(8_000);
+  });
+
+  test("MC-SET-3: engine context_window used when no model limit or override", () => {
+    const cfg: PiEngineConfig = { type: "pi", context_window: 96_000 };
+    const s = derivePiModelSettings(cfg, undefined, undefined);
+    expect(s.contextWindow).toBe(96_000);
+  });
+
+  test("MC-SET-4: output limit mapped to maxTokens", () => {
+    const cfg = makeConfig({ "lmstudio/qwen3-8b": { limit: { output: 4096 } } });
+    const m = resolvePiModelConfig(cfg, "lmstudio/qwen3-8b");
+    const s = derivePiModelSettings(cfg, m);
+    expect(s.maxTokens).toBe(4096);
+  });
+
+  test("MC-SET-5: reasoning defaults to true when omitted", () => {
+    const cfg = makeConfig({ "lmstudio/qwen3-8b": {} });
+    const m = resolvePiModelConfig(cfg, "lmstudio/qwen3-8b");
+    expect(derivePiModelSettings(cfg, m).reasoning).toBe(true);
+  });
+
+  test("MC-SET-6: reasoning false is honored", () => {
+    const cfg = makeConfig({ "lmstudio/qwen3-8b": { reasoning: false } });
+    const m = resolvePiModelConfig(cfg, "lmstudio/qwen3-8b");
+    expect(derivePiModelSettings(cfg, m).reasoning).toBe(false);
+  });
+});
+
+describe("derivePiModelAxes", () => {
+  test("MC-AX-1: variants produce a Mode axis with disabled variants hidden", () => {
+    const cfg = makeConfig({
+      "lmstudio/qwen3-8b": {
+        variants: {
+          none: {},
+          normal: {},
+          max: {},
+          low: { disabled: true },
+          medium: { disabled: true },
+          high: { disabled: true },
+        },
+      },
+    });
+    const m = resolvePiModelConfig(cfg, "lmstudio/qwen3-8b");
+    const axes = derivePiModelAxes(m);
+    const modeAxis = axes.find((a) => a.id === "mode");
+    expect(modeAxis).toBeDefined();
+    const optionValues = modeAxis!.options!.map((o) => o.value);
+    expect(optionValues).toEqual(["none", "normal", "max"]);
+  });
+
+  test("MC-AX-2: sampling presets produce a Sampling axis", () => {
+    const cfg = makeConfig({
+      "lmstudio/qwen3-8b": {
+        sampling_presets: {
+          balanced: { temperature: 0.8 },
+          precise: { temperature: 0.2 },
+        },
+      },
+    });
+    const m = resolvePiModelConfig(cfg, "lmstudio/qwen3-8b");
+    const axes = derivePiModelAxes(m);
+    const samplingAxis = axes.find((a) => a.id === "sampling");
+    expect(samplingAxis).toBeDefined();
+    const optionValues = samplingAxis!.options!.map((o) => o.value);
+    expect(optionValues).toEqual(["balanced", "precise"]);
+  });
+
+  test("MC-AX-3: explicit axes override auto-derived ones with the same id", () => {
+    const cfg = makeConfig({
+      "lmstudio/qwen3-8b": {
+        variants: { none: {}, normal: {} },
+        axes: [{ id: "mode", label: "Reasoning", options: [{ value: "high", label: "High" }] }],
+      },
+    });
+    const m = resolvePiModelConfig(cfg, "lmstudio/qwen3-8b");
+    const axes = derivePiModelAxes(m);
+    const modeAxis = axes.find((a) => a.id === "mode");
+    expect(modeAxis!.label).toBe("Reasoning");
+    expect(modeAxis!.options!.map((o) => o.value)).toEqual(["high"]);
+  });
+
+  test("MC-AX-4: no variants or presets → no auto axes", () => {
+    const cfg = makeConfig({ "lmstudio/qwen3-8b": {} });
+    const m = resolvePiModelConfig(cfg, "lmstudio/qwen3-8b");
+    expect(derivePiModelAxes(m)).toEqual([]);
+  });
+});
+
+

@@ -5,6 +5,9 @@ import { CopilotEngine } from "../engine/copilot/engine.ts";
 import { copilotSessionIdForConversation } from "../engine/copilot/session.ts";
 import type { BackendRpcRuntime } from "./support/backend-rpc-runtime.ts";
 import { createBackendRpcRuntime } from "./support/backend-rpc-runtime.ts";
+import { McpRegistryPool } from "../mcp/registry-pool.ts";
+import { McpClientRegistry } from "../mcp/registry.ts";
+import { FakeMcpClient } from "./support/fake-mcp-client.ts";
 import {
     MockCopilotSdkAdapter,
     MockCopilotSession,
@@ -25,6 +28,7 @@ import {
     runAskUserResumeScenario,
     runCancellationScenario,
     runFatalFailureScenario,
+    runMcpDiscoveryScenario,
     runModelListingScenario,
     runMultiTurnChatScenario,
     runSingleTurnChatScenario,
@@ -34,7 +38,7 @@ import {
 
 const runtimes: BackendRpcRuntime[] = [];
 
-function createCopilotRuntime(adapter: MockCopilotSdkAdapter): BackendRpcRuntime {
+function createCopilotRuntime(adapter: MockCopilotSdkAdapter, registryPool?: McpRegistryPool): BackendRpcRuntime {
     adapter.setModels([
         {
             id: "mock-model",
@@ -50,6 +54,7 @@ function createCopilotRuntime(adapter: MockCopilotSdkAdapter): BackendRpcRuntime
         taskModel: "copilot/mock-model",
         createEngine: ({ onTaskUpdated, onNewMessage }) =>
             new CopilotEngine(onTaskUpdated, onNewMessage, adapter),
+        registryPool,
     });
     runtimes.push(runtime);
     return runtime;
@@ -234,7 +239,11 @@ describe("Copilot backend RPC scenarios", () => {
         });
         await runtime.recorder.waitForStreamDone(result.executionId);
 
-        expect(session.prompts).toEqual(['<command name="opsx-propose" args="add-dark-mode">\nResolved body: add-dark-mode\n</command>']);
+        // Task starts in 'plan' workflow_state (stage_instructions: "You are a planning assistant."),
+        // prepended to userContent on the first human turn (never-injected-yet policy).
+        expect(session.prompts).toEqual([
+          '<active_directive>\nYou are a planning assistant.\n\nThis directive is currently in force. Follow it in every response until it is replaced by a new active_directive or the user explicitly asks you to override it.\n</active_directive>\n\n<command name="opsx-propose" args="add-dark-mode">\nResolved body: add-dark-mode\n</command>',
+        ]);
         const persisted = runtime.db
             .query<{ content: string; role: string | null; metadata: string | null }, [number]>(
                 "SELECT content, role, metadata FROM conversation_messages WHERE task_id = ? AND type = 'user' ORDER BY id DESC LIMIT 1",
@@ -301,7 +310,11 @@ describe("Copilot backend RPC scenarios", () => {
         });
         await runtime.recorder.waitForStreamDone(result.executionId);
 
-        expect(session.prompts).toEqual([".gitignore explain this"]);
+        // Task starts in 'plan' workflow_state (stage_instructions: "You are a planning assistant."),
+        // prepended to userContent on the first human turn (never-injected-yet policy).
+        expect(session.prompts).toEqual([
+          "<active_directive>\nYou are a planning assistant.\n\nThis directive is currently in force. Follow it in every response until it is replaced by a new active_directive or the user explicitly asks you to override it.\n</active_directive>\n\n.gitignore explain this",
+        ]);
         expect(session.sentMessages[0]?.attachments).toEqual([{
             type: "selection",
             filePath,
@@ -581,8 +594,41 @@ describe("Copilot backend RPC scenarios", () => {
     });
 });
 
+describe("Copilot — MCP discovery tools (dynamic-mcp-discovery)", () => {
+    it("covers list_mcp_servers → list_mcp_tools → invoke_mcp_tool via the shared scenario", async () => {
+        const registry = new McpClientRegistry(
+            { servers: [{ name: "alpha", transport: { type: "stdio", command: "alpha-cmd" } }] },
+            {
+                clientFactory: () =>
+                    new FakeMcpClient({
+                        tools: [{ name: "echo", description: "echoes input", inputSchema: { type: "object" } }],
+                        callToolResult: "echoed!",
+                    }),
+            },
+        );
+        await registry.startAll();
+        const registryPool = new McpRegistryPool(() => registry);
+
+        const adapter = new MockCopilotSdkAdapter();
+        adapter
+            .queueResumeFailure(new Error("missing session"))
+            .queueCreateSuccess(new MockCopilotSession().queueTurn({
+                steps: [
+                    toolCall("list_mcp_servers", {}),
+                    toolCall("list_mcp_tools", { server: "alpha" }),
+                    toolCall("invoke_mcp_tool", { server: "alpha", tool: "echo", arguments: {} }),
+                    token("done"),
+                    done(),
+                ],
+            }));
+        const runtime = createCopilotRuntime(adapter, registryPool);
+
+        await runMcpDiscoveryScenario(runtime);
+    });
+});
+
 describe("Copilot engine — systemInstructions propagation", () => {
-    it("passes systemInstructions to session config as systemMessage", async () => {
+    it("passes systemInstructions to session config as systemMessage, stage_instructions goes to prompt content", async () => {
         const adapter = new MockCopilotSdkAdapter();
         adapter.setModels([
             {
@@ -591,20 +637,25 @@ describe("Copilot engine — systemInstructions propagation", () => {
                 capabilities: { limits: { max_context_window_tokens: 64000 }, supports: { reasoningEffort: true } },
             },
         ]);
+        const session = new MockCopilotSession().queueTurn({ steps: [token("Done."), done()] });
         adapter
             .queueResumeFailure(new Error("missing session"))
-            .queueCreateSuccess(new MockCopilotSession().queueTurn({ steps: [token("Done."), done()] }));
+            .queueCreateSuccess(session);
 
         const runtime = createCopilotRuntime(adapter);
         const { taskId } = await runtime.createTask();
 
         // The task is in 'plan' state which has stage_instructions "You are a planning assistant."
+        // Per the cache-invalidation fix, stage_instructions is no longer part of systemMessage —
+        // it is prepended to the userContent/prompt instead, so systemMessage stays stable across
+        // column transitions (only workflow_instructions, if any, may appear there).
         const result = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "Hello" });
         await runtime.waitForExecutionStatus(result.executionId, "completed");
 
         const call = adapter.trace.createCalls[0];
         expect(call).toBeDefined();
-        expect(call.config.systemMessage?.content).toContain("You are a planning assistant.");
+        expect(call.config.systemMessage?.content ?? "").not.toContain("You are a planning assistant.");
+        expect(session.prompts[0]).toContain("You are a planning assistant.");
     });
 
     it("omits systemMessage when systemInstructions is undefined", async () => {

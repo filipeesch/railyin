@@ -70,6 +70,7 @@ const MEDIA_TYPE_EXT: Record<string, string> = {
 };
 
 export class CopilotEngine implements ExecutionEngine {
+  readonly type = "copilot";
   private readonly sdkAdapter: CopilotSdkAdapter;
   private readonly _onTaskUpdated: OnTaskUpdated;
   private readonly dialect: CopilotDialect;
@@ -173,11 +174,13 @@ export class CopilotEngine implements ExecutionEngine {
       runtime: {
         lspManager: lspManager ?? undefined,
         worktreePath: workingDirectory,
+        mcpRegistry: params.mcpRegistry ?? undefined,
+        mcpEnabledTools: params.enabledMcpTools ?? null,
       },
       workspaceKey: params.workspaceKey!,
     };
 
-    const tools = buildCopilotTools(toolContext, params.mcpRegistry ?? null, params.enabledMcpTools ?? [], onSuspend);
+    const tools = buildCopilotTools(toolContext, onSuspend);
 
     // Build system message — prepend task identity then append stage_instructions
     const taskBlock = taskContext
@@ -297,16 +300,11 @@ export class CopilotEngine implements ExecutionEngine {
         return;
       }
 
-      let resolvedInitialPrompt: string;
-      try {
-        const resolved = await this.dialect.resolvePrompt(prompt, workingDirectory ?? "");
-        resolvedInitialPrompt = resolved.content;
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        yield { type: "error", message: msg, fatal: true };
-        return;
-      }
-      let nextPrompt: string | null = resolvedInitialPrompt;
+      // Slash-command references are resolved upstream by the executor layer's
+      // SlashCommandResolver, BEFORE historyBlock/decisionsBlock/stageInstructionsBlock
+      // are joined into `prompt` — resolving here (on the full composed string) would
+      // fail to match the dialect's leading "/command" pattern.
+      let nextPrompt: string | null = prompt;
 
       while (nextPrompt != null) {
         // Fire the prompt; pass the promise into translateCopilotStream so a rejection

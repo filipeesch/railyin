@@ -11,8 +11,10 @@ const HIDDEN_INSTRUCTION =
   "2. If a record exists → call update_decision(id, newAnswer, \"user re-answered via decision_request\") to update it.\n" +
   "3. If no record exists → call record_decision(question, answer, weight, notes?) to create one.\n" +
   "NEVER call record_decision when a record already exists — this creates duplicate records.";
+const NO_RECORD_INSTRUCTION =
+  "\n\nIMPORTANT: These are questions, not decisions. Do NOT call record_decision or update_decision for any of them.";
 
-export function buildDecisionSubmission(answers: DecisionAnswer[], generalNotes?: string): DecisionSubmission {
+export function buildDecisionSubmission(answers: DecisionAnswer[], generalNotes?: string, recordAsDecisions = true): DecisionSubmission {
   const lines: string[] = [];
 
   for (const a of answers) {
@@ -32,7 +34,8 @@ export function buildDecisionSubmission(answers: DecisionAnswer[], generalNotes?
   }
 
   const userContent = lines.join("\n").trimEnd();
-  const engineContent = userContent + HIDDEN_INSTRUCTION;
+  const hiddenInstruction = recordAsDecisions ? HIDDEN_INSTRUCTION : NO_RECORD_INSTRUCTION;
+  const engineContent = userContent + hiddenInstruction;
 
   return { userContent, engineContent };
 }

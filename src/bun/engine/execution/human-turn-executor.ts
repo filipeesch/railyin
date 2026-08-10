@@ -18,9 +18,10 @@ import { resolveModel } from "./model-resolver";
 import { QualifiedModelId } from "../qualified-model-id";
 import { CrossEngineContextInjector } from "../../conversation/cross-engine-context.ts";
 import { DecisionContextInjector } from "../../conversation/decision-context-injector.ts";
-import { SystemPromptAssembler } from "./system-prompt-assembler.ts";
-import { CustomPromptInjector, type PromptFilterContext } from "./custom-prompt-injector.ts";
+import { PromptAssemblyService } from "./prompt-assembly-service.ts";
+import type { PromptFilterContext } from "./custom-prompt-injector.ts";
 import type { ExecutionParamsEnricher } from "./execution-params-enricher.ts";
+import { SlashCommandResolver } from "./slash-command-resolver.ts";
 
 
 export class HumanTurnExecutor {
@@ -36,7 +37,8 @@ export class HumanTurnExecutor {
     private readonly boardTools: IBoardToolExecutor,
     private readonly crossEngineInjector: CrossEngineContextInjector,
     private readonly decisionInjector: DecisionContextInjector,
-    private readonly customPromptInjector: CustomPromptInjector,
+    private readonly promptAssemblyService: PromptAssemblyService,
+    private readonly slashCommandResolver: SlashCommandResolver,
     private readonly onTransitionCallback?: (taskId: number, toState: string) => void,
     private readonly onHumanTurnCallback?: (taskId: number, message: string) => void,
     private readonly paramsEnricher?: ExecutionParamsEnricher,
@@ -112,21 +114,35 @@ export class HumanTurnExecutor {
         const fallbackWorkingDirectory = this.workdirResolver.resolve(taskForFallback);
         const fallbackTargetEngineId =
           QualifiedModelId.tryParse(effectiveModel)?.engineId ?? config.engines[0]?.id ?? "copilot";
-        const fallbackAssembler = SystemPromptAssembler.fromConfig(config, task.board_id, task.workflow_state);
         const fallbackPromptFilter: PromptFilterContext = {
           modelId: effectiveModel ?? "",
           engineId: fallbackTargetEngineId,
           executionType: "task",
           projectPath: fallbackWorkingDirectory,
         };
-        fallbackAssembler.addCustomPrompts(this.customPromptInjector, fallbackPromptFilter);
-        const fallbackSystemInstructions = fallbackAssembler.assemble();
+        const { systemInstructions: fallbackSystemInstructions, stageInstructionsBlock: fallbackStageInstructionsBlock } =
+          this.promptAssemblyService.assemble({
+            config,
+            boardId: task.board_id,
+            columnId: task.workflow_state,
+            conversationId,
+            promptFilter: fallbackPromptFilter,
+            isTransition: false,
+          });
+        const fallbackResolvedTail = await this.slashCommandResolver.resolve(
+          config,
+          fallbackTargetEngineId,
+          engineContent ?? content,
+          fallbackWorkingDirectory,
+          config.projects.find((p) => p.key === taskForFallback.project_key)?.projectPath,
+        );
+        const fallbackUserContent = [fallbackStageInstructionsBlock, fallbackResolvedTail].filter(Boolean).join("\n\n");
         const fallbackBase = {
           ...this.paramsBuilder.build(
             taskForFallback,
             conversationId,
             newExecutionId,
-            engineContent ?? content,
+            fallbackUserContent,
             fallbackSystemInstructions,
             fallbackWorkingDirectory,
             signal,
@@ -192,22 +208,39 @@ export class HumanTurnExecutor {
       targetModelInfo,
       workingDirectory,
       workspaceKey,
+      engine.type,
       msgId,
     );
     const { decisionsBlock } = this.decisionInjector.prepare(conversationId);
 
-    // Build system instructions with custom prompt injection
-    const assembler = SystemPromptAssembler.fromConfig(config, task.board_id, task.workflow_state);
+    // Build system instructions + stageInstructionsBlock via the shared collaborator
     const promptFilter: PromptFilterContext = {
       modelId: resolvedModel ?? "",
       engineId: targetEngineId,
       executionType: "task",
       projectPath: workingDirectory,
     };
-    assembler.addCustomPrompts(this.customPromptInjector, promptFilter);
-    const systemInstructions = assembler.assemble();
-    
-    const userContent = [historyBlock, decisionsBlock, resolvedPrompt].filter(Boolean).join("\n\n");
+    const { systemInstructions, stageInstructionsBlock } = this.promptAssemblyService.assemble({
+      config,
+      boardId: task.board_id,
+      columnId: task.workflow_state,
+      conversationId,
+      promptFilter,
+      isTransition: false,
+    });
+
+    // Resolve slash-command references in the raw tail BEFORE joining with
+    // historyBlock/decisionsBlock/stageInstructionsBlock — SlashCommandDialect only
+    // matches a leading "/command" anchored at the start of the string.
+    const resolvedTail = await this.slashCommandResolver.resolve(
+      config,
+      targetEngineId,
+      resolvedPrompt,
+      workingDirectory,
+      config.projects.find((p) => p.key === taskForExecution.project_key)?.projectPath,
+    );
+
+    const userContent = [historyBlock, decisionsBlock, stageInstructionsBlock, resolvedTail].filter(Boolean).join("\n\n");
 
     const baseParams = {
       ...this.paramsBuilder.build(

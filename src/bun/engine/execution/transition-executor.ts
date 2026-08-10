@@ -16,9 +16,10 @@ import type { IWorkspaceRepository } from "../../db/workspace-repository";
 import { QualifiedModelId } from "../qualified-model-id";
 import { CrossEngineContextInjector } from "../../conversation/cross-engine-context.ts";
 import { DecisionContextInjector } from "../../conversation/decision-context-injector.ts";
-import { SystemPromptAssembler } from "./system-prompt-assembler.ts";
-import { CustomPromptInjector, type PromptFilterContext } from "./custom-prompt-injector.ts";
+import { PromptAssemblyService } from "./prompt-assembly-service.ts";
+import type { PromptFilterContext } from "./custom-prompt-injector.ts";
 import type { ExecutionParamsEnricher } from "./execution-params-enricher.ts";
+import { SlashCommandResolver } from "./slash-command-resolver.ts";
 
 
 export class TransitionExecutor {
@@ -32,7 +33,8 @@ export class TransitionExecutor {
     private readonly wsRepo: IWorkspaceRepository,
     private readonly crossEngineInjector: CrossEngineContextInjector,
     private readonly decisionInjector: DecisionContextInjector,
-    private readonly customPromptInjector: CustomPromptInjector,
+    private readonly promptAssemblyService: PromptAssemblyService,
+    private readonly slashCommandResolver: SlashCommandResolver,
     private readonly onTransitionCallback?: (taskId: number, toState: string) => void,
     private readonly onHumanTurnCallback?: (taskId: number, message: string) => void,
     private readonly paramsEnricher?: ExecutionParamsEnricher,
@@ -115,21 +117,33 @@ export class TransitionExecutor {
       targetModelInfo,
       workingDirectory,
       workspaceKey,
+      engine.type,
     );
     const { decisionsBlock } = this.decisionInjector.prepare(conversationId);
-    
-    // Build system instructions with custom prompt injection
-    const assembler = SystemPromptAssembler.fromConfig(config, task.board_id, toState);
+
+    // Build system instructions + stageInstructionsBlock via the shared collaborator
     const promptFilter: PromptFilterContext = {
       modelId: effectiveModel ?? "",
       engineId: targetEngineId,
       executionType: "task",
       projectPath: workingDirectory,
     };
-    assembler.addCustomPrompts(this.customPromptInjector, promptFilter);
-    const systemInstructions = assembler.assemble();
-    
-    const userContent = [historyBlock, decisionsBlock, resolvedPrompt].filter(Boolean).join("\n\n");
+    const { systemInstructions, stageInstructionsBlock } = this.promptAssemblyService.assemble({
+      config,
+      boardId: task.board_id,
+      columnId: toState,
+      conversationId,
+      promptFilter,
+      isTransition: true,
+    });
+
+    // Resolve slash-command references in the raw on_enter_prompt tail BEFORE joining
+    // with historyBlock/decisionsBlock/stageInstructionsBlock — SlashCommandDialect only
+    // matches a leading "/command" anchored at the start of the string.
+    const projectPath = config.projects.find((p) => p.key === task.project_key)?.projectPath;
+    const resolvedTail = await this.slashCommandResolver.resolve(config, targetEngineId, resolvedPrompt, workingDirectory, projectPath);
+
+    const userContent = [historyBlock, decisionsBlock, stageInstructionsBlock, resolvedTail].filter(Boolean).join("\n\n");
 
     const baseParams = {
       ...this.paramsBuilder.build(

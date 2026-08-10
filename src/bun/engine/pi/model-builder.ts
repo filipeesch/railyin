@@ -7,9 +7,9 @@
  */
 
 import type { PiEngineConfig } from "../../config/index.ts";
-import { QualifiedModelId } from "../qualified-model-id.ts";
 import type { Model } from "@earendil-works/pi-ai";
 import { PROVIDER_LIMITER_DEFAULTS } from "./provider-limiter.ts";
+import { nativeModelIdFor, resolvePiModelConfig } from "./model-config.ts";
 
 /** Default max tokens per response. */
 export const DEFAULT_MAX_TOKENS = 8_192;
@@ -35,8 +35,7 @@ export class PiModelBuilder {
   build(modelOverride: string | undefined, contextWindowOverride: number | undefined): Model<"openai-completions"> {
     const modelStr = modelOverride ?? this.config.model ?? "default";
 
-    const qmid = QualifiedModelId.tryParse(modelStr);
-    const nativeId = qmid?.nativeModelId() ?? modelStr;
+    const nativeId = nativeModelIdFor(modelStr);
     const slash = nativeId.indexOf("/");
     const providerName = slash !== -1 ? nativeId.slice(0, slash) : undefined;
     const modelId = slash !== -1 ? nativeId.slice(slash + 1) : nativeId;
@@ -51,18 +50,32 @@ export class PiModelBuilder {
       );
     }
 
+    const modelCfg = resolvePiModelConfig(this.config, nativeId);
+    const reasoning = modelCfg?.reasoning ?? true;
+    const thinkingFormat = modelCfg?.thinkingFormat;
+
+    const compat: Record<string, unknown> = { supportsDeveloperRole: false };
+    if (thinkingFormat !== undefined) {
+      compat.thinkingFormat = thinkingFormat;
+      // DeepSeek streams reasoning in a separate `reasoning_content` field on assistant
+      // messages; the SDK must replay/send that field to keep the conversation coherent.
+      if (thinkingFormat === "deepseek" || (thinkingFormat === "openrouter" && nativeId.toLowerCase().includes("deepseek"))) {
+        compat.requiresReasoningContentOnAssistantMessages = true;
+      }
+    }
+
     return {
       id: modelId,
       name: nativeId,
       api: "openai-completions",
       provider: providerName ?? "default",
       baseUrl,
-      reasoning: true,
+      reasoning,
       input: ["text"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: contextWindowOverride,
       maxTokens: DEFAULT_MAX_TOKENS,
-      compat: { supportsDeveloperRole: false },
+      compat,
     } as unknown as Model<"openai-completions">;
   }
 

@@ -33,6 +33,7 @@ type ScriptStep =
  *   engine.proceed("after-tool");
  */
 export class ScriptedEngine implements ExecutionEngine {
+    readonly type = "scripted";
     private readonly turns: ScriptStep[][] = [];
     private readonly checkpoints = new Map<string, {
         reached: Promise<void>;

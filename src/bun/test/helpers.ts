@@ -250,6 +250,12 @@ export function initDb(): Database {
       context_window      INTEGER,
       PRIMARY KEY (workspace_key, qualified_model_id)
     );
+    CREATE TABLE IF NOT EXISTS conversation_injection_state (
+      conversation_id INTEGER NOT NULL,
+      injection_type TEXT NOT NULL,
+      last_injected_after_compaction_id INTEGER,
+      PRIMARY KEY (conversation_id, injection_type)
+    );
   `);
   return db;
 }

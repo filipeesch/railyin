@@ -25,7 +25,10 @@ class MockAgentSession {
     return { tokens: 0, contextWindow: 128_000, maxTokens: 128_000, fraction: 0, percent: 0 };
   }
 
-  dispose() {}
+  disposeCallCount = 0;
+  dispose() {
+    this.disposeCallCount++;
+  }
 
   setActiveToolsCallCount = 0;
   lastSetNames: string[] = [];
@@ -80,7 +83,7 @@ function makePiEngine(session: MockAgentSession): PiEngine {
  * accesses the private method via bracket notation.
  */
 async function simulateGetOrCreate(engine: PiEngine, conversationId: number, tools: any[], cwd: string): Promise<any> {
-  return (engine as any).sessionManager.getOrCreate(conversationId, {} as any, tools, undefined, cwd);
+  return (engine as any).sessionManager.getOrCreate(conversationId, {} as any, tools, undefined, cwd, "test-pi/lmstudio/test-model");
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -263,7 +266,40 @@ describe("PiEngine.compact()", () => {
     const row = db.query<{ content: string }, [number]>(
       "SELECT content FROM conversation_messages WHERE conversation_id = ? AND type = 'compaction_summary' ORDER BY id DESC LIMIT 1",
     ).get(conversationId);
+
     expect(row).toBeNull();
+  });
+
+  it("PE-COMPACT-9: no live session → shadow session (built with empty tools) is disposed after compact() succeeds, so the next execute() rebuilds a fresh session with the full tool set instead of reusing the tool-crippled one", async () => {
+    const session = new MockAgentSession();
+    const engine = makePiEngine(session);
+
+    await engine.compact(null, conversationId, "/test-working-dir", "test-workspace");
+
+    expect(session.disposeCallCount).toBe(1);
+    expect((engine as any).sessionManager.get(conversationId)).toBeUndefined();
+  });
+
+  it("PE-COMPACT-10: no live session → session.compact() throws → shadow session is still disposed (not left cached with an empty tool registry)", async () => {
+    const session = new MockAgentSession();
+    session.compactError = new Error("boom");
+    const engine = makePiEngine(session);
+
+    await expect(engine.compact(null, conversationId, "/test-working-dir", "test-workspace")).rejects.toThrow("boom");
+
+    expect(session.disposeCallCount).toBe(1);
+    expect((engine as any).sessionManager.get(conversationId)).toBeUndefined();
+  });
+
+  it("PE-COMPACT-11: live session already present → compact() must NOT dispose it (only sessions created solely for this compact() call are torn down)", async () => {
+    const session = new MockAgentSession();
+    const engine = makePiEngine(session);
+    await simulateGetOrCreate(engine, conversationId, [{ name: "write_file" }], "/test-working-dir");
+
+    await engine.compact(null, conversationId, "/test-working-dir", "test-workspace");
+
+    expect(session.disposeCallCount).toBe(0);
+    expect((engine as any).sessionManager.get(conversationId)).toBeDefined();
   });
 });
 
@@ -294,16 +330,30 @@ describe("PiEngine session reuse", () => {
   });
 });
 
-// ─── _applyPresetToSession ────────────────────────────────────────────────────
+// ─── _applyModelConfigToSession ───────────────────────────────────────────────
+
+const noDefaultModelCfg: import("../config/index.ts").PiModelConfig = {
+  sampling_presets: {
+    balanced: { temperature: 0.8, top_p: 0.95 },
+    creative: { temperature: 1.2, top_p: 0.98 },
+    precise: { temperature: 0.2, top_p: 0.85 },
+  },
+};
+
+const presetModelCfg: import("../config/index.ts").PiModelConfig = {
+  sampling_presets: {
+    balanced: { temperature: 0.8, top_p: 0.95 },
+    creative: { temperature: 1.2, top_p: 0.98 },
+    precise: { temperature: 0.2, top_p: 0.85 },
+  },
+  default_sampling_preset: "balanced",
+};
 
 function makePiEngineWithPresets(session: MockAgentSession): PiEngine {
   const config: PiEngineConfig = {
     type: "pi",
-    default_sampling_preset: "balanced",
-    sampling_presets: {
-      balanced: { temperature: 0.8, top_p: 0.95 },
-      creative: { temperature: 1.2, top_p: 0.98 },
-      precise: { temperature: 0.2, top_p: 0.85 },
+    models: {
+      "lmstudio/test-model": presetModelCfg,
     },
   };
   return new PiEngine(
@@ -317,18 +367,18 @@ function makePiEngineWithPresets(session: MockAgentSession): PiEngine {
   );
 }
 
-describe("_applyPresetToSession", () => {
+describe("_applyModelConfigToSession", () => {
   it("PE-PRESET-1: named preset → session.agent.onPayload is a function", () => {
     const session = new MockAgentSession();
     const engine = makePiEngineWithPresets(session);
-    (engine as any)._applyPresetToSession(session, "creative");
+    (engine as any)._applyModelConfigToSession(session, presetModelCfg, "lmstudio/test-model", "creative", undefined);
     expect(typeof session.agent.onPayload).toBe("function");
   });
 
   it("PE-PRESET-2: creative preset → onPayload merges temperature and top_p, excludes unknown keys", () => {
     const session = new MockAgentSession();
     const engine = makePiEngineWithPresets(session);
-    (engine as any)._applyPresetToSession(session, "creative");
+    (engine as any)._applyModelConfigToSession(session, presetModelCfg, "lmstudio/test-model", "creative", undefined);
     const result = session.agent.onPayload!({ model: "x" }, null) as Record<string, unknown>;
     expect(result.temperature).toBe(1.2);
     expect(result.top_p).toBe(0.98);
@@ -337,41 +387,242 @@ describe("_applyPresetToSession", () => {
     expect("presence_penalty" in result).toBe(false);
   });
 
-  it("PE-PRESET-3: undefined preset on engine with no default → onPayload is undefined", () => {
+  it("PE-PRESET-3: undefined preset on model with no default → onPayload is undefined", () => {
     const session = new MockAgentSession();
     const engine = makePiEngine(session);
-    (engine as any)._applyPresetToSession(session, undefined);
+    (engine as any)._applyModelConfigToSession(session, undefined, "lmstudio/test-model", undefined, undefined);
     expect(session.agent.onPayload).toBeUndefined();
   });
 
   it("PE-PRESET-4: second call overwrites first preset", () => {
     const session = new MockAgentSession();
     const engine = makePiEngineWithPresets(session);
-    (engine as any)._applyPresetToSession(session, "creative");
-    (engine as any)._applyPresetToSession(session, "precise");
+    (engine as any)._applyModelConfigToSession(session, presetModelCfg, "lmstudio/test-model", "creative", undefined);
+    (engine as any)._applyModelConfigToSession(session, presetModelCfg, "lmstudio/test-model", "precise", undefined);
     const result = session.agent.onPayload!({}, null) as Record<string, unknown>;
     expect(result.temperature).toBe(0.2);
   });
 
-  it("PE-PRESET-5: session reuse leakage — applying undefined clears previously set onPayload", () => {
+  it("PE-PRESET-5: session reuse leakage — applying undefined clears previously set onPayload when no default preset", () => {
     const session = new MockAgentSession();
-    const config: PiEngineConfig = {
-      type: "pi",
-      sampling_presets: {
-        balanced: { temperature: 0.8, top_p: 0.95 },
-      },
-    };
-    const engine = new PiEngine(
-      "test-pi",
-      config,
-      () => {},
-      () => {},
-      undefined,
-      new StubModelSettingsRepository(128_000),
-      async () => session as any,
-    );
-    (engine as any)._applyPresetToSession(session, "balanced");
-    (engine as any)._applyPresetToSession(session, undefined);
+    const engine = makePiEngineWithPresets(session);
+    (engine as any)._applyModelConfigToSession(session, noDefaultModelCfg, "lmstudio/test-model", "balanced", undefined);
+    (engine as any)._applyModelConfigToSession(session, noDefaultModelCfg, "lmstudio/test-model", undefined, undefined);
     expect(session.agent.onPayload).toBeUndefined();
   });
+
+  it("PE-VARIANT-1: variant options are merged into request body when Mode is selected", () => {
+    const session = new MockAgentSession();
+    const modelCfg: import("../config/index.ts").PiModelConfig = {
+      variants: {
+        fast: { options: { temperature: 0.1, top_p: 0.5 } },
+        slow: { options: { temperature: 0.9 } },
+      },
+      options: { frequency_penalty: 0.2 },
+    };
+    const engine = makePiEngine(session);
+    (engine as any)._applyModelConfigToSession(
+      session,
+      modelCfg,
+      "lmstudio/test-model",
+      undefined,
+      [{ id: "mode", value: "fast" }],
+    );
+    const result = session.agent.onPayload!({}, null) as Record<string, unknown>;
+    expect(result.temperature).toBe(0.1);
+    expect(result.top_p).toBe(0.5);
+    expect(result.frequency_penalty).toBe(0.2);
+    // The effort key is SDK-owned: Railyin never emits it, regardless of mode.
+    expect(result.reasoning_effort).toBeUndefined();
+    expect(result.reasoningEffort).toBeUndefined();
+  });
+
+  it("PE-VARIANT-2: variant without options and non-canonical mode → thinkingLevel off, no reasoning_effort", () => {
+    const session = new MockAgentSession();
+    const modelCfg: import("../config/index.ts").PiModelConfig = {
+      variants: { fast: {} },
+    };
+    const engine = makePiEngine(session);
+    (engine as any)._applyModelConfigToSession(
+      session,
+      modelCfg,
+      "lmstudio/test-model",
+      undefined,
+      [{ id: "mode", value: "fast" }],
+    );
+    // "fast" is not a canonical level and the variant has no effort → off.
+    expect(session.agent.state.thinkingLevel).toBe("off");
+    // No non-reasoning body options → onPayload is not set (empty).
+    expect(session.agent.onPayload).toBeUndefined();
+  });
+
+  it("PE-VARIANT-3: variant thinking toggle + reasoning_effort are injected verbatim into the wire body", () => {
+    const session = new MockAgentSession();
+    const modelCfg: import("../config/index.ts").PiModelConfig = {
+      variants: {
+        none: { label: "Off", thinking: false, options: { reasoning_effort: "none" } },
+        normal: { label: "Normal", thinking: true, options: { reasoning_effort: "high", temperature: 0.4 } },
+        max: { label: "Max", thinking: true, options: { reasoning_effort: "max" } },
+      },
+    };
+    const engine = makePiEngine(session);
+    (engine as any)._applyModelConfigToSession(
+      session,
+      modelCfg,
+      "vllm/test-model",
+      undefined,
+      [{ id: "mode", value: "normal" }],
+    );
+    const result = session.agent.onPayload!({}, null) as Record<string, unknown>;
+    // thinking toggle + raw reasoning_effort are merged verbatim (direct-injection, not stripped).
+    expect(result.thinking).toEqual({ type: "enabled" });
+    expect(result.reasoning_effort).toBe("high");
+    expect(result.temperature).toBe(0.4);
+  });
+
+  it("PE-VARIANT-4: none/normal/max variants inject the correct thinking + reasoning_effort wire body", () => {
+    const cases: Array<[string, { type: string }, string]> = [
+      ["none", { type: "disabled" }, "none"],
+      ["normal", { type: "enabled" }, "high"],
+      ["max", { type: "enabled" }, "max"],
+    ];
+    for (const [mode, thinking, effort] of cases) {
+      const session = new MockAgentSession();
+      const modelCfg: import("../config/index.ts").PiModelConfig = {
+        variants: {
+          none: { label: "Off", thinking: false, options: { reasoning_effort: "none" } },
+          normal: { label: "Normal", thinking: true, options: { reasoning_effort: "high" } },
+          max: { label: "Max", thinking: true, options: { reasoning_effort: "max" } },
+        },
+      };
+      const engine = makePiEngine(session);
+      (engine as any)._applyModelConfigToSession(
+        session,
+        modelCfg,
+        "vllm/test-model",
+        undefined,
+        [{ id: "mode", value: mode }],
+      );
+      const result = session.agent.onPayload!({}, null) as Record<string, unknown>;
+      expect(result.thinking).toEqual(thinking);
+      expect(result.reasoning_effort).toBe(effort);
+    }
+  });
+
+  it("PE-VARIANT-5: provider-specific reasoning knob (chat_template_kwargs/boolean) passes through verbatim", () => {
+    const session = new MockAgentSession();
+    const modelCfg: import("../config/index.ts").PiModelConfig = {
+      variants: {
+        qwen: { thinking: true, options: { chat_template_kwargs: { enable_thinking: true }, enable_thinking: true } },
+      },
+    };
+    const engine = makePiEngine(session);
+    (engine as any)._applyModelConfigToSession(
+      session,
+      modelCfg,
+      "vllm/test-model",
+      undefined,
+      [{ id: "mode", value: "qwen" }],
+    );
+    const result = session.agent.onPayload!({}, null) as Record<string, unknown>;
+    // thinking toggle + provider-specific reasoning knobs are all injected verbatim.
+    expect(result.thinking).toEqual({ type: "enabled" });
+    expect(result.chat_template_kwargs).toEqual({ enable_thinking: true });
+    expect(result.enable_thinking).toBe(true);
+  });
+
+  it("PE-VARIANT-6: provider-specific reasoning knob is NOT auto-injected when not declared", () => {
+    const session = new MockAgentSession();
+    const modelCfg: import("../config/index.ts").PiModelConfig = {
+      variants: { normal: { options: { reasoningEffort: "high", temperature: 0.4 } } },
+    };
+    const engine = makePiEngine(session);
+    (engine as any)._applyModelConfigToSession(
+      session,
+      modelCfg,
+      "vllm/test-model",
+      undefined,
+      [{ id: "mode", value: "normal" }],
+    );
+    const result = session.agent.onPayload!({}, null) as Record<string, unknown>;
+    // Non-reasoning option present so onPayload is set, but no reasoning knob is auto-injected.
+    expect(result.temperature).toBe(0.4);
+    expect(result.enable_thinking).toBeUndefined();
+    expect(result.chat_template_kwargs).toBeUndefined();
+    expect(result.thinking).toBeUndefined();
+  });
+
+    it("PE-MODE-LABEL-1: Mode axis uses variant label when present, falls back to variant id", () => {
+      const session = new MockAgentSession();
+      const modelCfg: import("../config/index.ts").PiModelConfig = {
+        variants: {
+          none: { label: "None", options: { reasoningEffort: "none" } },
+          normal: { label: "Normal", options: { reasoningEffort: "high" } },
+          max: { options: { reasoningEffort: "max" } },
+        },
+      };
+      const engine = makePiEngine(session);
+      const settings = (engine as any)._buildSettings(modelCfg);
+      const modeAxis = settings.find((s: any) => s.id === "mode");
+      expect(modeAxis).toBeDefined();
+      const labels = modeAxis.options.map((o: any) => ({ value: o.value, label: o.label }));
+      expect(labels).toEqual([
+        { value: "none", label: "None" },
+        { value: "normal", label: "Normal" },
+        { value: "max", label: "max" },
+      ]);
+    });
+
+    it("PE-THINKING-1: thinkingLevel defaults to 'off' when no modeValue and no config thinking_level", () => {
+    const session = new MockAgentSession();
+    session.agent.state.thinkingLevel = "high";
+    const engine = makePiEngine(session);
+    (engine as any)._applyModelConfigToSession(session, undefined, "lmstudio/test-model", undefined, undefined);
+    expect(session.agent.state.thinkingLevel).toBe("off");
+  });
+
+  it("PE-THINKING-2: thinkingLevel set from config thinking_level when no modeValue", () => {
+    const session = new MockAgentSession();
+    session.agent.state.thinkingLevel = "off";
+    const modelCfg: import("../config/index.ts").PiModelConfig = {
+      thinking_level: "high",
+    };
+    const engine = makePiEngine(session);
+    (engine as any)._applyModelConfigToSession(session, modelCfg, "lmstudio/test-model", undefined, undefined);
+    expect(session.agent.state.thinkingLevel).toBe("high");
+  });
+
+  it("PE-THINKING-3: a bare mode value without variant config yields thinkingLevel off (no injected reasoning)", () => {
+    const session = new MockAgentSession();
+    session.agent.state.thinkingLevel = "off";
+    const engine = makePiEngine(session);
+    (engine as any)._applyModelConfigToSession(
+      session,
+      undefined,
+      "lmstudio/test-model",
+      undefined,
+      [{ id: "mode", value: "high" }],
+    );
+    // No variant config / no thinking toggle → reasoning sentinel is off (no wire injection either).
+    expect(session.agent.state.thinkingLevel).toBe("off");
+    expect(session.agent.onPayload).toBeUndefined();
+  });
+
+  it("PE-THINKING-4: modeValue 'off' sets thinkingLevel to 'off', not config default", () => {
+    const session = new MockAgentSession();
+    session.agent.state.thinkingLevel = "high";
+    const modelCfg: import("../config/index.ts").PiModelConfig = {
+      thinking_level: "high",
+    };
+    const engine = makePiEngine(session);
+    (engine as any)._applyModelConfigToSession(
+      session,
+      modelCfg,
+      "lmstudio/test-model",
+      undefined,
+      [{ id: "mode", value: "off" }],
+    );
+    expect(session.agent.state.thinkingLevel).toBe("off");
+  });
 });
+

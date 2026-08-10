@@ -18,6 +18,7 @@ import type { CommonToolContext } from "../types.ts";
 
 
 export class OpenCodeEngine implements ExecutionEngine {
+  readonly type = "opencode";
   private readonly sdkAdapter: OpenCodeSdkAdapter;
   private readonly _onTaskUpdated: OnTaskUpdated;
   private readonly shellApprovalRepo: ShellApprovalRepository;
@@ -93,6 +94,8 @@ export class OpenCodeEngine implements ExecutionEngine {
       },
       runtime: {
         worktreePath: workingDirectory,
+        mcpRegistry: params.mcpRegistry ?? undefined,
+        mcpEnabledTools: params.enabledMcpTools ?? null,
       },
     };
 

@@ -13,10 +13,17 @@ describe("resolveToolsForColumn", () => {
   });
 
   it("handles individual tool names alongside group names", () => {
-    const result = resolveToolsForColumn(["cards_read", "ask_me"]);
+    const result = resolveToolsForColumn(["cards_read", "decision_request"]);
     const names = result.map((t) => t.name);
     expect(names).toContain("get_card");
-    expect(names).toContain("ask_me");
+    expect(names).toContain("decision_request");
+  });
+
+  it("interactions group resolves only decision_request (ask_me removed)", () => {
+    const result = resolveToolsForColumn(["interactions"]);
+    const names = result.map((t) => t.name);
+    expect(names).toContain("decision_request");
+    expect(names).not.toContain("ask_me");
   });
 
   it("deduplicates when a tool appears via group and by name", () => {

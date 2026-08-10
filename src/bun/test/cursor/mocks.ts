@@ -9,7 +9,9 @@
  * Custom-tool dispatch is supported via the `callTool` step — the mock
  * invokes the registered tool's `execute(args, {})` so suspend-loop tools
  * (decision_request) can fire the engine's onSuspend callback exactly as in
- * production.
+ * production. It also emits a real tool_start/tool_result event pair using
+ * the tool's actual return value, so scenarios can assert on genuine tool
+ * output (e.g. dynamic MCP discovery tools).
  */
 
 import type { EngineEvent } from "@bun/engine/types";
@@ -46,6 +48,7 @@ export class MockCursorSdkAdapter implements CursorSdkAdapter {
     listModelsCalls: 0,
     listCommandsCalls: 0,
     shutdownCalls: 0,
+    compactCalls: [] as string[],
   };
 
   queueTurn(turn: CursorMockTurn): this {
@@ -77,15 +80,26 @@ export class MockCursorSdkAdapter implements CursorSdkAdapter {
         case "callTool": {
           const tool = config.customTools?.[step.toolName];
           if (!tool) throw new Error(`Mock cursor tool not found: ${step.toolName}`);
-          // Real worker invokes execute and ignores the return when the tool
-          // suspends — the onSuspend side-effect (abort signal) is what stops
-          // the stream. Mirror that here.
+          const callId = `call_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+          // Real worker invokes execute() and ignores the return when the tool suspends —
+          // the onSuspend side-effect (abort signal) is what stops the stream, and no
+          // tool_start/tool_result pair is ever emitted for a suspended call (the real
+          // turn resumes later once the user answers). For non-suspending tools, capture
+          // the real return value and emit a genuine tool_start/tool_result pair so
+          // scenarios can assert on it (Cursor's custom tools return a plain string — see
+          // buildCursorTools in engine/cursor/tools.ts).
+          let resultText: string | undefined;
+          let errored = false;
           try {
-            await tool.execute(step.args as never, {} as never);
+            resultText = String(await tool.execute(step.args as never, {} as never));
           } catch {
             // Tool errors surface as fatal in production; tests can use the
             // `error` step builder to drive that path explicitly.
+            errored = true;
           }
+          if (config.signal?.aborted || errored) break;
+          yield { type: "tool_start", name: step.toolName, arguments: JSON.stringify(step.args), callId };
+          yield { type: "tool_result", name: "", result: resultText!, callId, isError: false };
           break;
         }
         case "waitForAbort": {
@@ -110,6 +124,10 @@ export class MockCursorSdkAdapter implements CursorSdkAdapter {
 
   async cancel(_executionId: number): Promise<void> {
     this.trace.cancelCalls += 1;
+  }
+
+  async compact(agentId: string): Promise<void> {
+    this.trace.compactCalls.push(agentId);
   }
 
   async listModels(_workingDirectory: string): Promise<CursorSdkModelInfo[]> {

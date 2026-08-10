@@ -153,8 +153,6 @@ export class StreamProcessor {
     let reasoningAccum = "";
     let hadOutput = false;
     const callStack: string[] = [];
-    let reasoningBlockId: string | null = null;
-    let reasoningFlushCount = 0;
     // Subagent child tool callIds are only unique within a child session and can repeat
     // (local models reuse ids like "call_0" across sequential calls) or collide with parent
     // callIds. The frontend store keys live blocks by blockId, so any repeat would be silently
@@ -211,7 +209,6 @@ export class StreamProcessor {
               this.onStreamEvent?.({ taskId, conversationId, executionId, seq: 0, blockId: "", type: "reasoning", content: reasoningAccum, metadata: null, parentBlockId: callStack.at(-1) ?? null, done: false, subagentId: null });
               reasoningAccum = "";
             }
-            reasoningBlockId = null;
             tokenAccum += event.content;
             hadOutput = true;
             this.onToken(taskId, conversationId, executionId, event.content, false);
@@ -275,11 +272,13 @@ export class StreamProcessor {
             hadOutput = true;
             if (!event.isInternal) {
               if (reasoningAccum) {
-                const rBlockId = `${executionId}-pre-r${++reasoningFlushCount}`;
                 convBuffer.enqueue({ taskId, conversationId, type: "reasoning", role: null, content: reasoningAccum, notify: true });
                 convBuffer.flush().forEach((msg) => this.onNewMessage(msg));
-                this.onStreamEvent?.({ taskId, conversationId, executionId, seq: 0, blockId: rBlockId, type: "reasoning", content: reasoningAccum, metadata: null, parentBlockId: callStack.at(-1) ?? null, done: false, subagentId: null });
-                reasoningBlockId = rBlockId;
+                // Let the StreamEventEnricher assign the reasoning blockId so this
+                // committed reasoning reuses the same block as the streamed
+                // `reasoning_chunk` events it corresponds to (fixes the divergent
+                // `pre-r` id that dropped/reordered live reasoning in the UI tail).
+                this.onStreamEvent?.({ taskId, conversationId, executionId, seq: 0, blockId: "", type: "reasoning", content: reasoningAccum, metadata: null, parentBlockId: callStack.at(-1) ?? null, done: false, subagentId: null });
                 reasoningAccum = "";
               }
               if (tokenAccum) {

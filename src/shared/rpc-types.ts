@@ -516,7 +516,7 @@ export interface WorkspaceConfig {
   /** Default model for this workspace in `<engineId>/<modelId>` format. Null when unset. */
   defaultModel: string | null;
   /** All engine instances available in this installation (from engines.yaml or fallback). */
-  availableEngines: { id: string; type: string }[];
+  availableEngines: { id: string; type: string; name?: string }[];
   /** Engine IDs allowed in this workspace. Empty means all available engines are allowed. */
   allowedEngines: string[];
   /** Configured LSP servers for this workspace. */
@@ -746,7 +746,7 @@ export type RailynAPI = {
     response: { message: ConversationMessage; executionId: number };
   };
   "tasks.submitDecisions": {
-    params: { taskId: number; answers: DecisionAnswer[]; generalNotes?: string };
+    params: { taskId: number; answers: DecisionAnswer[]; generalNotes?: string; recordAsDecisions?: boolean };
     response: { message: ConversationMessage; executionId: number };
   };
 
@@ -1062,7 +1062,7 @@ export type RailynAPI = {
     response: { messageId: number; executionId: number };
   };
   "chatSessions.submitDecisions": {
-    params: { sessionId: number; answers: DecisionAnswer[]; generalNotes?: string };
+    params: { sessionId: number; answers: DecisionAnswer[]; generalNotes?: string; recordAsDecisions?: boolean };
     response: { messageId: number; executionId: number };
   };
   "chatSessions.setModel": {

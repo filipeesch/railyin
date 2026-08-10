@@ -31,6 +31,7 @@ const taskUpdates: Task[] = [];
 const newMessages: ConversationMessage[] = [];
 
 class TestEngine implements ExecutionEngine {
+  readonly type = "scripted";
   async *execute(_params: ExecutionParams): AsyncIterable<EngineEvent> {
     yield { type: "token", content: "Done." };
     yield { type: "done" };
@@ -244,6 +245,7 @@ describe("Orchestrator.executeHumanTurn", () => {
 
   it("backfills a missing conversation for non-native human turns", async () => {
     class StubEngine implements ExecutionEngine {
+      readonly type = "scripted";
       async *execute(_params: ExecutionParams): AsyncIterable<EngineEvent> {
         yield { type: "done" };
       }
@@ -302,6 +304,7 @@ describe("Orchestrator.executeChatTurn", () => {
 describe("Orchestrator.respondShellApprovalByExecution", () => {
   it("OSA-MODEL-1: shell approval push preserves task model", async () => {
     class ApproveEngine implements ExecutionEngine {
+      readonly type = "scripted";
       async *execute(_params: ExecutionParams): AsyncIterable<EngineEvent> {
         yield { type: "done" };
       }
@@ -337,6 +340,7 @@ describe("Orchestrator.respondShellApprovalByExecution", () => {
   it("keeps waiting_user state when resume fails", async () => {
     let seededExecutionId = 0;
     class RejectingResumeEngine implements ExecutionEngine {
+      readonly type = "scripted";
       async *execute(_params: ExecutionParams): AsyncIterable<EngineEvent> {
         yield { type: "done" };
       }
@@ -435,6 +439,7 @@ describe("Orchestrator.cancel", () => {
 
   it("OC-MODEL-1: marks non-native executions cancelled immediately and preserves model on push", () => {
     class CancelStubEngine implements ExecutionEngine {
+      readonly type = "scripted";
       async *execute(_params: ExecutionParams): AsyncIterable<EngineEvent> {
         yield { type: "done" };
       }
@@ -506,6 +511,7 @@ describe("Orchestrator.shutdownNonNativeEngines", () => {
     let shutdownCalls = 0;
 
     class ShutdownStubEngine implements ExecutionEngine {
+      readonly type = "scripted";
       async *execute(_params: ExecutionParams): AsyncIterable<EngineEvent> {
         yield { type: "done" };
       }
@@ -571,6 +577,7 @@ columns:
   let innerCleanup: (() => void) | null = null;
 
   class CapturingEngine implements ExecutionEngine {
+    readonly type = "scripted";
     async *execute(params: ExecutionParams): AsyncIterable<EngineEvent> {
       capturedParams.push(params);
       yield { type: "done" };
@@ -620,7 +627,7 @@ columns:
     innerCleanup = null;
   });
 
-  it("transition into column with both fields → merged systemInstructions", async () => {
+  it("transition into column with both fields → systemInstructions has workflow only, stage in prompt", async () => {
     const { cleanup } = setupTestConfig("", gitDir, [WF_BOTH]);
     innerCleanup = cleanup;
     db = initDb();
@@ -631,7 +638,8 @@ columns:
     await orc.executeTransition(taskId, "col-both");
 
     expect(capturedParams).toHaveLength(1);
-    expect(capturedParams[0].systemInstructions).toBe("Workflow context.\n\nStage context.");
+    expect(capturedParams[0].systemInstructions).toBe("Workflow context.");
+    expect(capturedParams[0].prompt).toContain("Stage context.");
   });
 
   it("transition into column with only workflow_instructions → workflow string only", async () => {
@@ -648,7 +656,7 @@ columns:
     expect(capturedParams[0].systemInstructions).toBe("Workflow context.");
   });
 
-  it("transition into column with only stage_instructions → stage string only (regression)", async () => {
+  it("transition into column with only stage_instructions → systemInstructions undefined, stage in prompt (regression)", async () => {
     const { cleanup } = setupTestConfig("", gitDir, [WF_NONE]);
     innerCleanup = cleanup;
     db = initDb();
@@ -659,7 +667,8 @@ columns:
     await orc.executeTransition(taskId, "col-with-stage");
 
     expect(capturedParams).toHaveLength(1);
-    expect(capturedParams[0].systemInstructions).toBe("Stage only.");
+    expect(capturedParams[0].systemInstructions).toBeUndefined();
+    expect(capturedParams[0].prompt).toContain("Stage only.");
   });
 
   it("transition into column with neither field → systemInstructions is undefined", async () => {
@@ -676,7 +685,7 @@ columns:
     expect(capturedParams[0].systemInstructions).toBeUndefined();
   });
 
-  it("human-turn in column with both fields → merged systemInstructions", async () => {
+  it("human-turn in column with both fields → systemInstructions has workflow only, stage in prompt", async () => {
     const { cleanup } = setupTestConfig("", gitDir, [WF_BOTH]);
     innerCleanup = cleanup;
     db = initDb();
@@ -687,7 +696,8 @@ columns:
     await orc.executeHumanTurn(taskId, "hello");
 
     expect(capturedParams.length).toBeGreaterThan(0);
-    expect(capturedParams[0].systemInstructions).toBe("Workflow context.\n\nStage context.");
+    expect(capturedParams[0].systemInstructions).toBe("Workflow context.");
+    expect(capturedParams[0].prompt).toContain("Stage context.");
   });
 
   it("multi-board isolation: only board with workflow_instructions receives it", async () => {

@@ -1,3 +1,47 @@
 engines:
   - id: copilot
     type: copilot
+
+  # Pi — local LLM first engine (LM Studio, Ollama, any OpenAI-compatible endpoint)
+  - id: pi-local
+    type: pi
+    model: lmstudio/qwen3.6-27b
+    context_window: 128000
+    providers:
+      lmstudio:
+        base_url: http://localhost:1234/v1
+        max_inflight: 2
+        queue_timeout_ms: 60000
+    harness:
+      delegate:
+        enabled: true
+        max_per_call: 5
+        allow_tools:
+          - read
+          - write
+          - shell
+      background_compaction:
+        enabled: true
+        early_margin_tokens: 8192
+    models:
+      lmstudio/qwen3.6-27b:
+        name: "Qwen3.6 27B"
+        thinking_level: "high"
+        limit:
+          context: 128000
+          output: 16384
+        reasoning: true
+        variants:
+          fast:
+            options:
+              temperature: 0.1
+              top_p: 0.5
+          balanced:
+            options:
+              temperature: 0.7
+              top_p: 0.9
+          creative:
+            options:
+              temperature: 1.0
+              top_p: 0.95
+        sampling_presets:

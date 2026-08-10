@@ -101,8 +101,8 @@ export function taskHandlers(db: Database, wsRepo: IWorkspaceRepository, orchest
       const topPosition = positionService.getTopPosition(params.boardId, "backlog");
       const taskResult = db.run(
         `INSERT INTO tasks
-           (board_id, project_key, title, description, workflow_state, execution_state, conversation_id, shell_auto_approve, position, enabled_mcp_tools)
-         VALUES (?, ?, ?, ?, 'backlog', 'idle', ?, ?, ?, '[]')`,
+           (board_id, project_key, title, description, workflow_state, execution_state, conversation_id, shell_auto_approve, position)
+         VALUES (?, ?, ?, ?, 'backlog', 'idle', ?, ?, ?)`,
         [
           params.boardId,
           params.projectKey,
@@ -306,9 +306,10 @@ export function taskHandlers(db: Database, wsRepo: IWorkspaceRepository, orchest
       taskId: number;
       answers: import("../../shared/rpc-types.ts").DecisionAnswer[];
       generalNotes?: string;
+      recordAsDecisions?: boolean;
     }): Promise<{ message: ConversationMessage; executionId: number }> => {
       const { buildDecisionSubmission } = await import("../conversation/decision-submission.ts");
-      const { userContent, engineContent } = buildDecisionSubmission(params.answers, params.generalNotes);
+      const { userContent, engineContent } = buildDecisionSubmission(params.answers, params.generalNotes, params.recordAsDecisions);
 
       const taskWorkspaceKey = wsRepo.getTaskWorkspaceKey(params.taskId);
       const submitConvRow = db.query<{ conversation_model: string | null }, [number]>(

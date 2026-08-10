@@ -1,6 +1,7 @@
 import type { ToolCallDisplay } from "../../shared/rpc-types.ts";
 import type { Attachment, ConversationMessage, StreamEvent, Task } from "../../shared/rpc-types.ts";
 import type { ModelParamValue, ModelSettingAxis } from "../../shared/rpc-types.ts";
+import type { SamplingPreset } from "../config/index.ts";
 import type { LSPServerManager } from "../lsp/manager.ts";
 import type { IBoardToolExecutor } from "../workflow/tools/board-tool-executor.ts";
 import type { McpClientRegistry } from "../mcp/registry.ts";
@@ -89,7 +90,13 @@ export interface ExecutionParams {
    */
   onRawModelMessage?: (message: RawModelMessage) => void;
 
-  /** MCP tool filter: [] = all disabled, string[] = "server:tool" pairs enabled. */
+  /**
+   * MCP tool visibility filter for list_mcp_tools/invoke_mcp_tool.
+   * null/undefined = no per-task/session override => all tools from running, enabled MCP
+   * servers are visible (the default for new tasks/sessions). [] = user explicitly disabled
+   * every tool via the MCP tools panel => nothing visible. Non-empty string[] = explicit
+   * "server:tool" allow-list.
+   */
   enabledMcpTools?: string[] | null;
   /** MCP client registry for this execution. null when no registry available. */
   mcpRegistry?: McpClientRegistry | null;
@@ -160,6 +167,8 @@ export interface EngineModelInfo {
   enabled?: boolean;
   /** Generic model parameter axes exposed by this model. Empty/undefined = no configurable settings. */
   settings?: ModelSettingAxis[];
+  /** Per-model sampling presets (name → params). */
+  availablePresets?: { name: string; params: SamplingPreset }[];
 }
 
 export type EngineLeaseState = "running" | "waiting_user" | "idle" | "closing";
@@ -178,7 +187,13 @@ export interface EngineShutdownOptions {
 
 // ─── ExecutionEngine interface ────────────────────────────────────────────────
 
+/** Engine family identifiers — used to detect when two engine entries share the same session store. */
+export type EngineType = "pi" | "claude" | "cursor" | "copilot" | "opencode" | "scripted";
+
 export interface ExecutionEngine {
+  /** The engine family. Same-type engines share per-conversation session storage. */
+  readonly type: EngineType;
+
   /**
    * Start an execution and return an async iterable of events.
    * The caller should consume all events to drive the state machine.
@@ -250,5 +265,12 @@ export interface CommonToolContext {
   runtime: {
     lspManager?: LSPServerManager;
     worktreePath?: string;
+    /** Resolved once per conversation/task by each engine, mirroring `lspManager`'s resolution pattern. */
+    mcpRegistry?: McpClientRegistry;
+    /**
+     * Per-task/session "server:tool" visibility allow-list — see discovery-tools.ts.
+     * null/undefined = all tools visible (default); [] = none visible; non-empty = allow-list.
+     */
+    mcpEnabledTools?: string[] | null;
   };
 }

@@ -8,6 +8,7 @@
 
 import type { PiEngineConfig } from "../../config/index.ts";
 import type { OnTaskUpdated, EngineEvent, ExecutionParams, CommonToolContext } from "../types.ts";
+import type { McpClientRegistry } from "../../mcp/registry.ts";
 import type { HarnessContext } from "./harness/context.ts";
 import { UndoStack } from "./harness/undo-stack.ts";
 import { ToolLoopDetector } from "./harness/tool-loop-detector.ts";
@@ -62,12 +63,16 @@ export class PiToolFactory {
     onTransition: ExecutionParams["onTransition"],
     onHumanTurn: ExecutionParams["onHumanTurn"],
     workspaceKey?: string,
+    mcpRegistry?: McpClientRegistry | null,
+    enabledMcpTools?: string[] | null,
   ): CommonToolContext {
     const existing = this.commonCtxRefs.get(conversationId);
     if (existing) {
       existing.runtime.worktreePath = workingDirectory;
       existing.runtime.lspManager =
         taskLspRegistry.getManager(taskId ?? 0, getConfig().workspace.lsp?.servers ?? [], workingDirectory ?? "") ?? undefined;
+      existing.runtime.mcpRegistry = mcpRegistry ?? undefined;
+      existing.runtime.mcpEnabledTools = enabledMcpTools ?? null;
       existing.workflow.onTransition = onTransition ?? (() => {});
       existing.workflow.onHumanTurn = onHumanTurn ?? (() => {});
       return existing;
@@ -91,6 +96,8 @@ export class PiToolFactory {
         worktreePath: workingDirectory,
         lspManager:
           taskLspRegistry.getManager(taskId ?? 0, getConfig().workspace.lsp?.servers ?? [], workingDirectory ?? "") ?? undefined,
+        mcpRegistry: mcpRegistry ?? undefined,
+        mcpEnabledTools: enabledMcpTools ?? null,
       },
     };
     this.commonCtxRefs.set(conversationId, ctx);
@@ -110,6 +117,8 @@ export class PiToolFactory {
     skillResolver: SkillResolver,
     suspendRef: SuspendRef,
     signal?: AbortSignal,
+    mcpRegistry?: McpClientRegistry | null,
+    enabledMcpTools?: string[] | null,
   ): ReturnType<typeof buildAllTools> {
     const harnessCtx = this.getOrCreateHarnessContext(conversationId, worktreePath, signal);
     const commonCtx = this.getOrCreateCommonContext(
@@ -121,6 +130,8 @@ export class PiToolFactory {
       onTransition,
       onHumanTurn,
       workspaceKey,
+      mcpRegistry,
+      enabledMcpTools,
     );
 
     return buildAllTools({

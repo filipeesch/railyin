@@ -46,6 +46,8 @@ export interface ChildSessionOptions {
   config: PiEngineConfig;
   /** Parent system prompt. The subagent suffix is appended automatically. */
   parentSystemPrompt: string | undefined;
+  /** Parent's resolved thinking level. Child inherits this instead of hardcoded "off". */
+  thinkingLevel?: string;
   /** Working directory (parent's worktree path). */
   cwd: string;
 }
@@ -68,7 +70,7 @@ export type ChildSessionFactory = (opts: ChildSessionOptions) => Promise<ChildSe
  * Uses SessionManager.inMemory() — no disk writes, no cleanup needed.
  */
 export const defaultChildSessionFactory: ChildSessionFactory = async (opts) => {
-  const { tools, model, config, parentSystemPrompt, cwd } = opts;
+  const { tools, model, config, parentSystemPrompt, thinkingLevel, cwd } = opts;
 
   const systemPrompt = parentSystemPrompt
     ? parentSystemPrompt + SUBAGENT_SYSTEM_SUFFIX
@@ -119,7 +121,7 @@ export const defaultChildSessionFactory: ChildSessionFactory = async (opts) => {
     settingsManager,
   });
 
-  session.agent.state.thinkingLevel = "off";
+  session.agent.state.thinkingLevel = (thinkingLevel ?? "off") as never;
 
   return {
     session,

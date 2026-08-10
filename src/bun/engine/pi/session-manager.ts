@@ -37,9 +37,15 @@ export class DefaultSessionPathResolver implements SessionPathResolver {
   }
 }
 
+/** Internal session-map entry — tracks the qualified model id a session was built/last-refreshed with. */
+interface SessionEntry {
+  session: AgentSession;
+  qualifiedModelId: string;
+}
+
 export class PiSessionManager {
-  /** Map<conversationId, AgentSession> — one Pi session per conversation. */
-  readonly sessions = new Map<number, AgentSession>();
+  /** Map<conversationId, SessionEntry> — one Pi session per conversation. */
+  readonly sessions = new Map<number, SessionEntry>();
 
   constructor(
     private readonly sessionFactory: SessionFactory,
@@ -53,14 +59,17 @@ export class PiSessionManager {
     tools: AgentTool<any>[],
     systemPrompt: string | undefined,
     cwd: string,
+    qualifiedModelId: string,
   ): Promise<AgentSession> {
-    const existing = this.sessions.get(conversationId);
-    if (existing) {
-      existing.agent.state.model = model as any;
-      existing.agent.state.thinkingLevel = "off";
-      if (systemPrompt !== undefined) existing.agent.state.systemPrompt = systemPrompt;
-      existing.setActiveToolsByName(buildToolAllowlist(tools));
-      return existing;
+    const entry = this.sessions.get(conversationId);
+    if (entry) {
+      entry.session.agent.state.model = model as any;
+      if (qualifiedModelId !== entry.qualifiedModelId) {
+        if (systemPrompt !== undefined) entry.session.agent.state.systemPrompt = systemPrompt;
+        entry.qualifiedModelId = qualifiedModelId;
+      }
+      entry.session.setActiveToolsByName(buildToolAllowlist(tools));
+      return entry.session;
     }
 
     // Ensure sessions dir exists (derives dir from the path resolver result)
@@ -76,25 +85,25 @@ export class PiSessionManager {
       cwd,
       config: this.config,
     });
-    this.sessions.set(conversationId, session);
+    this.sessions.set(conversationId, { session, qualifiedModelId });
     return session;
   }
 
   get(conversationId: number): AgentSession | undefined {
-    return this.sessions.get(conversationId);
+    return this.sessions.get(conversationId)?.session;
   }
 
   dispose(conversationId: number): void {
-    const session = this.sessions.get(conversationId);
-    if (session) {
-      try { session.dispose(); } catch { /* ignore */ }
+    const entry = this.sessions.get(conversationId);
+    if (entry) {
+      try { entry.session.dispose(); } catch { /* ignore */ }
       this.sessions.delete(conversationId);
     }
   }
 
   disposeAll(): void {
-    for (const session of this.sessions.values()) {
-      try { session.dispose(); } catch { /* ignore */ }
+    for (const entry of this.sessions.values()) {
+      try { entry.session.dispose(); } catch { /* ignore */ }
     }
     this.sessions.clear();
   }

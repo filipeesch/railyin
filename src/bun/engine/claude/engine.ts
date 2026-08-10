@@ -16,6 +16,7 @@ import type { ShellApprovalScope } from "../../db/repositories/shell-approval-re
 
 
 export class ClaudeEngine implements ExecutionEngine {
+  readonly type = "claude";
   private readonly defaultModel: string | undefined;
   private readonly sdkAdapter: ClaudeSdkAdapter;
   private readonly _onTaskUpdated: OnTaskUpdated;
@@ -49,15 +50,6 @@ export class ClaudeEngine implements ExecutionEngine {
       config.workspace.lsp?.servers ?? [],
       workingDirectory,
     );
-
-    // Collect external MCP server configs from the registry for native Claude pass-through.
-    const mcpRegistry = params.mcpRegistry ?? null;
-    const externalMcpServers = mcpRegistry
-      ? mcpRegistry.getStatus()
-          .filter((s) => s.state === "running")
-          .map((s) => mcpRegistry.getServerConfig(s.name))
-          .filter((c): c is NonNullable<typeof c> => c !== undefined)
-      : undefined;
 
     const shellScope: ShellApprovalScope = taskId != null
       ? { kind: "task", taskId }
@@ -96,6 +88,8 @@ export class ClaudeEngine implements ExecutionEngine {
         runtime: {
           lspManager: lspManager ?? undefined,
           worktreePath: workingDirectory,
+          mcpRegistry: params.mcpRegistry ?? undefined,
+          mcpEnabledTools: params.enabledMcpTools,
         },
       },
       waitForResume: (request) => this.waitForResume(executionId, request, signal),
@@ -111,8 +105,6 @@ export class ClaudeEngine implements ExecutionEngine {
       },
       toolMetaByCallId,
       fileStateCache,
-      externalMcpServers,
-      enabledMcpTools,
       modelParams: params.modelParams,
     };
 

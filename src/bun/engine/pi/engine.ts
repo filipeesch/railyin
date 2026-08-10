@@ -1,5 +1,6 @@
 import type {
   ExecutionEngine,
+  EngineType,
   ExecutionParams,
   EngineEvent,
   EngineModelInfo,
@@ -8,8 +9,9 @@ import type {
   OnTaskUpdated,
   OnNewMessage,
 } from "../types.ts";
-import { resolveSamplingPreset } from "./sampling-params.ts";
-import type { PiEngineConfig } from "../../config/index.ts";
+import type { PiEngineConfig, PiModelConfig } from "../../config/index.ts";
+import type { ModelSettingAxis, ModelParamValue } from "../../../shared/rpc-types.ts";
+import { nativeModelIdFor, resolvePiModelConfig } from "./model-config.ts";
 import type { SlashCommandDialect } from "../dialects/slash-command-dialect.ts";
 import { NullDialect } from "../dialects/null-dialect.ts";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
@@ -38,6 +40,7 @@ import { homedir } from "os";
 // ─── Services ────────────────────────────────────────────────────────────────
 
 import { PiModelBuilder } from "./model-builder.ts";
+import { PiModelConfigApplier } from "./model-config-applier.ts";
 import { PiDialectResolver } from "./dialect-resolver.ts";
 import { PiToolFactory } from "./tool-factory.ts";
 import { PiSessionManager, DefaultSessionPathResolver } from "./session-manager.ts";
@@ -118,11 +121,11 @@ async function defaultSessionFactory(options: SessionFactoryOptions): Promise<Ag
     }),
   });
 
-  session.agent.state.thinkingLevel = "off";
   return session;
 }
 
 export class PiEngine implements ExecutionEngine {
+  readonly type: EngineType = "pi";
   private readonly engineId: string;
   private readonly config: PiEngineConfig;
   private readonly _onTaskUpdated: OnTaskUpdated;
@@ -143,6 +146,8 @@ export class PiEngine implements ExecutionEngine {
   readonly registry: ProviderLimiterRegistry;
   /** Model object builder. */
   readonly modelBuilder: PiModelBuilder;
+  /** Per-model config → session thinking level + request-body merge. */
+  readonly modelConfigApplier: PiModelConfigApplier;
   /** Dialect + project path resolution. */
   readonly dialectResolver: PiDialectResolver;
   /** Tool and harness context management. */
@@ -163,6 +168,7 @@ export class PiEngine implements ExecutionEngine {
     modelSettingsRepo: ModelSettingsRepository,
     sessionFactory: SessionFactory = defaultSessionFactory,
     registry?: ProviderLimiterRegistry,
+    modelConfigApplier?: PiModelConfigApplier,
   ) {
     this.engineId = engineId;
     this.config = config;
@@ -184,6 +190,8 @@ export class PiEngine implements ExecutionEngine {
     for (const [name] of Object.entries(config.providers ?? {})) {
       this.modelBuilder.warnIfLmStudioOverloaded(name);
     }
+
+    this.modelConfigApplier = modelConfigApplier ?? new PiModelConfigApplier();
 
     this.dialectResolver = new PiDialectResolver(dialect);
 
@@ -279,14 +287,23 @@ export class PiEngine implements ExecutionEngine {
       skillResolver,
       suspendRef,
       signal,
+      params.mcpRegistry,
+      params.enabledMcpTools,
     );
 
     const piModel = this.modelBuilder.build(modelOverride, contextWindowOverride);
     const providerName = piModel.provider;
 
-    const session = await this.sessionManager.getOrCreate(conversationId, piModel, tools, enrichedSystem, cwd);
+    const modelStr = modelOverride ?? this.config.model ?? "default";
+    // Resolve the per-model config from the native (engine-stripped) model id so
+    // provider-bearing qualified ids (e.g. pi-local/vllm/deepseek-v4-flash) reach
+    // their config.models key (deepseek-v4-flash). Passing the full qualified id here
+    // drops configured reasoning/variants, defaulting thinking to "off".
+    const modelCfg = resolvePiModelConfig(this.config, nativeModelIdFor(modelStr));
 
-    this._applyPresetToSession(session, samplingPresetName);
+    const session = await this.sessionManager.getOrCreate(conversationId, piModel, tools, enrichedSystem, cwd, modelOverride);
+
+    this._applyModelConfigToSession(session, modelCfg, modelStr, samplingPresetName, params.modelParams);
 
     const harnessCtx = this.toolFactory.getOrCreateHarnessContext(conversationId, cwd, signal);
     harnessCtx.loopDetector.reset();
@@ -303,16 +320,11 @@ export class PiEngine implements ExecutionEngine {
 
     this.executionToConversation.set(executionId, conversationId);
 
-    // Resolve the prompt via the dialect (slash command expansion, file inclusions, etc.)
-    let resolvedPrompt: string;
-    try {
-      const resolved = await this.dialectResolver.resolvePrompt(prompt, cwd, projectPath);
-      resolvedPrompt = resolved.content;
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      yield { type: "error", message: msg, fatal: true };
-      return;
-    }
+    // Slash-command references are resolved upstream by the executor layer's
+    // SlashCommandResolver, BEFORE historyBlock/decisionsBlock/stageInstructionsBlock
+    // are joined into `prompt` — resolving here (on the full composed string) would
+    // fail to match the dialect's leading "/command" pattern.
+    const resolvedPrompt = prompt;
 
     // Start the execution loop. Events are pushed to `queue` by the event subscriber.
     const { queue, state, cleanup } = startExecution({
@@ -417,12 +429,22 @@ export class PiEngine implements ExecutionEngine {
         for (const m of json.data ?? []) {
           if (m.id.includes("embed")) continue;
           const qualifiedId = `${this.engineId}/${providerId}/${m.id}`;
+          const modelCfg = resolvePiModelConfig(this.config, `${providerId}/${m.id}`)
+            ?? resolvePiModelConfig(this.config, m.id);
+          const settings = this._buildSettings(modelCfg);
+          const presetNames = modelCfg?.sampling_presets ? Object.keys(modelCfg.sampling_presets) : [];
+          const availablePresets = presetNames.map((name) => ({
+            name,
+            params: modelCfg!.sampling_presets![name],
+          }));
           results.push({
             qualifiedId,
-            displayName: m.id,
+            displayName: modelCfg?.name ?? m.id,
             contextWindow: m.context_length ?? undefined,
             contextWindowEditable: true,
             supportsManualCompact: true,
+            ...(settings.length > 0 ? { settings } : {}),
+            ...(availablePresets.length > 0 ? { availablePresets } : {}),
           });
         }
       } catch (err) {
@@ -470,6 +492,16 @@ export class PiEngine implements ExecutionEngine {
 
   async compact(_taskId: number | null, conversationId: number, workingDirectory: string, workspaceKey: string): Promise<void> {
     let session = this.sessionManager.get(conversationId);
+    // Track whether we had to spin up a session just for this compaction call
+    // (no live session was in memory). Such a session is built with an empty
+    // `tools` list — the SDK's AgentSession registers custom tool implementations
+    // once, at construction, from that list. Reusing this session later would
+    // permanently limit it to SDK built-ins (read/grep/find/ls) even though a
+    // full `tools` array is passed on every subsequent turn, because
+    // `setActiveToolsByName()` can only activate tools already in the registry.
+    // We therefore dispose it once compaction finishes so the next real
+    // execution builds a fresh session with the full tool set.
+    const isShadowSession = !session;
     if (!session) {
       const db = getDb();
       const row = db
@@ -489,6 +521,7 @@ export class PiEngine implements ExecutionEngine {
         [],
         undefined,
         workingDirectory,
+        conversationModel,
       );
     }
 
@@ -505,6 +538,10 @@ export class PiEngine implements ExecutionEngine {
     } catch (err) {
       console.error(`[pi] compact(): session.compact() failed for conversation ${conversationId}:`, err);
       throw err;
+    } finally {
+      if (isShadowSession) {
+        this.sessionManager.dispose(conversationId);
+      }
     }
   }
 
@@ -531,15 +568,25 @@ export class PiEngine implements ExecutionEngine {
   }
 
   /**
-   * Sets or clears `session.agent.onPayload` for the current execution.
+   * Builds the normalized `ModelSettingAxis[]` for a Pi model: a "Mode" axis from
+   * `variants` when present, plus any explicit `axes` declared in config.
    */
-  _applyPresetToSession(session: AgentSession, presetName: string | undefined): void {
-    const resolved = resolveSamplingPreset(presetName, this.config);
-    if (resolved !== undefined) {
-      session.agent.onPayload = (payload: unknown) => ({ ...(payload as Record<string, unknown>), ...resolved });
-    } else {
-      session.agent.onPayload = undefined;
-    }
+  _buildSettings(modelCfg: PiModelConfig | undefined): ModelSettingAxis[] {
+    return this.modelConfigApplier.buildSettings(modelCfg);
+  }
+
+  /**
+   * Applies the per-model config to `session.agent` for the current execution.
+   * Delegates to the injectable PiModelConfigApplier service.
+   */
+  _applyModelConfigToSession(
+    session: AgentSession,
+    modelCfg: PiModelConfig | undefined,
+    modelStr: string,
+    presetName: string | undefined,
+    modelParams: ModelParamValue[] | undefined,
+  ): void {
+    this.modelConfigApplier.applyToSession(session, modelCfg, modelStr, presetName, modelParams);
   }
 
   // ─── Compatibility shims for tests that access private state via `as any` ───
@@ -560,7 +607,8 @@ export class PiEngine implements ExecutionEngine {
     tools: ReturnType<typeof buildAllTools>,
     systemPrompt: string | undefined,
     cwd: string,
+    qualifiedModelId: string,
   ) {
-    return this.sessionManager.getOrCreate(conversationId, model, tools, systemPrompt, cwd);
+    return this.sessionManager.getOrCreate(conversationId, model, tools, systemPrompt, cwd, qualifiedModelId);
   }
 }

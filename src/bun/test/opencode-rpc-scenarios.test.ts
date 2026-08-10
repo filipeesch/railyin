@@ -2,9 +2,13 @@ import { afterEach, describe, expect, it } from "vitest";
 import { OpenCodeEngine } from "../engine/opencode/engine.ts";
 import type { BackendRpcRuntime } from "./support/backend-rpc-runtime.ts";
 import { createBackendRpcRuntime } from "./support/backend-rpc-runtime.ts";
+import { McpRegistryPool } from "../mcp/registry-pool.ts";
+import { McpClientRegistry } from "../mcp/registry.ts";
+import { FakeMcpClient } from "./support/fake-mcp-client.ts";
 import {
   MockOpenCodeSdkAdapter,
   askUser,
+  callTool,
   done,
   fatal,
   reasoning,
@@ -20,6 +24,7 @@ import {
   runAskUserResumeScenario,
   runCancellationScenario,
   runFatalFailureScenario,
+  runMcpDiscoveryScenario,
   runModelListingScenario,
   runMultiTurnChatScenario,
   runSingleTurnChatScenario,
@@ -35,13 +40,14 @@ const QUALIFIED_MODEL: import("../engine/types.ts").EngineModelInfo = {
 
 const runtimes: BackendRpcRuntime[] = [];
 
-function createOpenCodeRuntime(adapter: MockOpenCodeSdkAdapter): BackendRpcRuntime {
+function createOpenCodeRuntime(adapter: MockOpenCodeSdkAdapter, registryPool?: McpRegistryPool): BackendRpcRuntime {
   adapter.setModels([QUALIFIED_MODEL]);
 
   const runtime = createBackendRpcRuntime({
     taskModel: TASK_MODEL,
     createEngine: ({ onTaskUpdated, onNewMessage }) =>
       new OpenCodeEngine(onTaskUpdated, onNewMessage, adapter),
+    registryPool,
   });
   runtimes.push(runtime);
   return runtime;
@@ -264,5 +270,35 @@ describe("OpenCode session lifecycle", () => {
     await runtime.waitForExecutionStatus(result.executionId, "failed");
 
     expect(adapter.activeContexts.size).toBe(0);
+  });
+});
+
+describe("OpenCode — MCP discovery tools (dynamic-mcp-discovery)", () => {
+  it("covers list_mcp_servers → list_mcp_tools → invoke_mcp_tool via the shared scenario", async () => {
+    const registry = new McpClientRegistry(
+      { servers: [{ name: "alpha", transport: { type: "stdio", command: "alpha-cmd" } }] },
+      {
+        clientFactory: () =>
+          new FakeMcpClient({
+            tools: [{ name: "echo", description: "echoes input", inputSchema: { type: "object" } }],
+            callToolResult: "echoed!",
+          }),
+      },
+    );
+    await registry.startAll();
+    const registryPool = new McpRegistryPool(() => registry);
+
+    const adapter = new MockOpenCodeSdkAdapter();
+    adapter.queueCreate({
+      steps: [
+        callTool("list_mcp_servers", {}),
+        callTool("list_mcp_tools", { server: "alpha" }),
+        callTool("invoke_mcp_tool", { server: "alpha", tool: "echo", arguments: {} }),
+        done(),
+      ],
+    });
+    const runtime = createOpenCodeRuntime(adapter, registryPool);
+
+    await runMcpDiscoveryScenario(runtime);
   });
 });

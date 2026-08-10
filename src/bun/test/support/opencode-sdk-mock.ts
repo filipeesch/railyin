@@ -1,11 +1,13 @@
 import type { EngineEvent, EngineModelInfo, CommandInfo } from "../../engine/types.ts";
 import type { OpenCodeSdkAdapter, OpenCodeRunParams } from "../../engine/opencode/types.ts";
+import { executeCommonTool } from "../../engine/common-tools.ts";
 
 type MockTurnStep =
   | { kind: "emit"; event: EngineEvent }
   | { kind: "shell_approval"; command: string }
   | { kind: "ask_user"; payload: string }
-  | { kind: "waitForAbort" };
+  | { kind: "waitForAbort" }
+  | { kind: "callTool"; toolName: string; args: unknown };
 
 export interface MockOpenCodeTurnScript {
   steps: MockTurnStep[];
@@ -130,6 +132,14 @@ export class MockOpenCodeSdkAdapter implements OpenCodeSdkAdapter {
               abortWaiters.push(resolve);
             });
             return;
+
+          case "callTool": {
+            const callId = `call_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+            yield { type: "tool_start", name: step.toolName, arguments: JSON.stringify(step.args), callId };
+            const result = await executeCommonTool(step.toolName, step.args as Record<string, unknown>, params.commonToolContext);
+            yield { type: "tool_result", name: step.toolName, result: result.text, callId, isError: false };
+            break;
+          }
         }
       }
     } finally {
@@ -224,4 +234,8 @@ export function fatal(message: string): MockTurnStep {
 
 export function waitForAbort(): MockTurnStep {
   return { kind: "waitForAbort" };
+}
+
+export function callTool(toolName: string, args: unknown = {}): MockTurnStep {
+  return { kind: "callTool", toolName, args };
 }

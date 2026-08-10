@@ -5,7 +5,14 @@ import type { IWorkingDirectoryResolver } from "../engine/execution/working-dire
 import type { ExecutionEngine, ExecutionParams, EngineEvent, EngineResumeInput, RawModelMessage } from "../engine/types.ts";
 
 export class TestEngine implements ExecutionEngine {
-  constructor(private readonly throwOnResume = false) {}
+  readonly type: "scripted" | "copilot" | "claude" | "pi";
+
+  constructor(
+    private readonly throwOnResume = false,
+    type: "scripted" | "copilot" | "claude" | "pi" = "scripted",
+  ) {
+    this.type = type;
+  }
 
   async *execute(_params: ExecutionParams): AsyncIterable<EngineEvent> {
     yield { type: "done" };

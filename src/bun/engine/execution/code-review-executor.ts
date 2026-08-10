@@ -17,8 +17,8 @@ import type { IWorkspaceRepository } from "../../db/workspace-repository.ts";
 import type { IBoardToolExecutor } from "../../workflow/tools/board-tool-executor.ts";
 import type { ModelSettingsRepository } from "../../db/repositories/model-settings-repository.ts";
 import { QualifiedModelId } from "../qualified-model-id";
-import { SystemPromptAssembler } from "./system-prompt-assembler.ts";
-import { CustomPromptInjector, type PromptFilterContext } from "./custom-prompt-injector.ts";
+import { PromptAssemblyService } from "./prompt-assembly-service.ts";
+import type { PromptFilterContext } from "./custom-prompt-injector.ts";
 
 type DecisionRow = {
   hunk_hash: string;
@@ -53,7 +53,7 @@ export class CodeReviewExecutor {
     private readonly onNewMessage: OnNewMessage,
     private readonly wsRepo: IWorkspaceRepository,
     private readonly boardTools: IBoardToolExecutor,
-    private readonly customPromptInjector: CustomPromptInjector,
+    private readonly promptAssemblyService: PromptAssemblyService,
     private readonly modelSettingsRepo?: ModelSettingsRepository,
   ) {}
 
@@ -166,23 +166,30 @@ export class CodeReviewExecutor {
 
     const signal = this.streamProcessor.createSignal(executionId);
 
-    // Build system instructions with custom prompt injection
-    const assembler = SystemPromptAssembler.fromConfig(config, task.board_id, task.workflow_state);
+    // Build system instructions + stageInstructionsBlock via the shared collaborator
     const promptFilter: PromptFilterContext = {
       modelId: conversationModel ?? "",
       engineId: QualifiedModelId.tryParse(conversationModel)?.engineId ?? config.engines[0]?.id ?? "copilot",
       executionType: "task",
       projectPath: this.workdirResolver.resolve(task),
     };
-    assembler.addCustomPrompts(this.customPromptInjector, promptFilter);
-    const systemInstructions = assembler.assemble();
+    const { systemInstructions, stageInstructionsBlock } = this.promptAssemblyService.assemble({
+      config,
+      boardId: task.board_id,
+      columnId: task.workflow_state,
+      conversationId,
+      promptFilter,
+      isTransition: false,
+    });
+
+    const reviewContent = [stageInstructionsBlock, reviewText].filter(Boolean).join("\n\n");
 
     const execParams = {
       ...this.paramsBuilder.build(
         task,
         conversationId,
         executionId,
-        reviewText,
+        reviewContent,
         systemInstructions,
         this.workdirResolver.resolve(task),
         signal,
