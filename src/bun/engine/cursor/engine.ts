@@ -22,7 +22,9 @@ import { getConfig } from "../../config/index.ts";
 import { TodoRepository } from "../../db/todos.ts";
 import { DecisionRepository } from "../../db/repositories/decision-repository.ts";
 import { NoteRepository } from "../../db/repositories/note-repository.ts";
-import type { Task } from "../../../shared/rpc-types.ts";
+import type { Task } from "../../../shared/rpc-types.ts";import { getDb } from "../../db/index.ts";
+import { getDefaultWorkspaceKey } from "../../workspace-context.ts";
+import { getLoadedProjectByKey } from "../../project-store.ts";
 
 export { createDefaultCursorSdkAdapter };
 
@@ -81,10 +83,6 @@ export class CursorEngine implements ExecutionEngine {
   }
 
   async listCommands(taskId: number): Promise<CommandInfo[]> {
-    const { getDb } = await import("../../db/index.ts");
-    const { getDefaultWorkspaceKey } = await import("../../workspace-context.ts");
-    const { getLoadedProjectByKey } = await import("../../project-store.ts");
-
     const db = getDb();
     const taskRow = db
       .query<{ board_id: number; project_key: string }, [number]>(
@@ -229,8 +227,38 @@ export class CursorEngine implements ExecutionEngine {
     // composed string) would fail to match the dialect's leading "/command" pattern.
     const effectivePrompt = prompt;
 
+    // Resolve projectPath from DB for skill loading
+    let projectPath: string | undefined;
+    if (taskId != null) {
+      const db = getDb();
+      const taskRow = db
+        .query<{ board_id: number; project_key: string }, [number]>(
+          "SELECT board_id, project_key FROM tasks WHERE id = ?",
+        )
+        .get(taskId);
+
+      const gitRow = db
+        .query<{ worktree_path: string | null }, [number]>(
+          "SELECT worktree_path FROM task_git_context WHERE task_id = ?",
+        )
+        .get(taskId);
+
+      const worktreePath = gitRow?.worktree_path ?? workingDirectory;
+
+      if (taskRow) {
+        const wsKey =
+          db.query<{ workspace_key: string }, [number]>(
+            "SELECT workspace_key FROM boards WHERE id = ?",
+          ).get(taskRow.board_id)?.workspace_key ?? getDefaultWorkspaceKey();
+        const project = getLoadedProjectByKey(wsKey, taskRow.project_key);
+        if (project?.projectPath && project.projectPath !== worktreePath) {
+          projectPath = project.projectPath;
+        }
+      }
+    }
+
     // Read skill SKILL.md files and prepend to system instructions
-    const skillPaths = this.dialect.getSkillPaths(workingDirectory);
+    const skillPaths = this.dialect.getSkillPaths(workingDirectory, projectPath);
     const skillBlocks: string[] = [];
     for (const skillDir of skillPaths) {
       if (!existsSync(skillDir)) continue;

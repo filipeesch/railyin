@@ -293,6 +293,68 @@ At the beginning of each `createManagedExecution()` invocation, the Pi engine SH
 - **DL-16** Child loop triggers block — `MockChildSession` configured with a 3-call sequence for same fingerprint; verify the digest for that job contains the blocked-call error message
 - **DL-17** Independent detectors per child job — job-A triggers its detector; job-B with same tool calls is clean; job-B's digest is normal
 - **DL-18** No cross-job detector sharing — job-1 records 2 calls, job-2 records 2 calls for the same fingerprint; neither triggers (count is 2 in each isolated detector)
+
+### Requirement: PiDialectResolver provides getInstructions() method
+The system SHALL add a `getInstructions(cwd: string, gitWorktreeRootPath: string): Instruction[]` method to `PiDialectResolver`. The method SHALL scan instruction files based on the configured dialect convention. The method SHALL return an `Instruction[]` array with files from both project root (cwd) and worktree root (if different).
+
+#### Scenario: Copilot dialect scans .github/instructions/
+- **WHEN** `PiDialectResolver` is configured with `CopilotDialect`
+- **AND** `getInstructions(cwd, gitWorktreeRootPath)` is called
+- **THEN** it scans `<cwd>/.github/instructions/` and `<gitWorktreeRootPath>/.github/instructions/`
+- **AND** returns `Instruction[]` with parsed frontmatter from `.md` files
+- **AND** projectPath (cwd) files have higher priority (deduplicated by name)
+
+#### Scenario: Cursor dialect scans .cursor/rules/
+- **WHEN** `PiDialectResolver` is configured with `CursorDialect`
+- **AND** `getInstructions(cwd, gitWorktreeRootPath)` is called
+- **THEN** it scans `<cwd>/.cursor/rules/` and `<gitWorktreeRootPath>/.cursor/rules/`
+- **AND** returns `Instruction[]` with parsed frontmatter from `.mdc` and `.md` files
+- **AND** projectPath (cwd) files have higher priority (deduplicated by name)
+
+#### Scenario: Unknown dialect returns empty array
+- **WHEN** `PiDialectResolver` is configured with an unknown dialect (e.g., `NullDialect`)
+- **AND** `getInstructions(cwd, gitWorktreeRootPath)` is called
+- **THEN** it returns `[]`
+- **AND** no error is thrown
+
+#### Scenario: Files without frontmatter are skipped
+- **WHEN** a file in the instruction directory has no YAML frontmatter
+- **THEN** the file is silently skipped
+- **AND** not included in the returned `Instruction[]`
+
+#### Scenario: autoApply includes full content
+- **WHEN** a file has `autoApply: true` in frontmatter
+- **THEN** the returned `Instruction` includes `content` with the full file body
+- **AND** no size limit is applied
+
+### Requirement: PiEngine injects instruction blocks into system prompt
+The system SHALL resolve `projectPath` via `lookupProjectPath()` and call `this.dialectResolver.getInstructions(projectPath ?? cwd, cwd)` in `PiEngine.createManagedExecution()` — the first argument (cwd) is ALWAYS the projectPath, the second is the git worktree root. The results SHALL be formatted as markdown blocks and appended to the `enrichedSystem` before passing to the session manager.
+
+#### Scenario: Instructions injected into system prompt
+- **WHEN** `getInstructions()` returns non-empty `Instruction[]`
+- **THEN** each instruction is formatted as a markdown block (e.g., `### conventions\n\n**Project conventions**\n\ncontent`)
+- **AND** blocks are joined with double newlines
+- **AND** appended to `enrichedSystem` between taskBlock and systemInstructions
+- **AND** the session is created with the enriched system prompt
+
+#### Scenario: Project-root instructions scanned in monorepo setups
+- **WHEN** a task's `projectPath` differs from the git worktree root
+- **AND** instruction files exist only at `<projectPath>/<convention>/`
+- **THEN** the instructions are scanned and injected (the worktree root is NOT passed as `cwd`)
+- **AND** projectPath files have higher priority (deduplicated by name)
+
+#### Scenario: No instructions found
+- **WHEN** `getInstructions()` returns empty `[]`
+- **THEN** no instruction blocks are added to `enrichedSystem`
+- **AND** the system prompt is constructed normally
+
+### Requirement: PiEngine logs instruction loading
+The system SHALL log a structured JSON line when instruction files are loaded by the Pi engine. The log SHALL include event type, engine name, count of instructions loaded, and file paths.
+
+#### Scenario: Instructions loaded log emitted
+- **WHEN** instruction files are found and parsed
+- **THEN** a JSON log line is emitted with format: `{"event": "instructions_loaded", "engine": "pi", "count": N, "files": ["path1", "path2"]}`
+
 ### Requirement: Per-model reasoning config wired into the SDK model
 The Pi model builder SHALL read per-model config when constructing the `@earendil-works/pi-ai` SDK `Model`: `reasoning` (default `true`) maps to `model.reasoning`; `thinkingFormat` (renamed from `interleaved`) maps to `model.compat.thinkingFormat` when set; when `thinkingFormat` is `"deepseek"`, `model.compat.requiresReasoningContentOnAssistantMessages` SHALL be set to `true`. When `thinkingFormat` is `"openrouter"` **and** the model's native id contains `deepseek` (case-insensitive), `model.compat.requiresReasoningContentOnAssistantMessages` SHALL also be set to `true`. The builder SHALL NOT hardcode `model.reasoning = true` regardless of config.
 
@@ -369,4 +431,3 @@ The variant node name is an opaque key (the Mode axis value); the user provides 
 #### Scenario: reasoning_effort is not stripped from options
 - **WHEN** a variant's `options` contains `reasoning_effort` (e.g. `"max"`)
 - **THEN** `onPayload` preserves `reasoning_effort` in the merged request body (it is no longer deleted)
-

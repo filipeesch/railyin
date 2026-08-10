@@ -71,6 +71,10 @@ function collectFromDir(dir: string, seen: Set<string>, out: CommandInfo[]): voi
  *     `<command name="stem" args="input">\n…body…\n</command>`
  */
 export class CopilotDialect implements SlashCommandDialect {
+  getDialectName(): string {
+    return "copilot";
+  }
+
   listCommands(worktreePath: string, projectPath?: string): CommandInfo[] {
     const seen = new Set<string>();
     const commands: CommandInfo[] = [];

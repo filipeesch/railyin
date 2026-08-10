@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import { cursorAgentIdForConversation, CursorEngine } from "@bun/engine/cursor/engine";
 import { MockCursorSdkAdapter, token } from "./mocks";
 import { createCursorRpcRuntime } from "@bun/test/support/cursor-rpc-runtime";
@@ -8,6 +8,8 @@ import { CursorDialect } from "@bun/engine/dialects/cursor-dialect";
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
+import { initDb, seedProjectAndTask, setupTestConfig } from "../helpers.ts";
+import type { Database } from "bun:sqlite";
 
 describe("CursorEngine — deterministic agentId forwarding (§6.5.1)", () => {
     it("forwards cursorAgentIdForConversation(taskId, conversationId) as runConfig.agentId on every run", async () => {
@@ -77,7 +79,13 @@ describe("cursorAgentIdForConversation — determinism (§6.5.1 supporting)", ()
 class SpyDialect implements SlashCommandDialect {
   resolvePromptCalls: { value: string; worktreePath: string; projectPath?: string }[] = [];
   listCommandsCalls: { worktreePath: string; projectPath?: string }[] = [];
+  getSkillPathsCalls: { worktreePath: string; projectPath?: string }[] = [];
   skillPathsResult: string[] = [];
+  dialectName = "none";
+
+  getDialectName(): string {
+    return this.dialectName;
+  }
 
   async resolvePrompt(value: string, worktreePath: string, projectPath?: string): Promise<ResolvedPrompt> {
     this.resolvePromptCalls.push({ value, worktreePath, projectPath });
@@ -89,7 +97,8 @@ class SpyDialect implements SlashCommandDialect {
     return [];
   }
 
-  getSkillPaths(_worktreePath: string, _projectPath?: string): string[] {
+  getSkillPaths(worktreePath: string, projectPath?: string): string[] {
+    this.getSkillPathsCalls.push({ worktreePath, projectPath });
     return this.skillPathsResult;
   }
 }
@@ -248,6 +257,86 @@ describe("CursorEngine dialect injection", () => {
     const sentPrompt = adapter.trace.runConfigs[0]!.prompt;
     expect(sentPrompt).not.toContain("## Skill:");
     expect(sentPrompt).toContain("hello world");
+  });
+});
+
+// ─── CursorEngine getSkillPaths projectPath bug fix ──────────────────────────
+
+describe("CursorEngine getSkillPaths — projectPath resolution (§5.1-5.2)", () => {
+  let db: Database;
+  let configCleanup: () => void;
+  let worktreeDir: string;
+
+  beforeEach(() => {
+    const cfg = setupTestConfig();
+    configCleanup = cfg.cleanup;
+    db = initDb();
+    worktreeDir = mkdtempSync(join(tmpdir(), "cursor-wt-"));
+  });
+
+  afterEach(() => {
+    configCleanup();
+    rmSync(worktreeDir, { recursive: true, force: true });
+  });
+
+  it("resolves projectPath from DB and passes it to getSkillPaths (monorepo)", async () => {
+    // Seed a task whose project (registered by setupTestConfig at
+    // <configDir>/workspace/test-project) differs from the worktree path.
+    const seed = seedProjectAndTask(db, "/test-git");
+    db.run(
+      "INSERT INTO task_git_context (task_id, git_root_path, worktree_path, worktree_status) VALUES (?, ?, ?, 'ready')",
+      [seed.taskId, "/test-git", worktreeDir],
+    );
+
+    const spy = new SpyDialect();
+    const adapter = new MockCursorSdkAdapter().queueTurn({ steps: [token("done")] });
+    const engine = new CursorEngine(() => {}, () => {}, adapter, spy);
+
+    const gen = engine.execute({
+      executionId: 1,
+      taskId: seed.taskId,
+      boardId: seed.boardId,
+      conversationId: seed.conversationId,
+      model: "cursor/mock-model",
+      workingDirectory: worktreeDir,
+      prompt: "do something",
+      signal: new AbortController().signal,
+      boardTools: {} as any,
+    });
+    for await (const _ of gen) {}
+
+    // The fix must resolve the projectPath and pass it as the 2nd argument.
+    expect(spy.getSkillPathsCalls.length).toBeGreaterThan(0);
+    const call = spy.getSkillPathsCalls[0];
+    expect(call.worktreePath).toBe(worktreeDir);
+    expect(call.projectPath).toBeDefined();
+    expect(call.projectPath).not.toBe(worktreeDir);
+    // The configured project lives at <configDir>/workspace/test-project.
+    expect(call.projectPath!.endsWith("test-project")).toBe(true);
+  });
+
+  it("calls getSkillPaths with undefined projectPath when no task project configured", async () => {
+    const spy = new SpyDialect();
+    const adapter = new MockCursorSdkAdapter().queueTurn({ steps: [token("done")] });
+    const engine = new CursorEngine(() => {}, () => {}, adapter, spy);
+
+    const gen = engine.execute({
+      executionId: 1,
+      taskId: null,
+      boardId: undefined,
+      conversationId: 101,
+      model: "cursor/mock-model",
+      workingDirectory: worktreeDir,
+      prompt: "do something",
+      signal: new AbortController().signal,
+      boardTools: {} as any,
+    });
+    for await (const _ of gen) {}
+
+    expect(spy.getSkillPathsCalls.length).toBeGreaterThan(0);
+    const call = spy.getSkillPathsCalls[0];
+    expect(call.worktreePath).toBe(worktreeDir);
+    expect(call.projectPath).toBeUndefined();
   });
 });
 

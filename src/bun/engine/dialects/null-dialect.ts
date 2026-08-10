@@ -9,6 +9,10 @@ import type { ResolvedPrompt, SlashCommandDialect } from "./slash-command-dialec
  * `resolvePrompt` returns the value unchanged with `wasSlash: false`.
  */
 export class NullDialect implements SlashCommandDialect {
+  getDialectName(): string {
+    return "none";
+  }
+
   listCommands(_worktreePath: string, _projectPath?: string): CommandInfo[] {
     return [];
   }

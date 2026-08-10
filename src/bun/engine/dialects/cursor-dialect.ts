@@ -46,6 +46,10 @@ function collectFromDir(dir: string, prefix: string, seen: Set<string>, out: Com
 }
 
 export class CursorDialect implements SlashCommandDialect {
+  getDialectName(): string {
+    return "cursor";
+  }
+
   listCommands(worktreePath: string, projectPath?: string): CommandInfo[] {
     const seen = new Set<string>();
     const commands: CommandInfo[] = [];

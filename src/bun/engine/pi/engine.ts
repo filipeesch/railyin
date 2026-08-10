@@ -47,6 +47,7 @@ import { PiSessionManager, DefaultSessionPathResolver } from "./session-manager.
 import { DefaultRunDriver } from "./run-driver.ts";
 import { PiCompactionCoordinator, DefaultMessageAppender } from "./compaction-coordinator.ts";
 import { startExecution } from "./execution-controller.ts";
+import { formatInstructionBlocks } from "./instruction-formatter.ts";
 
 /** Options passed to a SessionFactory when creating a new Pi agent session. */
 export interface SessionFactoryOptions {
@@ -254,13 +255,21 @@ export class PiEngine implements ExecutionEngine {
           ...(taskContext.description ? [`**Description:** ${taskContext.description}`] : []),
         ].join("\n")
       : undefined;
-    const enrichedSystem = [taskBlock, systemInstructions].filter(Boolean).join("\n\n") || undefined;
 
     const cwd = workingDirectory ?? process.cwd();
 
+    // Resolve projectPath (monorepo root) BEFORE scanning instructions — cwd is
+    // ALWAYS the projectPath for getInstructions(); passing the worktree root as
+    // cwd would silently skip project-root instruction files in monorepo setups.
     const projectPath = boardId != null && taskId != null
       ? await this.dialectResolver.lookupProjectPath(taskId, boardId, cwd)
       : undefined;
+
+    // Scan instruction files based on dialect convention
+    const instructions = this.dialectResolver.getInstructions(projectPath ?? cwd, cwd);
+    const instructionBlocks = formatInstructionBlocks(instructions);
+
+    const enrichedSystem = [taskBlock, instructionBlocks, systemInstructions].filter(Boolean).join("\n\n") || undefined;
 
     const skillResolver = this.dialectResolver.getSkillResolver(cwd, projectPath);
     const suspendRef = this.getOrCreateSuspendRef(conversationId);
