@@ -34,7 +34,7 @@ The system SHALL add a `getInstructions(cwd: string, gitWorktreeRootPath: string
 - **AND** no size limit is applied
 
 ### Requirement: PiEngine injects instruction blocks into system prompt
-The system SHALL call `this.dialectResolver.getInstructions(cwd, workingDirectory)` in `PiEngine.createManagedExecution()` and format the results as markdown blocks. The instruction blocks SHALL be appended to the `enrichedSystem` before passing to the session manager.
+The system SHALL resolve `projectPath` via `lookupProjectPath()` and call `this.dialectResolver.getInstructions(projectPath ?? cwd, cwd)` in `PiEngine.createManagedExecution()` — the first argument (cwd) is ALWAYS the projectPath, the second is the git worktree root. The results SHALL be formatted as markdown blocks and appended to the `enrichedSystem` before passing to the session manager.
 
 #### Scenario: Instructions injected into system prompt
 - **WHEN** `getInstructions()` returns non-empty `Instruction[]`
@@ -42,6 +42,12 @@ The system SHALL call `this.dialectResolver.getInstructions(cwd, workingDirector
 - **AND** blocks are joined with double newlines
 - **AND** appended to `enrichedSystem` between taskBlock and systemInstructions
 - **AND** the session is created with the enriched system prompt
+
+#### Scenario: Project-root instructions scanned in monorepo setups
+- **WHEN** a task's `projectPath` differs from the git worktree root
+- **AND** instruction files exist only at `<projectPath>/<convention>/`
+- **THEN** the instructions are scanned and injected (the worktree root is NOT passed as `cwd`)
+- **AND** projectPath files have higher priority (deduplicated by name)
 
 #### Scenario: No instructions found
 - **WHEN** `getInstructions()` returns empty `[]`
