@@ -10,8 +10,11 @@
 
 engines:
   # GitHub Copilot — uses the GitHub Copilot SDK (requires Copilot auth)
+  # The `name` field is optional and provides a human-readable display label.
+  # When omitted, the UI falls back to the engine type (e.g. "copilot" → "GitHub Copilot").
   - id: copilot
     type: copilot
+    name: "GitHub Copilot"
 
   # Claude — uses the Claude Agent SDK / Claude Code environment (requires Claude Code auth)
   - id: claude

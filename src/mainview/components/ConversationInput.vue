@@ -522,6 +522,15 @@ watch(editingId, (id) => {
 const mcpHasWarning = computed(() => mcpStatuses.value.some((status) => status.state === "error"));
 
 const groupedModels = computed(() => {
+  // Build engine name lookup from availableEngines
+  const engineNames = new Map<string, string>();
+  const availableEngines = workspaceStore.config?.availableEngines;
+  if (availableEngines) {
+    for (const eng of availableEngines) {
+      engineNames.set(eng.id, eng.name ?? eng.id);
+    }
+  }
+
   const groups: Record<string, Array<{ id: string | null; label: string; description?: string; contextWindow: number | null }>> = {};
   for (const model of workspaceStore.availableModels) {
     const engineId = model.engineId ?? (model.id != null ? model.id.split("/")[0] : "copilot");
@@ -536,7 +545,7 @@ const groupedModels = computed(() => {
   const engineCount = Object.keys(groups).length;
   // Only show engine group headers when there are multiple engines configured
   return Object.entries(groups).map(([engineId, items]) => ({
-    label: engineCount > 1 ? engineId : "",
+    label: engineCount > 1 ? (engineNames.get(engineId) ?? engineId) : "",
     items,
   }));
 });
