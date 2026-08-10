@@ -382,8 +382,8 @@ const ENGINE_LABELS: Record<string, string> = {
   opencode: "OpenCode",
   pi: "Pi",
 };
-function engineLabel(engine: { id: string; type: string }): string {
-  return ENGINE_LABELS[engine.type] ?? engine.id;
+function engineLabel(engine: { id: string; type: string; name?: string }): string {
+  return engine.name ?? ENGINE_LABELS[engine.type] ?? engine.id;
 }
 
 const modelsLoading = ref(false);

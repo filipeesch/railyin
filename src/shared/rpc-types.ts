@@ -516,7 +516,7 @@ export interface WorkspaceConfig {
   /** Default model for this workspace in `<engineId>/<modelId>` format. Null when unset. */
   defaultModel: string | null;
   /** All engine instances available in this installation (from engines.yaml or fallback). */
-  availableEngines: { id: string; type: string }[];
+  availableEngines: { id: string; type: string; name?: string }[];
   /** Engine IDs allowed in this workspace. Empty means all available engines are allowed. */
   allowedEngines: string[];
   /** Configured LSP servers for this workspace. */

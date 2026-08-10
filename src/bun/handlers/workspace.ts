@@ -45,7 +45,7 @@ export function workspaceHandlers(db: Database) {
         },
         worktreeBasePath: config.workspace.worktree_base_path ?? "",
         defaultModel: config.defaultModel,
-        availableEngines: config.engines.map((e) => ({ id: e.id, type: e.config.type })),
+        availableEngines: config.engines.map((e) => ({ id: e.id, type: e.config.type, name: e.name })),
         allowedEngines: config.allowedEngineIds ?? allEngineIds,
         lsp: config.workspace.lsp,
         shellAutoApprove: config.workspace.shell_auto_approve ?? false,

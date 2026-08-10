@@ -266,6 +266,8 @@ export type EngineConfig = CopilotEngineConfig | ClaudeEngineConfig | ScriptedEn
 export interface EngineEntry {
   /** Unique identifier for this engine — equals the engine type in v1. */
   id: string;
+  /** Optional human-readable display name for this engine. */
+  name?: string;
   /** Merged engine configuration (type + model + any provider-specific fields). */
   config: EngineConfig;
 }
@@ -621,6 +623,8 @@ projects: []
 interface RawEngineYamlEntry {
   id: string;
   type: string;
+  /** Optional human-readable display name for this engine. */
+  name?: string;
   model?: string;
   providers?: Record<string, OpenCodeProviderConfig>;
   [key: string]: unknown;
@@ -660,8 +664,8 @@ export function loadEnginesConfig(configDir: string): EngineEntry[] | null {
       console.warn("[config] engines.yaml entry missing 'id' or 'type' — skipping:", entry);
       continue;
     }
-    const { id, ...rest } = entry;
-    entries.push({ id, config: rest as EngineConfig });
+    const { id, name, ...rest } = entry;
+    entries.push({ id, name, config: rest as EngineConfig });
   }
 
   if (entries.length === 0) {
