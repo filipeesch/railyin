@@ -80,10 +80,6 @@ export class CursorEngine implements ExecutionEngine {
   }
 
   async listCommands(taskId: number): Promise<CommandInfo[]> {
-    const { getDb } = await import("../../db/index.ts");
-    const { getDefaultWorkspaceKey } = await import("../../workspace-context.ts");
-    const { getLoadedProjectByKey } = await import("../../project-store.ts");
-
     const db = getDb();
     const taskRow = db
       .query<{ board_id: number; project_key: string }, [number]>(

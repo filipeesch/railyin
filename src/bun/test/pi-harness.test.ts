@@ -210,6 +210,11 @@ describe("AsyncQueue", () => {
 class SpyDialect implements SlashCommandDialect {
   resolvePromptCalls: { value: string; worktreePath: string; projectPath?: string }[] = [];
   listCommandsCalls: { worktreePath: string; projectPath?: string }[] = [];
+  dialectName = "none";
+
+  getDialectName(): string {
+    return this.dialectName;
+  }
 
   async resolvePrompt(value: string, worktreePath: string, projectPath?: string): Promise<ResolvedPrompt> {
     this.resolvePromptCalls.push({ value, worktreePath, projectPath });

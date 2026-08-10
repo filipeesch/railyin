@@ -234,6 +234,7 @@ describe("CursorEngine.listCommands — path resolution", () => {
 
     const dialectCalls: { worktreePath: string; projectPath?: string }[] = [];
     const spyDialect = {
+      getDialectName: () => "cursor",
       listCommands: (wt: string, pp?: string) => { dialectCalls.push({ worktreePath: wt, projectPath: pp }); return []; },
       resolvePrompt: async (v: string) => ({ content: v, wasSlash: false }),
       getSkillPaths: () => [],
@@ -253,6 +254,7 @@ describe("CursorEngine.listCommands — path resolution", () => {
 
     const dialectCalls: { worktreePath: string; projectPath?: string }[] = [];
     const spyDialect = {
+      getDialectName: () => "cursor",
       listCommands: (wt: string, pp?: string) => { dialectCalls.push({ worktreePath: wt, projectPath: pp }); return []; },
       resolvePrompt: async (v: string) => ({ content: v, wasSlash: false }),
       getSkillPaths: () => [],
@@ -268,6 +270,7 @@ describe("CursorEngine.listCommands — path resolution", () => {
 
   it("returns empty array when task row does not exist", async () => {
     const spyDialect = {
+      getDialectName: () => "cursor",
       listCommands: () => [],
       resolvePrompt: async (v: string) => ({ content: v, wasSlash: false }),
       getSkillPaths: () => [],

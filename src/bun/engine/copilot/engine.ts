@@ -23,7 +23,7 @@ import { readdirSync, existsSync, readFileSync, writeFileSync, mkdirSync } from 
 import { join, extname, basename, isAbsolute } from "path";
 import { homedir, tmpdir } from "os";
 import { parseFileRef } from "../../utils/resolve-file-attachments.ts";
-import { scanInstructionsFromDir, logInstructionsLoaded } from "../dialects/instruction-scanner.ts";
+import { getInstructionConvention, scanInstructionsFromDir, logInstructionsLoaded } from "../dialects/instruction-scanner.ts";
 import { formatInstructionBlocks } from "../pi/instruction-formatter.ts";
 import { getDb } from "../../db/index.ts";
 import { getDefaultWorkspaceKey } from "../../workspace-context.ts";
@@ -218,9 +218,10 @@ export class CopilotEngine implements ExecutionEngine {
     const instructions: import("../dialects/instruction-scanner.ts").Instruction[] = [];
     const seen = new Set<string>();
 
+    const copilotConvention = getInstructionConvention("copilot")!;
     const scanDir = (dir: string) => {
-      const instDir = join(dir, ".github", "instructions");
-      const insts = scanInstructionsFromDir(instDir, [".md"]);
+      const instDir = join(dir, copilotConvention.subdirectory);
+      const insts = scanInstructionsFromDir(instDir, copilotConvention.extensions);
       for (const inst of insts) {
         if (!seen.has(inst.name)) {
           seen.add(inst.name);
@@ -536,10 +537,6 @@ export class CopilotEngine implements ExecutionEngine {
   }
 
   async listCommands(taskId: number): Promise<CommandInfo[]> {
-    const { getDb } = await import("../../db/index.ts");
-    const { getDefaultWorkspaceKey } = await import("../../workspace-context.ts");
-    const { getLoadedProjectByKey } = await import("../../project-store.ts");
-
     const db = getDb();
     const taskRow = db
       .query<{ board_id: number; project_key: string }, [number]>(

@@ -13,7 +13,7 @@ The Cursor SDK auto-loads `.cursor/rules/*.mdc` from the working directory via `
 - System prompt is constructed from `[taskBlock, systemInstructions]` in each engine
 
 **Constraints:**
-- No interface changes to `SlashCommandDialect` (engine-level logic only)
+- Minimal interface change to `SlashCommandDialect`: add `getDialectName()` so the Pi engine can resolve conventions without `constructor.name` inference (revised via decision_request)
 - `cwd` is ALWAYS the projectPath (monorepo root); `workingDirectory` is the git worktree root
 - Parameter naming kept as `(worktreePath, projectPath?)` for consistency
 - Dialect-agnostic scanner with convention mapping layer
@@ -105,7 +105,7 @@ The Cursor SDK auto-loads `.cursor/rules/*.mdc` from the working directory via `
 
 **[Risk] Deduplication of instruction names across paths** → Use Set<string> by instruction name. When projectPath differs from worktreePath, both paths are scanned. If the same filename exists in both, only the projectPath version is included (first occurrence wins).
 
-**[Trade-off] No interface changes means engine-specific logic** → Each engine handles instruction injection differently (Pi: enrichedSystem, Copilot: systemMessage append, Cursor: no change needed). This is acceptable given the constraint and keeps the change minimal.
+**[Trade-off] Minimal interface change (getDialectName) + engine-specific logic** → Each engine handles instruction injection differently (Pi: enrichedSystem, Copilot: systemMessage append, Cursor: no change needed). The interface gains only `getDialectName()` so PiDialectResolver can resolve conventions explicitly; the rest of the scanning/injection logic stays engine-level.
 
 **[Trade-off] Dialect-agnostic scanner requires convention mapping** → Slightly more complex than a dialect-aware scanner, but follows SRP and is more testable. The mapping layer is simple and easy to extend.
 

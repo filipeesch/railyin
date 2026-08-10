@@ -13,20 +13,7 @@ export class PiDialectResolver {
   private readonly dialectName: string;
 
   constructor(private readonly dialect: SlashCommandDialect) {
-    // Determine dialect name from constructor
-    this.dialectName = this.resolveDialectName(dialect);
-  }
-
-  /**
-   * Resolve the dialect name from the dialect instance.
-   */
-  private resolveDialectName(dialect: SlashCommandDialect): string {
-    const className = dialect.constructor.name.toLowerCase();
-    if (className.includes("copilot")) return "copilot";
-    if (className.includes("cursor")) return "cursor";
-    if (className.includes("claude")) return "claude";
-    if (className.includes("null")) return "none";
-    return "none";
+    this.dialectName = dialect.getDialectName();
   }
 
   async resolvePrompt(prompt: string, cwd: string, projectPath: string | undefined): Promise<ResolvedPrompt> {

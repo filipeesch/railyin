@@ -248,16 +248,20 @@ export class PiEngine implements ExecutionEngine {
         ].join("\n")
       : undefined;
 
-    // Scan instruction files based on dialect convention
     const cwd = workingDirectory ?? process.cwd();
-    const instructions = this.dialectResolver.getInstructions(cwd, workingDirectory);
-    const instructionBlocks = formatInstructionBlocks(instructions);
 
-    const enrichedSystem = [taskBlock, instructionBlocks, systemInstructions].filter(Boolean).join("\n\n") || undefined;
-
+    // Resolve projectPath (monorepo root) BEFORE scanning instructions — cwd is
+    // ALWAYS the projectPath for getInstructions(); passing the worktree root as
+    // cwd would silently skip project-root instruction files in monorepo setups.
     const projectPath = boardId != null && taskId != null
       ? await this.dialectResolver.lookupProjectPath(taskId, boardId, cwd)
       : undefined;
+
+    // Scan instruction files based on dialect convention
+    const instructions = this.dialectResolver.getInstructions(projectPath ?? cwd, cwd);
+    const instructionBlocks = formatInstructionBlocks(instructions);
+
+    const enrichedSystem = [taskBlock, instructionBlocks, systemInstructions].filter(Boolean).join("\n\n") || undefined;
 
     const skillResolver = this.dialectResolver.getSkillResolver(cwd, projectPath);
     const suspendRef = this.getOrCreateSuspendRef(conversationId);

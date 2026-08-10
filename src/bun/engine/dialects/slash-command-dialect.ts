@@ -31,6 +31,13 @@ export interface ResolvedPrompt {
  */
 export interface SlashCommandDialect {
   /**
+   * Return the dialect name (e.g. "copilot", "cursor", "claude", "none").
+   * Used by engines to resolve dialect-specific conventions (instruction
+   * scanning, etc.) without relying on class-name inference.
+   */
+  getDialectName(): string;
+
+  /**
    * List all commands discoverable for the given paths.
    * Deduplication by command name is applied; first occurrence wins.
    *

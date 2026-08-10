@@ -31,6 +31,6 @@ The Pi engine (the main target engine) currently benefits from dialect-based sla
 - **Modified**: `src/bun/engine/pi/engine.ts` (instruction injection)
 - **Modified**: `src/bun/engine/copilot/engine.ts` (projectPath resolution + instruction scanning)
 - **Modified**: `src/bun/engine/cursor/engine.ts` (getSkillPaths bug fix)
-- **No interface changes**: `SlashCommandDialect` interface remains unchanged
+- **Minimal interface change**: `SlashCommandDialect` gains `getDialectName()` (no other method changes)
 - **No SDK dependency changes**: Uses existing SDK features (Cursor settingSources, Copilot systemMessage)
 - **No breaking changes**: All changes are additive or bug fixes

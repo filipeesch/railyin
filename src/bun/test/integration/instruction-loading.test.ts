@@ -1,198 +1,344 @@
-import { describe, it, expect, beforeEach, afterEach } from "bun:test";
+/**
+ * Engine-level integration tests for instruction loading.
+ *
+ * These tests drive the real engines against the in-memory DB (initDb +
+ * setupTestConfig + seedProjectAndTask) and verify that instruction files are
+ * scanned at the monorepo project root (projectPath) and injected into the
+ * system prompt / system message.
+ *
+ * - PiEngine: system prompt captured via a faux-provider session factory.
+ * - CopilotEngine: systemMessage captured via the mock SDK adapter.
+ */
+
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
-import { initDb, seedProjectAndTask } from "../helpers.ts";
-import { PiDialectResolver } from "../../engine/pi/dialect-resolver.ts";
+import { initDb, seedProjectAndTask, setupTestConfig } from "../helpers.ts";
+import type { Database } from "bun:sqlite";
+import { PiEngine } from "../../engine/pi/engine.ts";
 import { CopilotDialect } from "../../engine/dialects/copilot-dialect.ts";
-import { CursorDialect } from "../../engine/dialects/cursor-dialect.ts";
-import { NullDialect } from "../../engine/dialects/null-dialect.ts";
-import { scanInstructionsFromDir } from "../../engine/dialects/instruction-scanner.ts";
-import { formatInstructionBlocks } from "../../engine/pi/instruction-formatter.ts";
+import { NullModelSettingsRepository } from "../../db/repositories/model-settings-repository.ts";
+import { CopilotEngine } from "../../engine/copilot/engine.ts";
+import { MockCopilotSdkAdapter, MockCopilotSession, token, done } from "../support/copilot-sdk-mock.ts";
+import type { EngineEvent } from "../../engine/types.ts";
+import {
+  createAgentSession,
+  AuthStorage,
+  SessionManager,
+  DefaultResourceLoader,
+  SettingsManager,
+  getAgentDir,
+  defineTool,
+} from "@earendil-works/pi-coding-agent";
+import { registerFauxProvider } from "@earendil-works/pi-ai/compat";
+import type { FauxProviderRegistration } from "@earendil-works/pi-ai/compat";
+import { fauxAssistantMessage, fauxText } from "@earendil-works/pi-ai/providers/faux";
+import { SDK_BUILTIN_TOOL_NAMES } from "../../engine/pi/constants.ts";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-function createTempDir(name: string): string {
-  const dir = mkdtempSync(join(tmpdir(), `integration-${name}-`));
-  return dir;
-}
-
 function createInstructionFile(dir: string, filename: string, content: string): void {
-  const path = join(dir, filename);
-  writeFileSync(path, content);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, filename), content);
 }
 
-// ─── Pi Engine Integration Tests ─────────────────────────────────────────────
+async function drainEvents(gen: AsyncIterable<EngineEvent>): Promise<EngineEvent[]> {
+  const events: EngineEvent[] = [];
+  for await (const event of gen) {
+    events.push(event);
+  }
+  return events;
+}
 
-describe("Pi Engine Integration — Instruction Loading", () => {
-  let tempDir: string;
-  let resolver: PiDialectResolver;
+// ─── Pi Engine Integration ───────────────────────────────────────────────────
+
+describe("Pi Engine integration — instruction injection into system prompt", () => {
+  let db: Database;
+  let configCleanup: () => void;
+  let projectPath: string;
+  let worktreeDir: string;
+  let faux: FauxProviderRegistration;
+
+  /** Captured system prompt from the session factory. */
+  let capturedSystemPrompt: string | undefined;
+
+  /** Build a real Pi session against the faux provider, capturing the system prompt. */
+  async function createCapturingSessionFactory(options: {
+    tools: any[];
+    systemPrompt: string | undefined;
+    conversationId: number;
+    model: any;
+    cwd: string;
+    config: import("../../config/index.ts").PiEngineConfig;
+  }) {
+    const { tools, systemPrompt, conversationId, cwd, config } = options;
+    capturedSystemPrompt = systemPrompt;
+    const model = faux.getModel();
+
+    const sessionManager = SessionManager.open(join(cwd, `session-${conversationId}.jsonl`));
+    const agentDir = getAgentDir();
+    const resourceLoader = new DefaultResourceLoader({
+      cwd,
+      agentDir,
+      ...(systemPrompt ? { systemPromptOverride: () => systemPrompt } : {}),
+    });
+    await resourceLoader.reload();
+
+    const authStorage = AuthStorage.inMemory();
+    for (const [provider, cfg] of Object.entries(config.providers ?? {})) {
+      authStorage.setRuntimeApiKey(provider, cfg.api_key ?? "no-key");
+    }
+    authStorage.setRuntimeApiKey(model.provider, config.providers?.[model.provider]?.api_key ?? "no-key");
+
+    const piTools = tools.map((t) =>
+      defineTool({
+        name: t.name,
+        label: t.label ?? t.name,
+        description: t.description,
+        parameters: t.parameters as any,
+        prepareArguments: t.prepareArguments,
+        execute: t.execute as any,
+      }),
+    );
+
+    const { session } = await createAgentSession({
+      cwd,
+      agentDir,
+      model: model as any,
+      customTools: piTools,
+      tools: [...SDK_BUILTIN_TOOL_NAMES, ...piTools.map((t) => t.name)],
+      sessionManager,
+      resourceLoader,
+      authStorage,
+      settingsManager: SettingsManager.inMemory({
+        compaction: { enabled: false, reserveTokens: 16_384, keepRecentTokens: 20_000 },
+      }),
+    });
+
+    session.agent.state.thinkingLevel = "off";
+    return session;
+  }
 
   beforeEach(() => {
-    tempDir = createTempDir("pi-integration");
+    const cfg = setupTestConfig();
+    configCleanup = cfg.cleanup;
+    db = initDb();
+    projectPath = join(cfg.configDir, "workspace", "test-project");
+    worktreeDir = mkdtempSync(join(tmpdir(), "pi-wt-"));
+    faux = registerFauxProvider();
+    capturedSystemPrompt = undefined;
   });
 
   afterEach(() => {
-    rmSync(tempDir, { recursive: true, force: true });
+    faux.unregister();
+    configCleanup();
+    rmSync(worktreeDir, { recursive: true, force: true });
   });
 
-  it("PiDialectResolver with CopilotDialect scans .github/instructions/", () => {
-    resolver = new PiDialectResolver(new CopilotDialect());
+  it("injects instructions from projectPath (≠ worktree) into the system prompt", async () => {
+    // Instruction exists ONLY at the monorepo project root.
+    createInstructionFile(
+      join(projectPath, ".github", "instructions"),
+      "conventions.md",
+      "---\ndescription: Project conventions\n---\nContent",
+    );
 
-    const instructionsDir = join(tempDir, ".github", "instructions");
-    mkdirSync(instructionsDir, { recursive: true });
-    createInstructionFile(instructionsDir, "conventions.md", "---\ndescription: Project conventions\n---\nContent");
+    const seed = seedProjectAndTask(db, projectPath);
+    db.run(
+      "INSERT INTO task_git_context (task_id, git_root_path, worktree_path, worktree_status) VALUES (?, ?, ?, 'ready')",
+      [seed.taskId, projectPath, worktreeDir],
+    );
 
-    const instructions = resolver.getInstructions(tempDir, tempDir);
-    expect(instructions).toHaveLength(1);
-    expect(instructions[0].name).toBe("conventions");
+    const config = {
+      type: "pi",
+      model: `pi/${faux.getModel().provider}/${faux.getModel().id}`,
+      providers: {
+        [faux.getModel().provider]: { base_url: "http://localhost:1234/v1" },
+      },
+    } as import("../../config/index.ts").PiEngineConfig;
+
+    const engine = new PiEngine(
+      "test-pi",
+      config,
+      () => {},
+      () => {},
+      new CopilotDialect(),
+      new NullModelSettingsRepository(),
+      createCapturingSessionFactory as any,
+    );
+
+    faux.setResponses([fauxAssistantMessage(fauxText("Hello from the assistant!"))]);
+
+    const params = {
+      executionId: 1,
+      taskId: seed.taskId,
+      boardId: seed.boardId,
+      conversationId: seed.conversationId,
+      model: `pi/${faux.getModel().provider}/${faux.getModel().id}`,
+      workingDirectory: worktreeDir,
+      prompt: "Say hello.",
+      signal: new AbortController().signal,
+      boardTools: {} as any,
+      contextWindowOverride: 128_000,
+    } as import("../../engine/types.ts").ExecutionParams;
+
+    await drainEvents(engine.execute(params));
+
+    // The fix (C1): cwd passed to getInstructions must be the projectPath, so
+    // the project-root instruction file is scanned even though worktree differs.
+    expect(capturedSystemPrompt).toBeDefined();
+    expect(capturedSystemPrompt!).toContain("### conventions");
+    expect(capturedSystemPrompt!).toContain("**Project conventions**");
   });
 
-  it("PiDialectResolver with CursorDialect scans .cursor/rules/", () => {
-    resolver = new PiDialectResolver(new CursorDialect());
+  it("leaves the system prompt unchanged when no instructions exist", async () => {
+    const seed = seedProjectAndTask(db, projectPath);
+    db.run(
+      "INSERT INTO task_git_context (task_id, git_root_path, worktree_path, worktree_status) VALUES (?, ?, ?, 'ready')",
+      [seed.taskId, projectPath, worktreeDir],
+    );
 
-    const rulesDir = join(tempDir, ".cursor", "rules");
-    mkdirSync(rulesDir, { recursive: true });
-    createInstructionFile(rulesDir, "rule.mdc", "---\ndescription: Cursor rule\n---\nContent");
+    const config = {
+      type: "pi",
+      model: `pi/${faux.getModel().provider}/${faux.getModel().id}`,
+      providers: {
+        [faux.getModel().provider]: { base_url: "http://localhost:1234/v1" },
+      },
+    } as import("../../config/index.ts").PiEngineConfig;
 
-    const instructions = resolver.getInstructions(tempDir, tempDir);
-    expect(instructions).toHaveLength(1);
-    expect(instructions[0].name).toBe("rule");
-  });
+    const engine = new PiEngine(
+      "test-pi",
+      config,
+      () => {},
+      () => {},
+      new CopilotDialect(),
+      new NullModelSettingsRepository(),
+      createCapturingSessionFactory as any,
+    );
 
-  it("PiDialectResolver with NullDialect returns empty array", () => {
-    resolver = new PiDialectResolver(new NullDialect());
+    faux.setResponses([fauxAssistantMessage(fauxText("Hello!"))]);
 
-    const instructions = resolver.getInstructions(tempDir, tempDir);
-    expect(instructions).toHaveLength(0);
-  });
+    const params = {
+      executionId: 1,
+      taskId: seed.taskId,
+      boardId: seed.boardId,
+      conversationId: seed.conversationId,
+      model: `pi/${faux.getModel().provider}/${faux.getModel().id}`,
+      workingDirectory: worktreeDir,
+      prompt: "Say hello.",
+      signal: new AbortController().signal,
+      boardTools: {} as any,
+      contextWindowOverride: 128_000,
+    } as import("../../engine/types.ts").ExecutionParams;
 
-  it("Monorepo projectPath resolution — instructions from both paths", () => {
-    resolver = new PiDialectResolver(new CopilotDialect());
+    await drainEvents(engine.execute(params));
 
-    const worktreeDir = createTempDir("worktree");
-    try {
-      const cwdInstDir = join(tempDir, ".github", "instructions");
-      const wtInstDir = join(worktreeDir, ".github", "instructions");
-      mkdirSync(cwdInstDir, { recursive: true });
-      mkdirSync(wtInstDir, { recursive: true });
-
-      createInstructionFile(cwdInstDir, "project-rule.md", "---\ndescription: Project rule\n---\nContent");
-      createInstructionFile(wtInstDir, "worktree-rule.md", "---\ndescription: Worktree rule\n---\nContent");
-
-      const instructions = resolver.getInstructions(tempDir, worktreeDir);
-      expect(instructions).toHaveLength(2);
-      expect(instructions.map((i) => i.name)).toContain("project-rule");
-      expect(instructions.map((i) => i.name)).toContain("worktree-rule");
-    } finally {
-      rmSync(worktreeDir, { recursive: true, force: true });
-    }
-  });
-
-  it("Deduplication — projectPath version wins", () => {
-    resolver = new PiDialectResolver(new CopilotDialect());
-
-    const worktreeDir = createTempDir("worktree");
-    try {
-      const cwdInstDir = join(tempDir, ".github", "instructions");
-      const wtInstDir = join(worktreeDir, ".github", "instructions");
-      mkdirSync(cwdInstDir, { recursive: true });
-      mkdirSync(wtInstDir, { recursive: true });
-
-      createInstructionFile(cwdInstDir, "shared.md", "---\ndescription: Project version\n---\nProject content");
-      createInstructionFile(wtInstDir, "shared.md", "---\ndescription: Worktree version\n---\nWorktree content");
-
-      const instructions = resolver.getInstructions(tempDir, worktreeDir);
-      expect(instructions).toHaveLength(1);
-      expect(instructions[0].description).toBe("Project version");
-    } finally {
-      rmSync(worktreeDir, { recursive: true, force: true });
-    }
+    // No instructions → no instruction blocks anywhere in the system prompt
+    // (capturedSystemPrompt may be undefined when there is no system content).
+    expect(capturedSystemPrompt ?? "").not.toContain("### ");
   });
 });
 
-// ─── Copilot Engine Integration Tests ────────────────────────────────────────
+// ─── Copilot Engine Integration ──────────────────────────────────────────────
 
-describe("Copilot Engine Integration — Instruction Loading", () => {
-  let tempDir: string;
+describe("Copilot Engine integration — instruction injection into systemMessage", () => {
+  let db: Database;
+  let configCleanup: () => void;
+  let projectPath: string;
+  let worktreeDir: string;
 
   beforeEach(() => {
-    tempDir = createTempDir("copilot-integration");
+    const cfg = setupTestConfig();
+    configCleanup = cfg.cleanup;
+    db = initDb();
+    projectPath = join(cfg.configDir, "workspace", "test-project");
+    worktreeDir = mkdtempSync(join(tmpdir(), "copilot-wt-"));
   });
 
   afterEach(() => {
-    rmSync(tempDir, { recursive: true, force: true });
+    configCleanup();
+    rmSync(worktreeDir, { recursive: true, force: true });
   });
 
-  it("Scans .github/instructions/ at project root", () => {
-    const instructionsDir = join(tempDir, ".github", "instructions");
-    mkdirSync(instructionsDir, { recursive: true });
-    createInstructionFile(instructionsDir, "conventions.md", "---\ndescription: Project conventions\n---\nContent");
+  it("injects instructions from projectPath (≠ worktree) into systemMessage", async () => {
+    createInstructionFile(
+      join(projectPath, ".github", "instructions"),
+      "conventions.md",
+      "---\ndescription: Project conventions\n---\nContent",
+    );
 
-    const instructions = scanInstructionsFromDir(instructionsDir, [".md"]);
-    const blocks = formatInstructionBlocks(instructions);
+    const seed = seedProjectAndTask(db, projectPath);
+    db.run(
+      "INSERT INTO task_git_context (task_id, git_root_path, worktree_path, worktree_status) VALUES (?, ?, ?, 'ready')",
+      [seed.taskId, projectPath, worktreeDir],
+    );
 
-    expect(instructions).toHaveLength(1);
-    expect(blocks).toContain("### conventions");
-    expect(blocks).toContain("**Project conventions**");
+    const adapter = new MockCopilotSdkAdapter()
+      .queueResumeFailure(new Error("missing session"))
+      .queueCreateSuccess(new MockCopilotSession().queueTurn({ steps: [token("Done."), done()] }));
+
+    const engine = new CopilotEngine(() => {}, () => {}, adapter);
+
+    const params = {
+      executionId: 1,
+      taskId: seed.taskId,
+      boardId: seed.boardId,
+      conversationId: seed.conversationId,
+      model: "copilot/mock-model",
+      workingDirectory: worktreeDir,
+      prompt: "Hello",
+      signal: new AbortController().signal,
+      boardTools: {} as any,
+      workspaceKey: "default",
+      mcpRegistry: null,
+      enabledMcpTools: [],
+      attachments: [],
+      modelParams: [],
+    } as import("../../engine/types.ts").ExecutionParams;
+
+    await drainEvents(engine.execute(params));
+
+    const createCall = adapter.trace.createCalls[0];
+    expect(createCall).toBeDefined();
+    expect(createCall.config.systemMessage?.content).toContain("### conventions");
+    expect(createCall.config.systemMessage?.content).toContain("**Project conventions**");
   });
 
-  it("Scans .github/instructions/ at worktree root", () => {
-    const worktreeDir = createTempDir("worktree");
-    try {
-      const wtInstDir = join(worktreeDir, ".github", "instructions");
-      mkdirSync(wtInstDir, { recursive: true });
-      createInstructionFile(wtInstDir, "testing.md", "---\ndescription: Testing conventions\n---\nContent");
+  it("omits instruction blocks when no instructions exist", async () => {
+    const seed = seedProjectAndTask(db, projectPath);
+    db.run(
+      "INSERT INTO task_git_context (task_id, git_root_path, worktree_path, worktree_status) VALUES (?, ?, ?, 'ready')",
+      [seed.taskId, projectPath, worktreeDir],
+    );
 
-      const instructions = scanInstructionsFromDir(wtInstDir, [".md"]);
-      const blocks = formatInstructionBlocks(instructions);
+    const adapter = new MockCopilotSdkAdapter()
+      .queueResumeFailure(new Error("missing session"))
+      .queueCreateSuccess(new MockCopilotSession().queueTurn({ steps: [token("Done."), done()] }));
 
-      expect(instructions).toHaveLength(1);
-      expect(blocks).toContain("### testing");
-    } finally {
-      rmSync(worktreeDir, { recursive: true, force: true });
-    }
-  });
+    const engine = new CopilotEngine(() => {}, () => {}, adapter);
 
-  it("No instructions directory — system message without instruction content", () => {
-    const instructions = scanInstructionsFromDir(join(tempDir, ".github", "instructions"), [".md"]);
-    const blocks = formatInstructionBlocks(instructions);
+    const params = {
+      executionId: 1,
+      taskId: seed.taskId,
+      boardId: seed.boardId,
+      conversationId: seed.conversationId,
+      model: "copilot/mock-model",
+      workingDirectory: worktreeDir,
+      prompt: "Hello",
+      signal: new AbortController().signal,
+      boardTools: {} as any,
+      workspaceKey: "default",
+      mcpRegistry: null,
+      enabledMcpTools: [],
+      attachments: [],
+      modelParams: [],
+    } as import("../../engine/types.ts").ExecutionParams;
 
-    expect(instructions).toHaveLength(0);
-    expect(blocks).toBeUndefined();
-  });
-});
+    await drainEvents(engine.execute(params));
 
-// ─── Cursor Engine Integration Tests ─────────────────────────────────────────
-
-describe("Cursor Engine Integration — Skill Loading", () => {
-  let tempDir: string;
-
-  beforeEach(() => {
-    tempDir = createTempDir("cursor-integration");
-  });
-
-  afterEach(() => {
-    rmSync(tempDir, { recursive: true, force: true });
-  });
-
-  it("Skills loaded from projectPath", () => {
-    const skillsDir = join(tempDir, ".cursor", "skills", "my-skill");
-    mkdirSync(skillsDir, { recursive: true });
-    writeFileSync(join(skillsDir, "SKILL.md"), "# My Skill\n\nSkill content");
-
-    const { existsSync, readdirSync } = require("fs");
-    expect(existsSync(skillsDir)).toBe(true);
-    const files = readdirSync(skillsDir);
-    expect(files).toContain("SKILL.md");
-  });
-
-  it("Skills deduplicated by path — no duplication when projectPath = worktreePath", () => {
-    const dialect = new CursorDialect();
-
-    const skillPaths = dialect.getSkillPaths(tempDir, tempDir);
-    // When projectPath equals worktreePath, paths should be deduplicated
-    const uniquePaths = new Set(skillPaths);
-    expect(skillPaths.length).toBe(uniquePaths.size);
+    const createCall = adapter.trace.createCalls[0];
+    expect(createCall).toBeDefined();
+    expect(createCall.config.systemMessage?.content ?? "").not.toContain("### ");
   });
 });
