@@ -60,4 +60,4 @@ Full: RPC → store → UI data flow proven end-to-end
 - src/mainview/components/EngineManagementOverlay.vue
 - src/mainview/components/EngineListSidebar.vue
 - src/mainview/views/BoardView.vue
-<!-- gsd:state-version=11:0 -->
+<!-- gsd:state-version=18:0 -->

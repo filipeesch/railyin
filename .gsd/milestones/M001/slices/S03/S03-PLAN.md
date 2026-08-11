@@ -37,4 +37,4 @@ Full: create/edit/delete → YAML → Monaco proven end-to-end for pi engine mod
 ## Files Likely Touched
 
 - src/mainview/components/ModelManagementPanel.vue
-<!-- gsd:state-version=8:0 -->
+<!-- gsd:state-version=20:0 -->
