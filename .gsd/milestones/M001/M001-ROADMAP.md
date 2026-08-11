@@ -17,21 +17,6 @@
 
 ## Slices
 
-- [ ] **S01: Engine list + detail panel skeleton** `risk:medium` `depends:[]`
-  > After this: Select an engine from the list, see its basic fields (id, name, type) in form fields and a synchronized Monaco YAML preview
-
-- [ ] **S02: Model + variant editing** `risk:high` `depends:[S01]`
-  > After this: Create and edit models with their fields (name, token limits, reasoning, tool_call, thinkingFormat, sampling presets), and variants with name/label/ticking toggle + Monaco options editor
-
-- [ ] **S03: Provider, harness, save + live reload** `risk:medium` `depends:[S02]`
-  > After this: Edit provider and harness fields for pi engine type, save to engines.yaml, see the UI refresh without restart
-
-- [ ] **S04: Import with conflict resolution + export** `risk:medium` `depends:[S03]`
-  > After this: Import a YAML file with duplicate engine IDs, see conflicts listed, Replace/Skip each one, then export a single engine's YAML to a file
-
-- [ ] **S05: Integration + polish** `risk:low` `depends:[S04]`
-  > After this: Full end-to-end flow: list → select → edit model → edit variant → save → import with conflicts → export → verify all state consistent
-
 ## Boundary Map
 
 ### S01 → S02
@@ -77,4 +62,4 @@ Produces:
 Consumes:
 - All form components from S01-S03
 - Engine list state from S01
-<!-- gsd:state-version=10:0 -->
+<!-- gsd:state-version=16:0 -->
