@@ -8,7 +8,7 @@
  * The connection reconnects automatically with exponential backoff.
  */
 
-import type { RailynAPI, PushMessage, StreamError, StreamEvent, Task, ConversationMessage, CodeRef, ChatSession } from "@shared/rpc-types";
+import type { RailynAPI, PushMessage, StreamError, StreamEvent, Task, ConversationMessage, CodeRef, ChatSession, EngineInfo } from "@shared/rpc-types";
 
 // ─── Server base URL ──────────────────────────────────────────────────────────
 // In dev and production the frontend is served by the same Bun server,
@@ -141,3 +141,11 @@ export const updateNote = (params: { id: number; content?: string; tags?: string
 
 export const deleteNote = (params: { id: number }) =>
   api("notes.delete", params);
+
+// ─── Engines ──────────────────────────────────────────────────────────────────
+
+export const listEngines = () =>
+  api("engines.list", {});
+
+export const importEnginesYaml = (content: string) =>
+  api("engines.importYaml", { content });

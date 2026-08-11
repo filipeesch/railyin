@@ -1,0 +1,51 @@
+{
+  "schema": 2,
+  "lastWriter": "gsd-pi",
+  "lastProjectedAt": "2026-08-11T08:10:47.533Z",
+  "projections": {
+    "milestones/M001/M001-ROADMAP.md": {
+      "sha": "079efa8a70f699d6",
+      "entities": [
+        "M001"
+      ]
+    },
+    "milestones/M001/slices/S01/tasks/T01-PLAN.md": {
+      "sha": "58e40963ba5c6a37",
+      "entities": [
+        "M001",
+        "M001/S01",
+        "M001/S01/T01"
+      ]
+    },
+    "milestones/M001/slices/S01/tasks/T02-PLAN.md": {
+      "sha": "62a684761b3b18aa",
+      "entities": [
+        "M001",
+        "M001/S01",
+        "M001/S01/T02"
+      ]
+    },
+    "milestones/M001/slices/S01/tasks/T03-PLAN.md": {
+      "sha": "b665e2c8a51719c8",
+      "entities": [
+        "M001",
+        "M001/S01",
+        "M001/S01/T03"
+      ]
+    },
+    "milestones/M001/slices/S03/S03-PLAN.md": {
+      "sha": "6c8de89af03e7c5a",
+      "entities": [
+        "M001",
+        "M001/S03"
+      ]
+    }
+  },
+  "planning": {
+    "active": false,
+    "layout": null,
+    "projections": {},
+    "passthrough": {}
+  },
+  "piVersion": ""
+}

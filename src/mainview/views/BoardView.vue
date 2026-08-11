@@ -161,7 +161,7 @@
 
 
     <!-- Engines YAML editor -->
-    <EnginesEditorOverlay
+    <EngineManagementOverlay
       :visible="enginesEditorVisible"
       @close="enginesEditorVisible = false"
       @saved="enginesEditorVisible = false"
@@ -261,7 +261,7 @@ import BoardColumn from "../components/BoardColumn.vue";
 import ConversationDrawer from "../components/ConversationDrawer.vue";
 import TaskDetailOverlay from "../components/TaskDetailOverlay.vue";
 import CodeReviewOverlay from "../components/CodeReviewOverlay.vue";
-import EnginesEditorOverlay from "../components/EnginesEditorOverlay.vue";
+import EngineManagementOverlay from "../components/EngineManagementOverlay.vue";
 import WorkflowEditorOverlay from "../components/WorkflowEditorOverlay.vue";
 import TerminalPanel from "../components/TerminalPanel.vue";
 import CodeServerOverlay from "../components/CodeServerOverlay.vue";

@@ -626,7 +626,15 @@ export interface StreamError {
   error: string;
 }
 
-// ─── RPC schema ──────────────────────────────────────────────────────────────
+// ─── Engine types (structured engine list) ──────────────────────────────────
+
+export interface EngineInfo {
+  id: string;
+  name: string;
+  type: string;
+  /** Raw YAML string for the Monaco preview panel */
+  yaml: string;
+}
 
 // ─── RPC schema ──────────────────────────────────────────────────────────────
 // RailynAPI maps every method name to its { params, response } types.
@@ -1116,6 +1124,16 @@ export type RailynAPI = {
   "mcp.saveProjectConfig": {
     params: { workspaceKey: string; projectKey: string; content: string };
     response: { ok: true };
+  };
+
+  // Engines
+  "engines.list": {
+    params: Record<string, never>;
+    response: EngineInfo[];
+  };
+  "engines.importYaml": {
+    params: { content: string };
+    response: { ok: true; conflicts?: string[] };
   };
 
   // Global config
