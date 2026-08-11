@@ -3,16 +3,12 @@
 **Milestone:** M001
 **Slice:** S01
 
-**Goal:** Structured engine list RPC endpoint, Pinia store, sidebar list, dual-view overlay shell with Monaco preview. Proves the full data flow: load → select → display YAML.
-**Demo:** Select an engine from the list, see its basic fields (id, name, type) in form fields and a synchronized Monaco YAML preview
+**Goal:** RPC endpoint, Pinia store, dual-view overlay shell
+**Demo:** Select engine from list, see form fields and YAML preview
 
 ## Must-Haves
 
-- RPC endpoint returns parsed EngineEntry[] via listEngines()
-- Pinia store loads engines, manages selection, syncs YAML
-- Overlay shows engine list (id, name, type) and Monaco YAML preview on selection
-- Dark mode applies to Monaco preview
-- TypeScript compiles without errors
+- Engine list loads from RPC, sidebar shows selection, Monaco displays YAML
 
 ## Threat Surface
 
@@ -24,17 +20,9 @@
 - **Verdict:** pass
 - **Rationale:** Form fields use semantic HTML labels, inputs have proper types (number, text, password, select), focus states defined, keyboard navigable
 
-## Proof Level
-
-- This slice proves: integration
-
-## Integration Closure
-
-Full: RPC → store → UI data flow proven end-to-end
-
 ## Verification
 
-- No new observability needed beyond existing
+- Run the task and slice verification checks for this slice.
 
 <tasks>
 - [ ] **T01**: Add engines.list RPC endpoint _(1h)_
@@ -60,4 +48,4 @@ Full: RPC → store → UI data flow proven end-to-end
 - src/mainview/components/EngineManagementOverlay.vue
 - src/mainview/components/EngineListSidebar.vue
 - src/mainview/views/BoardView.vue
-<!-- gsd:state-version=18:0 -->
+<!-- gsd:state-version=24:0 -->
