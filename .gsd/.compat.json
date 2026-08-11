@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "lastWriter": "gsd-pi",
-  "lastProjectedAt": "2026-08-11T08:10:47.533Z",
+  "lastProjectedAt": "2026-08-11T08:16:27.520Z",
   "projections": {
     "milestones/M001/M001-ROADMAP.md": {
       "sha": "079efa8a70f699d6",
@@ -38,6 +38,13 @@
       "entities": [
         "M001",
         "M001/S03"
+      ]
+    },
+    "milestones/M001/slices/S01/S01-PLAN.md": {
+      "sha": "67bd475ffc15a78f",
+      "entities": [
+        "M001",
+        "M001/S01"
       ]
     }
   },
