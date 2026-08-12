@@ -269,6 +269,8 @@ export interface DecisionRequestOption {
 export interface DecisionRequestQuestion {
   question: string;
   type: "exclusive" | "non_exclusive" | "freetext";
+  /** Per-question markdown preamble focused on this question, rendered on its page. */
+  context?: string;
   weight?: "critical" | "medium" | "easy";
   model_lean?: string;
   model_lean_reason?: string;
@@ -595,6 +597,7 @@ export type StreamEventType =
   | "text_chunk"       // live token — not persisted
   | "reasoning_chunk"  // live reasoning token — not persisted
   | "status_chunk"     // ephemeral status — not persisted
+  | "decision_request_page" // ephemeral: one interview question page — not persisted
   | "user"             // persisted: user message
   | "assistant"        // persisted: finalized assistant text
   | "reasoning"        // persisted: finalized reasoning block
