@@ -19,7 +19,6 @@ export interface CursorSdkAdapter {
   run(config: CursorRunConfig): AsyncIterable<EngineEvent>;
   cancel(executionId: number): Promise<void>;
   listModels(workingDirectory: string): Promise<CursorSdkModelInfo[]>;
-  listCommands(workingDirectory: string): Promise<Array<{ name: string; description: string }>>;
   /**
    * Signal compaction for the given conversation's agent. The `@cursor/sdk`
    * manages Cursor context compaction autonomously, so this is a no-op hook

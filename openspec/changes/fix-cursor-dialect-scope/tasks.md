@@ -1,42 +1,42 @@
 ## 1. Cursor SDK — version upgrade
 
-- [ ] 1.1 Refresh `@cursor/sdk` lockfile to the latest stable (`bun update @cursor/sdk` → `1.0.27`); confirm `package.json` range stays `^1.0.25` (or narrows to `^1.0.27` if preferred)
-- [ ] 1.2 Typecheck SDK-touching modules (`options.ts`, `recovery.ts`, `resume.ts`, `inprocess-adapter.ts`, `translate-events.ts`, `model-context.ts`) against `1.0.27`; fix any API drift surfaced by types
-- [ ] 1.3 Run the Cursor engine test suites (engine, adapter, recovery, options, RPC scenarios) as a regression gate before proceeding; re-check whether the SDK gained native skills/commands support (informs long-term simplification only)
+- [x] 1.1 Refresh `@cursor/sdk` lockfile to the latest stable (`bun update @cursor/sdk` → `1.0.27`); confirm `package.json` range stays `^1.0.25` (or narrows to `^1.0.27` if preferred)
+- [x] 1.2 Typecheck SDK-touching modules (`options.ts`, `recovery.ts`, `resume.ts`, `inprocess-adapter.ts`, `translate-events.ts`, `model-context.ts`) against `1.0.27`; fix any API drift surfaced by types
+- [x] 1.3 Run the Cursor engine test suites (engine, adapter, recovery, options, RPC scenarios) as a regression gate before proceeding; re-check whether the SDK gained native skills/commands support (informs long-term simplification only)
 
 ## 2. CursorDialect — home scope
 
-- [ ] 2.1 `src/bun/engine/dialects/cursor-dialect.ts` — `listCommands()`: append `~/.cursor/commands` scan after project/worktree (dedup first-wins, project > worktree > home)
-- [ ] 2.2 `resolvePrompt()`: append `join(homedir(), ".cursor", "commands")` to `candidateDirs` (mirrors `ClaudeDialect` ordering)
-- [ ] 2.3 `getSkillPaths()`: append `~/.cursor/skills` (filtered by `existsSync`)
-- [ ] 2.4 Update class docstring with the 3-level lookup order (project → worktree → home)
+- [x] 2.1 `src/bun/engine/dialects/cursor-dialect.ts` — `listCommands()`: append `~/.cursor/commands` scan after project/worktree (dedup first-wins, project > worktree > home)
+- [x] 2.2 `resolvePrompt()`: append `join(homedir(), ".cursor", "commands")` to `candidateDirs` (mirrors `ClaudeDialect` ordering)
+- [x] 2.3 `getSkillPaths()`: append `~/.cursor/skills` (filtered by `existsSync`)
+- [x] 2.4 Update class docstring with the 3-level lookup order (project → worktree → home)
 
 ## 3. SlashCommandResolver — fail-soft policy
 
-- [ ] 3.1 `src/bun/engine/execution/slash-command-resolver.ts` — wrap `dialect.resolvePrompt()` in try/catch; on error `console.warn` (engine id, dialect, prompt snippet) and return the raw prompt unchanged
+- [x] 3.1 `src/bun/engine/execution/slash-command-resolver.ts` — wrap `dialect.resolvePrompt()` in try/catch; on error `console.warn` (engine id, dialect, prompt snippet) and return the raw prompt unchanged
 
 ## 4. Skill resolver — description listing
 
-- [ ] 4.1 `src/bun/engine/pi/skill-resolver.ts` — add `listWithDescriptions(): Promise<Array<{ name: string; description?: string }>>` to `FileSystemSkillResolver` (parses `description:` from each `SKILL.md` frontmatter); leave the `SkillResolver` interface unchanged
+- [x] 4.1 `src/bun/engine/pi/skill-resolver.ts` — add `listWithDescriptions(): Promise<Array<{ name: string; description?: string }>>` to `FileSystemSkillResolver` (parses `description:` from each `SKILL.md` frontmatter); leave the `SkillResolver` interface unchanged
 
 ## 5. Cursor engine — lazy skill tool + listing
 
-- [ ] 5.1 `src/bun/engine/cursor/tools.ts` — `buildCursorTools(context, skillResolver?, onSuspend?)`: register a `skill` `SDKCustomTool` (`{ name: string }` schema) resolving SKILL.md content via the resolver; on miss, return available names + fuzzy suggestion (mirrors `pi/tools/skill.ts`); no skill tool when resolver is undefined
-- [ ] 5.2 `src/bun/engine/cursor/engine.ts` — extract the task→`{worktreePath, projectPath}` DB lookup into a shared private helper (dynamic imports preserved), used by both `_run()` and `listCommands()`
-- [ ] 5.3 `_run()` — reorder: resolve task paths → build `FileSystemSkillResolver` from `dialect.getSkillPaths(worktreePath, projectPath)` (DB-derived worktree path) → build tools (with resolver) → compose prefix
-- [ ] 5.4 `_run()` — replace the wholesale `skillsBlock` prepend with a bounded `## Available Skills` + `<available_skills>` listing (name + truncated frontmatter description); omit when empty
-- [ ] 5.5 Remove the now-dead `readdirSync`/`readFileSync` skill-prepend loop and its imports
+- [x] 5.1 `src/bun/engine/cursor/tools.ts` — `buildCursorTools(context, skillResolver?, onSuspend?)`: register a `skill` `SDKCustomTool` (`{ name: string }` schema) resolving SKILL.md content via the resolver; on miss, return available names + fuzzy suggestion (mirrors `pi/tools/skill.ts`); no skill tool when resolver is undefined
+- [x] 5.2 `src/bun/engine/cursor/engine.ts` — extract the task→`{worktreePath, projectPath}` DB lookup into a shared private helper (dynamic imports preserved), used by both `_run()` and `listCommands()`
+- [x] 5.3 `_run()` — reorder: resolve task paths → build `FileSystemSkillResolver` from `dialect.getSkillPaths(worktreePath, projectPath)` (DB-derived worktree path) → build tools (with resolver) → compose prefix
+- [x] 5.4 `_run()` — replace the wholesale `skillsBlock` prepend with a bounded `## Available Skills` + `<available_skills>` listing (name + truncated frontmatter description); omit when empty
+- [x] 5.5 Remove the now-dead `readdirSync`/`readFileSync` skill-prepend loop and its imports
 
 ## 6. Cleanup
 
-- [ ] 6.1 `src/bun/engine/cursor/adapter.ts` + `inprocess-adapter.ts` — remove the dead `CursorSdkAdapter.listCommands()` no-op stub from the interface and implementation
-- [ ] 6.2 Verify `PiDialectResolver.resolvePrompt()` has no production callers; remove if confirmed dead
+- [x] 6.1 `src/bun/engine/cursor/adapter.ts` + `inprocess-adapter.ts` — remove the dead `CursorSdkAdapter.listCommands()` no-op stub from the interface and implementation
+- [x] 6.2 Verify `PiDialectResolver.resolvePrompt()` has no production callers; remove if confirmed dead
 
-## 7. Tests (deferred — tackled later per user instruction)
+## 7. Tests
 
-- [ ] 7.1 Unit: `CursorDialect` home-scope listCommands/resolvePrompt/getSkillPaths (mirror `copilot-dialect.test.ts` home-scope cases)
-- [ ] 7.2 Unit: `SlashCommandResolver` fail-soft pass-through + warning
-- [ ] 7.3 Unit: `FileSystemSkillResolver.listWithDescriptions()`
-- [ ] 7.4 Engine: `_run()` registers `skill` tool; listing block replaces prepend; DB worktree path passed to `getSkillPaths` (extend `cursor/engine.test.ts`)
-- [ ] 7.5 RPC: unresolved `/cmd` in Cursor chat sends successfully with raw text (extend `cursor/rpc-scenarios.test.ts`)
-- [ ] 7.6 Regression: Cursor suites green against `@cursor/sdk@1.0.27` (tie to 1.3)
+- [x] 7.1 Unit: `CursorDialect` home-scope listCommands/resolvePrompt/getSkillPaths (mirror `copilot-dialect.test.ts` home-scope cases)
+- [x] 7.2 Unit: `SlashCommandResolver` fail-soft pass-through + warning
+- [x] 7.3 Unit: `FileSystemSkillResolver.listWithDescriptions()`
+- [x] 7.4 Engine: `_run()` registers `skill` tool; listing block replaces prepend; DB worktree path passed to `getSkillPaths` (extend `cursor/engine.test.ts`)
+- [x] 7.5 RPC: unresolved `/cmd` in Cursor chat sends successfully with raw text (extend `cursor/rpc-scenarios.test.ts`)
+- [x] 7.6 Regression: Cursor suites green against `@cursor/sdk@1.0.27` (tie to 1.3)

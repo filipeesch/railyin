@@ -1,5 +1,6 @@
 import { existsSync, readFileSync, readdirSync } from "fs";
 import { join, basename, extname } from "path";
+import { homedir } from "os";
 import type { CommandInfo } from "../types.ts";
 import type { ResolvedPrompt, SlashCommandDialect } from "./slash-command-dialect.ts";
 
@@ -45,7 +46,36 @@ function collectFromDir(dir: string, prefix: string, seen: Set<string>, out: Com
   }
 }
 
+/**
+ * Cursor dialect — discovers and resolves slash commands using the
+ * `.cursor/commands/` convention, and exposes skill directories from
+ * `.cursor/skills/`.
+ *
+ * Subdirectory structure is mapped to colon-namespaced command names:
+ *   `commands/shared/api.md`  → `/shared:api`
+ *   `commands/gsd-fast.md`    → `/gsd-fast`
+ *
+ * Lookup order (highest priority first):
+ *   1. `<projectPath>/.cursor/commands/`  — project root
+ *   2. `<worktreePath>/.cursor/commands/` — git worktree root (if different)
+ *   3. `~/.cursor/commands/`              — user home scope
+ *
+ * The same order applies to skill paths (`<...>/.cursor/skills/`).
+ *
+ * Resolution:
+ *   - `$input` is substituted with the trailing argument text.
+ *   - Frontmatter is NOT stripped (mirrors `ClaudeDialect`; the Cursor SDK
+ *     handles the raw file body natively).
+ *   - The resolved body is XML-wrapped with command identity:
+ *     `<command name="stem" args="input">\n…body…\n</command>`
+ */
 export class CursorDialect implements SlashCommandDialect {
+  /**
+   * @param homeDir User home directory for the `~/.cursor` scope. Injectable so
+   * tests can point it at a temp directory; defaults to the real home dir.
+   */
+  constructor(private readonly homeDir: string = homedir()) {}
+
   getDialectName(): string {
     return "cursor";
   }
@@ -61,6 +91,9 @@ export class CursorDialect implements SlashCommandDialect {
     if (!projectPath || projectPath !== worktreePath) {
       collectFromDir(join(worktreePath, ".cursor", "commands"), "", seen, commands);
     }
+
+    // User home scope (lowest priority — project/worktree wins on name collisions)
+    collectFromDir(join(this.homeDir, ".cursor", "commands"), "", seen, commands);
 
     return commands;
   }
@@ -79,6 +112,7 @@ export class CursorDialect implements SlashCommandDialect {
     if (!projectPath || projectPath !== worktreePath) {
       candidateDirs.push(join(worktreePath, ".cursor", "commands"));
     }
+    candidateDirs.push(join(this.homeDir, ".cursor", "commands"));
 
     const resolvedPath = candidateDirs.map((d) => join(d, relPath)).find((p) => existsSync(p)) ?? null;
 
@@ -110,6 +144,7 @@ export class CursorDialect implements SlashCommandDialect {
     if (!projectPath || projectPath !== worktreePath) {
       candidates.push(join(worktreePath, ".cursor", "skills"));
     }
+    candidates.push(join(this.homeDir, ".cursor", "skills"));
     return candidates.filter((p) => existsSync(p));
   }
 }

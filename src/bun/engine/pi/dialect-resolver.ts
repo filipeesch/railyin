@@ -1,5 +1,5 @@
 import { join } from "path";
-import type { SlashCommandDialect, ResolvedPrompt } from "../dialects/slash-command-dialect.ts";
+import type { SlashCommandDialect } from "../dialects/slash-command-dialect.ts";
 import type { CommandInfo } from "../types.ts";
 import type { Instruction } from "../dialects/instruction-scanner.ts";
 import {
@@ -14,10 +14,6 @@ export class PiDialectResolver {
 
   constructor(private readonly dialect: SlashCommandDialect) {
     this.dialectName = dialect.getDialectName();
-  }
-
-  async resolvePrompt(prompt: string, cwd: string, projectPath: string | undefined): Promise<ResolvedPrompt> {
-    return this.dialect.resolvePrompt(prompt, cwd, projectPath);
   }
 
   getSkillResolver(cwd: string, projectPath: string | undefined): FileSystemSkillResolver {
