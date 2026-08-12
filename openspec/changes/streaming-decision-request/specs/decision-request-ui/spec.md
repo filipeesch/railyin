@@ -45,6 +45,25 @@ The system SHALL provide a `DecisionInterviewPanel.vue` component that renders t
 - **WHEN** no `decision_request_page` events or persisted `decision_request_prompt` exist for the conversation
 - **THEN** the panel is not rendered (no empty box)
 
+### Requirement: Panel closes after the interview is answered
+The `DecisionInterviewPanel` SHALL close (not render) once the interview has been answered — i.e. a user message appears AFTER the latest persisted `decision_request_prompt` in the conversation. This makes the panel disappear after the user submits their responses.
+
+#### Scenario: Panel closes after submit
+- **WHEN** the user answers the interview and submits, and the resulting user message is appended to the conversation
+- **THEN** the panel is no longer visible (no empty box remains)
+
+### Requirement: Dismiss button closes the panel without answering
+The `DecisionInterviewPanel` SHALL provide a dismiss control that closes the panel without submitting answers or sending anything to the model. The dismissed state SHALL be per-conversation and reset when switching conversations.
+
+#### Scenario: Dismiss hides the panel
+- **WHEN** the user clicks the panel's dismiss button
+- **THEN** the panel is no longer visible
+- **AND** no submitDecisions RPC is called
+
+#### Scenario: Dismiss resets on conversation switch
+- **WHEN** the user dismisses the panel and then switches to another conversation and back
+- **THEN** the panel may render again for a new/active interview
+
 ### Requirement: Live pages stream into the panel from ephemeral events
 The conversation store SHALL maintain a live-interview state per conversation, appending a page for each ephemeral `decision_request_page` stream event received while the execution is running. The panel SHALL render these pages live. When the terminal `decision_request_prompt` is persisted, the live pages SHALL reconcile to the persisted payload (the panel becomes the final interview).
 

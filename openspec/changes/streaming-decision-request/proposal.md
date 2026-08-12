@@ -6,9 +6,9 @@ The fix is to stop fighting the model's weakness: change the tool to accept **on
 
 ## What Changes
 
-- **CHANGE**: `DECISION_REQUEST_TOOL_DEFINITION` schema — from `{ context?, questions: [...] }` (array) to `{ context?, question: {...} }` (single question per call). Strictly single-question; no legacy array form.
+- **CHANGE**: `DECISION_REQUEST_TOOL_DEFINITION` schema — from `{ context?, questions: [...] }` (array) to a fully FLAT single-question shape `{ context?, question: string, type, weight?, model_lean?, options? }` (all fields top-level; NO nested `question` object). Strictly single-question; no legacy array form.
 - **FIX**: `executeCommonTool` now calls `normalizeToolArguments` at the top (single choke-point) so string-encoded array/object args are reconciled identically across ALL engines before AJV validation.
-- **FIX**: `validateToolArgs` required-field errors are now schema-aware — when a missing required field declares an `enum`, the error lists the valid values (e.g. `Error: field 'question.type' is required (valid values: "exclusive", "non_exclusive", "freetext")`), giving the model a recovery hint.
+- **FIX**: `validateToolArgs` required-field errors are now schema-aware — when a missing required field declares an `enum`, the error lists the valid values (e.g. `Error: field 'type' is required (valid values: "exclusive", "non_exclusive", "freetext")`), giving the model a recovery hint.
 - **NEW**: `DecisionQuestionBuffer` — a per-execution in-memory buffer on `CommonToolContext.runtime` that accumulates questions across `decision_request` calls within one execution.
 - **NEW**: `ToolExecutionResult` gains a `{ type: "page"; text; payload }` variant. A valid `decision_request` call appends to the buffer and returns `page` (loop continues) instead of `suspend` (loop aborts). Invalid single questions return an instructive error result and the buffer is preserved (only the bad call is rejected).
 - **NEW**: engine wrappers (Pi, Cursor, Claude, Copilot, OpenCode) emit an ephemeral `decision_request_page` engine event per appended question so the UI streams pages live while the model is still working.

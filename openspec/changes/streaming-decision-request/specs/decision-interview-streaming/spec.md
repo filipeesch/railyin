@@ -4,19 +4,19 @@ Defines the streaming single-question `decision_request` interview flow: per-exe
 
 ## Requirements
 
-### Requirement: decision_request accepts one question per call
-The `decision_request` tool SHALL accept a single question object per call (`{ context?, question: {...} }`) instead of an array of questions. Each call SHALL validate the single question strictly against the schema; a question missing a required field (e.g. `type`) SHALL return an instructive validation error listing valid enum values, and SHALL NOT append to the buffer or emit a page.
+### Requirement: decision_request accepts one flat question per call
+The `decision_request` tool SHALL accept a single FLAT question per call (`{ context?, question: string, type, weight?, options?, ... }` — all fields top-level) instead of an array of questions or a nested `question` object. Each call SHALL validate the flat question strictly against the schema; a question missing a required field (e.g. `type`) SHALL return an instructive validation error listing valid enum values, and SHALL NOT append to the buffer or emit a page.
 
-#### Scenario: Valid single question appends and streams a page
-- **WHEN** a model calls `decision_request` with a valid single question (including `question` and `type`)
+#### Scenario: Valid flat question appends and streams a page
+- **WHEN** a model calls `decision_request` with a valid flat question (including `question` string and `type`)
 - **THEN** the question is appended to the per-execution decision buffer
 - **AND** the tool returns `{ type: "page", text, payload }`
 - **AND** the engine emits an ephemeral `decision_request_page` event with the question payload
 - **AND** the agent loop continues (no suspend)
 
 #### Scenario: Question missing type returns schema-aware error, buffer preserved
-- **WHEN** a model calls `decision_request` with a single question missing the `type` field
-- **THEN** the tool returns a result error containing `field 'question.type' is required` and the valid values `"exclusive"`, `"non_exclusive"`, `"freetext"`
+- **WHEN** a model calls `decision_request` with a flat question missing the `type` field
+- **THEN** the tool returns a result error containing `field 'type' is required` and the valid values `"exclusive"`, `"non_exclusive"`, `"freetext"`
 - **AND** no page event is emitted
 - **AND** previously buffered questions remain intact
 
@@ -36,6 +36,18 @@ Each successful `decision_request` append SHALL return a result text telling the
 - **WHEN** a model successfully appends a question
 - **THEN** the returned text includes the buffered count (e.g. `Question 2 of 2 buffered`)
 - **AND** instructs the model to call `decision_request` again to add more or END ITS TURN to present
+
+### Requirement: Tool description mandates SEQUENTIAL calls (never parallel)
+The `decision_request` tool description SHALL instruct the model to call the tool SEQUENTIALLY, ONE AT A TIME — make one call, WAIT for its result, then make the next — and SHALL explicitly forbid batching multiple `decision_request` calls together or emitting them in parallel. Each question page SHALL be presented individually as its call completes, so the user can answer before the next question arrives.
+
+#### Scenario: Description forbids parallel decision_request calls
+- **WHEN** the `DECISION_REQUEST_TOOL_DEFINITION.description` is inspected
+- **THEN** it contains an explicit instruction to call sequentially one at a time and to NEVER batch or emit multiple calls in parallel
+
+#### Scenario: One call per assistant turn streams one page
+- **WHEN** a model makes a single `decision_request` call in a turn and waits for the result before the next
+- **THEN** exactly one `decision_request_page` event is emitted for that call
+- **AND** the page appears in the panel before the next call is made
 
 ### Requirement: Per-execution decision buffer
 The system SHALL maintain a per-execution `DecisionQuestionBuffer` on `CommonToolContext.runtime` that accumulates buffered questions across `decision_request` calls within one execution. Each engine SHALL create a fresh buffer per execution and assign it to the context before the run starts.

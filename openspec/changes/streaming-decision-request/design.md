@@ -30,13 +30,13 @@ The `decision_request` tool is erroring with `Error: field 'type' is required` (
 
 ## Decisions
 
-### D1 — Single-question-per-call schema (no array, no auto-fill)
-`decision_request` accepts `{ context?, question: {...} }` where `question` is one `DecisionRequestQuestion` object. `type` stays strictly required (`required: ["question", "type"]`) — we do NOT auto-fill missing `type` (user decision: "Return validation error (no default)"). The description teaches the model to call once per question and END ITS TURN to present.
+### D1 — Single FLAT question-per-call schema (no array, no nesting, no auto-fill)
+`decision_request` accepts a fully flat, top-level shape per call: `{ context?, question: string, type, weight?, model_lean?, model_lean_reason?, answers_affect_followup?, options? }`. `question` is a plain STRING (the question text) and `type` is a sibling top-level field — there is NO nested `question` object and NO `questions` array. `type` stays strictly required (`required: ["question", "type"]`) — we do NOT auto-fill missing `type` (user decision: "Return validation error (no default)"). The description teaches the model to call once per question with flat fields and END ITS TURN to present.
 
-**Why:** The flat top-level schema survives schema-dialect conversion far more reliably than a nested array; per-question validation makes the retry surface one object instead of a 6-question batch.
+**Why:** The original nested `{ question: {...} }` wrapper caused the SAME model failure it was meant to solve — models flattened it into top-level fields (`{ question: "text", type, weight, ... }`) and AJV rejected the nested-object requirement (`question: must be object`). A fully flat schema has zero nesting, so schema-dialect conversion and model generation both succeed. Per-question validation makes the retry surface one flat object instead of a 6-question batch.
 
 ### D2 — Per-execution `DecisionQuestionBuffer` on `CommonToolContext.runtime`
-New `DecisionQuestionBuffer` class (`src/bun/engine/decision-buffer.ts`) with `append(entry)`, `all`, `count`, `clear()`. Each engine creates a fresh buffer per execution and assigns it to `ctx.runtime.decisionBuffer` (mirrors the existing per-execution `suspendRef`/`onSuspend` pattern; Pi resets on cached contexts the same way it resets `loopDetector`).
+New `DecisionQuestionBuffer` class (`src/bun/engine/decision-buffer.ts`) storing `DecisionRequestQuestion[]` with `append(question)`, `all`, `count`, `clear()`. The executor assembles the UI-facing `DecisionRequestQuestion` object from the flat tool args before appending. Each engine creates a fresh buffer per execution and assigns it to `ctx.runtime.decisionBuffer` (mirrors the existing per-execution `pageRef` pattern; Pi resets on cached contexts the same way it resets `loopDetector`).
 
 **Why:** append→turn-end flush spans multiple tool calls within one execution; the buffer must be per-execution, injected (DI), and engine-agnostic.
 

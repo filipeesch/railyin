@@ -91,7 +91,7 @@ test.describe("T-A — exclusive question submit", () => {
         await page.goto("/");
         await openTaskDrawer(page, task.id);
 
-        const submit = page.locator(".interview__submit");
+        const submit = page.locator(".interview__primary");
         await expect(submit).toBeVisible();
         await expect(submit).toBeDisabled();
 
@@ -111,7 +111,7 @@ test.describe("T-B — non_exclusive question submit", () => {
         await page.goto("/");
         await openTaskDrawer(page, task.id);
 
-        const submit = page.locator(".interview__submit");
+        const submit = page.locator(".interview__primary");
         await expect(submit).toBeVisible();
         await expect(submit).toBeDisabled();
 
@@ -127,7 +127,7 @@ test.describe("T-B — non_exclusive question submit", () => {
         await page.goto("/");
         await openTaskDrawer(page, task.id);
 
-        const submit = page.locator(".interview__submit");
+        const submit = page.locator(".interview__primary");
         await expect(submit).toBeDisabled();
 
         await page.locator(".interview__option").filter({ hasText: "Realtime" }).locator(".interview__checkbox").click();
@@ -142,7 +142,7 @@ test.describe("T-B — non_exclusive question submit", () => {
         await page.goto("/");
         await openTaskDrawer(page, task.id);
 
-        const submit = page.locator(".interview__submit");
+        const submit = page.locator(".interview__primary");
         await expect(submit).toBeDisabled();
 
         // Click the row (not the checkbox) — should only show preview
@@ -161,7 +161,7 @@ test.describe("T-B — non_exclusive question submit", () => {
         await page.goto("/");
         await openTaskDrawer(page, task.id);
 
-        const submit = page.locator(".interview__submit");
+        const submit = page.locator(".interview__primary");
         const row = page.locator(".interview__option").filter({ hasText: "Auth" });
 
         // Row click focuses preview but does not select
@@ -185,7 +185,7 @@ test.describe("T-C — freetext question submit", () => {
         await page.goto("/");
         await openTaskDrawer(page, task.id);
 
-        const submit = page.locator(".interview__submit");
+        const submit = page.locator(".interview__primary");
         await expect(submit).toBeVisible();
         await expect(submit).toBeDisabled();
 
@@ -201,7 +201,7 @@ test.describe("T-C — freetext question submit", () => {
         await page.goto("/");
         await openTaskDrawer(page, task.id);
 
-        const submit = page.locator(".interview__submit");
+        const submit = page.locator(".interview__primary");
         const textarea = page.locator(".interview__textarea--freetext");
 
         await textarea.fill("Some text");
@@ -215,7 +215,7 @@ test.describe("T-C — freetext question submit", () => {
 // ─── T-D: Multi-question — all must be answered before submit ────────────────
 
 test.describe("T-D — multi-question batch (paginated)", () => {
-    test("T-D: submit disabled until all questions are answered; Next advances pages", async ({ page, api, task }) => {
+    test("T-D: primary action is Next on non-last pages, Submit on the last page", async ({ page, api, task }) => {
         const msg = makeInterviewPrompt(task.id, {
             questions: [exclusiveQuestion, freetextQuestion],
         });
@@ -224,25 +224,24 @@ test.describe("T-D — multi-question batch (paginated)", () => {
         await page.goto("/");
         await openTaskDrawer(page, task.id);
 
-        const submit = page.locator(".interview__submit");
-        const next = page.locator(".interview__next");
-        await expect(submit).toBeDisabled();
-        await expect(next).toBeVisible();
+        const primary = page.locator(".interview__primary");
+        await expect(primary).toHaveText("Next");
+        await expect(primary).toBeDisabled();
 
-        // Page 1 is the exclusive question — answering enables Next, not Submit.
+        // Page 1 is the exclusive question — answering enables Next (primary).
         await page.locator(".interview__option").filter({ hasText: "PostgreSQL" }).first().click();
-        await expect(next).toBeEnabled();
-        await expect(submit).toBeDisabled();
+        await expect(primary).toBeEnabled();
 
         // Advance to page 2 (freetext).
-        await next.click();
+        await primary.click();
         await expect(page.locator(".interview__textarea--freetext")).toBeVisible();
-        // On the last page Next is gone, Submit remains disabled until answered.
-        await expect(next).not.toBeVisible();
+        // On the last page the primary action is Submit, disabled until answered.
+        await expect(primary).toHaveText("Submit");
+        await expect(primary).toBeDisabled();
 
         // Answer the second question
         await page.locator(".interview__textarea--freetext").fill("My answer to question 2");
-        await expect(submit).toBeEnabled();
+        await expect(primary).toBeEnabled();
     });
 
     test("T-D2: Back returns to previous page preserving answers", async ({ page, api, task }) => {
@@ -256,11 +255,38 @@ test.describe("T-D — multi-question batch (paginated)", () => {
 
         // Answer page 1, go to page 2, come back.
         await page.locator(".interview__option").filter({ hasText: "PostgreSQL" }).first().click();
-        await page.locator(".interview__next").click();
+        await page.locator(".interview__primary").click();
         await page.locator(".interview__back").click();
 
         // The option selected on page 1 is preserved.
         await expect(page.locator(".interview__option--selected").filter({ hasText: "PostgreSQL" })).toBeVisible();
+    });
+
+    test("T-D3: question counter shows current page / total", async ({ page, api, task }) => {
+        const msg = makeInterviewPrompt(task.id, {
+            questions: [exclusiveQuestion, freetextQuestion],
+        });
+        api.handle("conversations.getMessages", () => messagePage([msg]));
+
+        await page.goto("/");
+        await openTaskDrawer(page, task.id);
+
+        await expect(page.locator(".interview__counter")).toHaveText("1 / 2");
+        await page.locator(".interview__option").filter({ hasText: "PostgreSQL" }).first().click();
+        await page.locator(".interview__primary").click();
+        await expect(page.locator(".interview__counter")).toHaveText("2 / 2");
+    });
+
+    test("T-D4: dismiss button closes the panel without submitting", async ({ page, api, task }) => {
+        const msg = makeInterviewPrompt(task.id, { questions: [exclusiveQuestion] });
+        api.handle("conversations.getMessages", () => messagePage([msg]));
+
+        await page.goto("/");
+        await openTaskDrawer(page, task.id);
+
+        await expect(page.locator(".decision-interview-panel")).toBeVisible();
+        await page.locator(".decision-interview-panel__dismiss").click();
+        await expect(page.locator(".decision-interview-panel")).not.toBeVisible();
     });
 });
 
@@ -282,7 +308,7 @@ test.describe("T-E — submit sends message", () => {
         await openTaskDrawer(page, task.id);
 
         await page.locator(".interview__option").filter({ hasText: "PostgreSQL" }).click();
-        await page.locator(".interview__submit").click();
+        await page.locator(".interview__primary").click();
 
         // Verify answers were sent with the selected option title
         await expect.poll(() => sentBody).toBeTruthy();
@@ -305,7 +331,7 @@ test.describe("T-F — answered read-only state", () => {
 
         // Should show the answered read-only view, not the interactive form
         await expect(page.locator(".interview")).not.toBeVisible();
-        await expect(page.locator(".interview__submit")).not.toBeVisible();
+        await expect(page.locator(".interview__primary")).not.toBeVisible();
     });
 });
 
@@ -341,7 +367,7 @@ test.describe("T-G — answered detection with streaming", () => {
 
         // Still read-only — form still hidden after streaming event
         await expect(page.locator(".interview")).not.toBeVisible();
-        await expect(page.locator(".interview__submit")).not.toBeVisible();
+        await expect(page.locator(".interview__primary")).not.toBeVisible();
     });
 });
 
@@ -442,7 +468,7 @@ test.describe("T-J — streaming flow renders pages live + persisted prompt", ()
         await openTaskDrawer(page, task.id);
 
         // No form yet
-        await expect(page.locator(".interview__submit")).not.toBeVisible();
+        await expect(page.locator(".interview__primary")).not.toBeVisible();
 
         // Agent streams a decision_request_page event while still running.
         ws.pushDecisionRequestPage(task.id, 7001, exclusiveQuestion);
@@ -450,15 +476,15 @@ test.describe("T-J — streaming flow renders pages live + persisted prompt", ()
         // The page streams live into the fixed panel BEFORE done.
         await expect(page.locator(".decision-interview-panel .interview__question-text")).toContainText("Which database do you prefer?", { timeout: 5000 });
         // Submit is disabled while streaming (waiting_user not reached).
-        await expect(page.locator(".interview__submit")).toBeDisabled();
+        await expect(page.locator(".interview__primary")).toBeDisabled();
 
         // Now update the API to include the persisted prompt (backend wrote at turn end)
         servePrompt = true;
         ws.pushDone(task.id, 7001);
 
         // Panel reconciles to the persisted payload; form still present.
-        await expect(page.locator(".interview__submit")).toBeVisible({ timeout: 5000 });
-        await expect(page.locator(".interview__submit")).toBeDisabled();
+        await expect(page.locator(".interview__primary")).toBeVisible({ timeout: 5000 });
+        await expect(page.locator(".interview__primary")).toBeDisabled();
     });
 
     test("T-J2: persisted decision_request_prompt is interactive — select option and submit", async ({ page, api, ws, task }) => {
@@ -477,21 +503,22 @@ test.describe("T-J — streaming flow renders pages live + persisted prompt", ()
         serveMessages = [promptMsg];
         ws.pushDone(task.id, 7002);
 
-        await expect(page.locator(".interview__submit")).toBeVisible({ timeout: 5000 });
+        await expect(page.locator(".interview__primary")).toBeVisible({ timeout: 5000 });
 
         // Select an option and submit
         await page.locator(".interview__option").filter({ hasText: "SQLite" }).click();
-        await expect(page.locator(".interview__submit")).toBeEnabled();
+        await expect(page.locator(".interview__primary")).toBeEnabled();
 
         // Update the messages to include the user reply (simulates what the backend would do)
         serveMessages = [promptMsg, replyMsg];
-        await page.locator(".interview__submit").click();
+        await page.locator(".interview__primary").click();
 
         // Push the reply via WS so conversation re-renders in answered state
         ws.pushNewMessage(replyMsg);
 
-        // After submit + user message arrives, form should be hidden (answered state)
-        await expect(page.locator(".decision-interview-panel .interview")).not.toBeVisible({ timeout: 5000 });
+        // After submit + user message arrives, the whole panel should close
+        // (answered state → showPanel returns false).
+        await expect(page.locator(".decision-interview-panel")).not.toBeVisible({ timeout: 5000 });
     });
 });
 
@@ -507,13 +534,13 @@ test.describe("T-K — message.new push event", () => {
         await openTaskDrawer(page, task.id);
 
         // No form yet
-        await expect(page.locator(".interview__submit")).not.toBeVisible();
+        await expect(page.locator(".interview__primary")).not.toBeVisible();
 
         // Push message.new directly — simulates server broadcasting a persisted message
         // when there is no active stream (isDone guard should not block this)
         ws.pushNewMessage(promptMsg);
 
-        await expect(page.locator(".decision-interview-panel .interview__submit")).toBeVisible({ timeout: 5000 });
+        await expect(page.locator(".decision-interview-panel .interview__primary")).toBeVisible({ timeout: 5000 });
     });
 });
 
@@ -563,7 +590,7 @@ test.describe("T-M — general notes in submission payload", () => {
         // Fill in general notes
         await page.locator(".interview__textarea--notes").fill("These are overarching notes.");
 
-        await page.locator(".interview__submit").click();
+        await page.locator(".interview__primary").click();
 
         expect(capturedBody).not.toBeNull();
         expect(capturedBody!.generalNotes).toBe("These are overarching notes.");
@@ -590,7 +617,7 @@ test.describe("T-N — empty general notes omitted", () => {
         await page.locator(".interview__textarea--freetext").fill("My use case.");
         // Do NOT fill general notes — leave empty
 
-        await page.locator(".interview__submit").click();
+        await page.locator(".interview__primary").click();
 
         expect(capturedBody).not.toBeNull();
         expect(capturedBody!.generalNotes).toBeUndefined();
@@ -615,7 +642,7 @@ test.describe("T-O — submitDecisions endpoint used on submit", () => {
         await openTaskDrawer(page, task.id);
 
         await page.locator(".interview__option").filter({ hasText: "SQLite" }).click();
-        await page.locator(".interview__submit").click();
+        await page.locator(".interview__primary").click();
 
         expect(submitDecisionsCalled).toBe(true);
     });
@@ -655,7 +682,7 @@ test.describe("T-P — Record as decisions toggle", () => {
         // Uncheck the toggle
         await page.locator(".interview__record-toggle input").uncheck();
 
-        await page.locator(".interview__submit").click();
+        await page.locator(".interview__primary").click();
 
         await expect.poll(() => capturedBody).toBeTruthy();
         expect(capturedBody!.recordAsDecisions).toBe(false);
@@ -676,7 +703,7 @@ test.describe("T-P — Record as decisions toggle", () => {
         await openTaskDrawer(page, task.id);
 
         await page.locator(".interview__option").filter({ hasText: "PostgreSQL" }).click();
-        await page.locator(".interview__submit").click();
+        await page.locator(".interview__primary").click();
 
         await expect.poll(() => capturedBody).toBeTruthy();
         expect(capturedBody!.recordAsDecisions).toBe(true);
@@ -703,7 +730,7 @@ test.describe("T-Q — multiselect Other textarea", () => {
         await page.goto("/");
         await openTaskDrawer(page, task.id);
 
-        const submit = page.locator(".interview__submit");
+        const submit = page.locator(".interview__primary");
         await expect(submit).toBeDisabled();
 
         // Click the "Other" checkbox directly (not the row) — @click.stop prevents focus change
@@ -726,7 +753,7 @@ test.describe("T-Q — multiselect Other textarea", () => {
         await page.goto("/");
         await openTaskDrawer(page, task.id);
 
-        const submit = page.locator(".interview__submit");
+        const submit = page.locator(".interview__primary");
 
         await page.locator(".interview__option").filter({ hasText: "Other" }).locator(".interview__checkbox").click();
 

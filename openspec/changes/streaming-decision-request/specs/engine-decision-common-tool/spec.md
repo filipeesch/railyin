@@ -4,21 +4,21 @@ Specification for the common decision-related tools registered in the engine too
 
 ## Requirements
 
-### Requirement: decision_request accepts a single question per call
-The `decision_request` tool SHALL accept one question object per call (`{ context?, question: {...} }`) rather than an array of questions. The question object SHALL declare `required: ["question", "type"]`, with `type` as an enum (`exclusive` | `non_exclusive` | `freetext`), `options` as an array with `minItems: 2` for choice questions, and optional `weight`, `model_lean`, `model_lean_reason`, `answers_affect_followup`, and per-question `context` guidance. The tool description SHALL instruct the model to call once per question, repeat to add more, and END ITS TURN to present the interview.
+### Requirement: decision_request accepts a single flat question per call
+The `decision_request` tool SHALL accept ONE question per call with a FLAT, top-level shape (`{ context?, question: string, type, weight?, model_lean?, model_lean_reason?, answers_affect_followup?, options? }`) rather than an array of questions or a nested `question` object. The schema SHALL declare `required: ["question", "type"]`, with `type` as an enum (`exclusive` | `non_exclusive` | `freetext`), `options` as an array with `minItems: 2` for choice questions, and optional `weight`, `model_lean`, `model_lean_reason`, `answers_affect_followup`, and per-question `context`. The tool description SHALL instruct the model to call once per question with flat top-level fields, repeat to add more, and END ITS TURN to present the interview.
 
-#### Scenario: decision_request schema is single-question
+#### Scenario: decision_request schema is single flat question
 - **WHEN** the `DECISION_REQUEST_TOOL_DEFINITION` is inspected
-- **THEN** its `parameters.properties` contain a `question` object (with nested `required: ["question", "type"]`) and an optional `context` string
-- **AND** no `questions` array property exists
+- **THEN** its `parameters.properties` contain a `question` STRING and sibling top-level `type`, `weight`, `model_lean`, `options`, etc.
+- **AND** no `questions` array property and no nested `question` object property exists
 
-#### Scenario: Valid single question appends and streams
-- **WHEN** `executeCommonTool("decision_request", { question: {...} }, ctx)` is called with a valid question
+#### Scenario: Valid flat question appends and streams
+- **WHEN** `executeCommonTool("decision_request", { question: "Pick?", type: "freetext" }, ctx)` is called with a valid flat question
 - **THEN** the question is appended to the execution buffer and the result is `{ type: "page", text, payload }`
 
-#### Scenario: Invalid single question returns error without buffer mutation
-- **WHEN** `executeCommonTool("decision_request", { question: { question: "Pick?" } }, ctx)` is called (missing `type`)
-- **THEN** the result is `{ type: "result", text }` where text names `question.type` and lists the valid enum values
+#### Scenario: Invalid flat question returns error without buffer mutation
+- **WHEN** `executeCommonTool("decision_request", { question: "Pick?" }, ctx)` is called (missing `type`)
+- **THEN** the result is `{ type: "result", text }` where text names `type` and lists the valid enum values
 - **AND** the buffer is unchanged
 
 #### Scenario: decision_request registration in common-tools

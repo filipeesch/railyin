@@ -537,7 +537,7 @@ test.describe("CD-D — waiting_user states", () => {
         await openSessionDrawer(page, session.id);
 
         await page.locator(".session-chat-view .interview__option-title", { hasText: "Use unified flow" }).click();
-        await page.locator(".session-chat-view .interview__submit").click();
+        await page.locator(".session-chat-view .interview__primary").click();
 
         await expect.poll(() => sentBody).toBeTruthy();
         const answers = (sentBody?.answers as Array<{ answer: string }>) ?? [];

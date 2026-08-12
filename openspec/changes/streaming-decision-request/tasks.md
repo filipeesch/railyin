@@ -2,7 +2,7 @@
 
 - [x] 1.1 Add `decision_request_page` to `StreamEventType` in `src/shared/rpc-types.ts` (ephemeral, not persisted) alongside the existing `decision_request_prompt` message type
 - [x] 1.2 Add optional `context?: string` to `DecisionRequestQuestion` in `src/shared/rpc-types.ts` (per-question preamble; `DecisionRequestPayload` shape preserved)
-- [x] 1.3 Rewrite `DECISION_REQUEST_TOOL_DEFINITION` in `src/bun/engine/decision-request-tool-definition.ts` — single `question` object property (with nested `required: ["question", "type"]`, `type` enum, `options` `minItems: 2`), optional top-level `context`, and updated description teaching the streaming contract (call once per question; END YOUR TURN to present)
+- [x] 1.3 Rewrite `DECISION_REQUEST_TOOL_DEFINITION` in `src/bun/engine/decision-request-tool-definition.ts` — FLAT single-question shape (`question: string`, sibling `type` enum, `options` `minItems: 2`, optional `context`/`weight`/`model_lean`/etc.), NO nested object, and updated description teaching the streaming contract (call once per question with flat fields; END YOUR TURN to present)
 
 ## 2. Validation and normalization
 
@@ -19,7 +19,7 @@
 
 - [x] 4.1 In `executeCommonTool` (`src/bun/engine/common-tools.ts`): call `normalizeToolArguments(def.parameters, args)` at the top before `validateToolArgs`
 - [x] 4.2 Add `{ type: "page"; text: string; payload: string }` to `ToolExecutionResult`; remove `suspend` variant (user decision: no common tool returns suspend anymore)
-- [x] 4.3 Rewrite the `decision_request` case: validate single question (schema + runtime options-count for non-freetext), append to `ctx.runtime.decisionBuffer`, return `{ type: "page", text: <count + END YOUR TURN hint>, payload: JSON.stringify(page) }`; invalid → `{ type: "result", text: <error> }` with buffer preserved (delegates to `decision-request-executor.ts`)
+- [x] 4.3 Rewrite the `decision_request` case: validate flat single question (schema + runtime options-count for non-freetext), assemble a `DecisionRequestQuestion` from the flat args, append to `ctx.runtime.decisionBuffer`, return `{ type: "page", text: <count + END YOUR TURN hint>, payload: JSON.stringify(question) }`; invalid → `{ type: "result", text: <error> }` with buffer preserved (delegates to `decision-request-executor.ts`)
 
 ## 5. Engine wrappers — page emission + turn-end flush
 

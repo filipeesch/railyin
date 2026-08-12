@@ -234,9 +234,9 @@ test.describe("CU-4 — decision_request prompt under cursor", () => {
         await expect(page.locator(".interview__option").filter({ hasText: "Node" })).toBeVisible();
 
         // Submit stays disabled until the user picks an option.
-        await expect(page.locator(".interview__submit")).toBeDisabled();
+        await expect(page.locator(".interview__primary")).toBeDisabled();
         await page.locator(".interview__option").filter({ hasText: "Node" }).click();
-        await expect(page.locator(".interview__submit")).toBeEnabled();
+        await expect(page.locator(".interview__primary")).toBeEnabled();
     });
 });
 

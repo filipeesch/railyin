@@ -20,7 +20,7 @@ The `executeCommonTool` function SHALL call `normalizeToolArguments(def.paramete
 The `ToolExecutionResult` discriminated union SHALL be exactly `{ type: "result"; text: string; ... } | { type: "page"; text: string; payload: string }`. The `page` variant SHALL signal that a question was appended and the agent loop must continue. The former `suspend` variant SHALL NOT exist (user decision: "Remove suspend variant entirely") — engine-level `ask_user`/`shell_approval` suspension flows through EngineEvents, not through `ToolExecutionResult`.
 
 #### Scenario: decision_request returns page variant
-- **WHEN** `executeCommonTool("decision_request", { question: {...} }, ctx)` succeeds
+- **WHEN** `executeCommonTool("decision_request", { question: "Pick?", type: "freetext" }, ctx)` succeeds (flat shape)
 - **THEN** the result is `{ type: "page", text, payload }` and the engine continues the loop
 
 #### Scenario: no common tool returns suspend
