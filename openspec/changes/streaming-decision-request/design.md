@@ -40,11 +40,13 @@ New `DecisionQuestionBuffer` class (`src/bun/engine/decision-buffer.ts`) with `a
 
 **Why:** append→turn-end flush spans multiple tool calls within one execution; the buffer must be per-execution, injected (DI), and engine-agnostic.
 
-### D3 — `ToolExecutionResult` gains a `page` variant
+### D3 — `ToolExecutionResult` gains a `page` variant; `suspend` removed
 ```ts
-| { type: "page"; text: string; payload: string }
+export type ToolExecutionResult =
+  | { type: "result"; text: string; writtenFiles?; beforeFiles? }
+  | { type: "page"; text: string; payload: string };
 ```
-A valid `decision_request` call returns `page` (engine emits `decision_request_page` and continues the loop); an invalid single question returns `{ type: "result", text: <schema-aware error> }` (no page, buffer preserved — "keep buffer; reject only the bad call"). `suspend` remains for `ask_user`/`shell_approval` paths only.
+A valid `decision_request` call returns `page` (engine emits `decision_request_page` and continues the loop); an invalid single question returns `{ type: "result", text: <schema-aware error> }` (no page, buffer preserved — "keep buffer; reject only the bad call"). The `suspend` variant is **removed entirely** (user decision: "Remove suspend variant entirely") — no common tool returns it; engine-level `ask_user`/`shell_approval` suspension flows through EngineEvents, not `ToolExecutionResult`.
 
 ### D4 — Engine wrappers emit `decision_request_page`; turn-end flush emits terminal `decision_request`
 Each engine wrapper (Pi `tools/common.ts`, Cursor `tools.ts`, Claude `tools.ts`, Copilot `tools.ts`, OpenCode `mcp-server.ts`) handles the `page` result: emit `{ type: "decision_request_page", payload }` engine event and return the text to the model (loop continues, NO abort). At turn end, before `done`, each engine checks the buffer — non-empty → emit `{ type: "decision_request", payload: JSON.stringify({ questions }) }` instead of `done`; empty → normal `done`.
@@ -74,7 +76,7 @@ Extract `buildDecisionRequestTerminalEvent(buffer: DecisionQuestionBuffer): Engi
 **Why:** one unit test covers the drain logic; per-engine wiring is a trivial 3-line call verified by existing engine mocks/faux providers; avoids duplicating buffer-drain logic across 5 engines (DRY/SOLID).
 
 ### D11 — Mock adapters mirror the `page` contract
-`MockCursorSdkAdapter.callTool` (and equivalent mocks for Copilot/OpenCode/Claude) SHALL inspect the tool result: `type === "page"` → yield `{ type: "decision_request_page", payload }` then emit the `tool_start`/`tool_result` pair with the returned text (loop continues, NO abort); `type === "suspend"` (ask_user paths) keeps today's abort semantics. (User decision: emit page event + continue loop.)
+`MockCursorSdkAdapter.callTool` (and equivalent mocks for Copilot/OpenCode/Claude) SHALL inspect the tool result: `type === "page"` → yield `{ type: "decision_request_page", payload }` then emit the `tool_start`/`tool_result` pair with the returned text (loop continues, NO abort). There is no `suspend` result anymore (`ToolExecutionResult` is `result | page` per D3); ask_user/shell_approval are engine-level events. (User decision: emit page event + continue loop.)
 
 **Why:** the mocks become faithful in-memory stand-ins for production, letting integration scenarios assert the full page-streaming contract end-to-end (page events observable on IPC, stream-processor + frontend path exercised).
 
@@ -100,8 +102,8 @@ Tests are part of this change, split across the project's four existing layers. 
    - `src/mainview/utils/decisionRequest.ts` additions: pagination helpers (`canAdvancePage`, per-page validity, answer-state preservation)
 
 2. **L2 Component-DI (engine tool builders with injected fakes):**
-   - `pi-common-tools-bridge.test.ts` additions: `page` result → `pageRef.onPage` fires + text returned to model; `suspend` still routed to `suspendRef.onSuspend`
-   - `claude-tools.test.ts`: SpyZod schema-shape rewritten for single `question` object; `takePendingPage` return contract (parallel to `takePendingSuspend`); `executeCommonTool` decision_request tests use an injected `makeDecisionCtx()` (fresh buffer + `initDb()` repos)
+   - `pi-common-tools-bridge.test.ts` additions: `page` result → `pageRef.onPage` fires + text returned to model (PCB-5)
+   - `claude-tools.test.ts`: SpyZod schema-shape rewritten for single `question` object; `takePendingPage` return contract; `executeCommonTool` decision_request tests use an injected fresh-buffer context
    - `common-tools-registration.test.ts`: `baseContext` gains `runtime.decisionBuffer`; decision_request registration/description assertions updated
 
 3. **L3 Integration (in-memory DB + fake engines via `createBackendRpcRuntime`):**

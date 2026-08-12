@@ -16,16 +16,16 @@ The `executeCommonTool` function SHALL call `normalizeToolArguments(def.paramete
 - **WHEN** any engine (Pi, Cursor, Claude, Copilot, OpenCode) dispatches a common tool through `executeCommonTool`
 - **THEN** the same normalization runs for every engine before validation
 
-### Requirement: ToolExecutionResult includes a page variant
-The `ToolExecutionResult` discriminated union SHALL include `{ type: "page"; text: string; payload: string }` in addition to `{ type: "result"; text: string; ... }` and `{ type: "suspend"; text: string; payload: string }`. The `page` variant SHALL signal that a question was appended and the agent loop must continue; the `suspend` variant SHALL remain reserved for `ask_user`/`shell_approval`-style paths that halt the loop.
+### Requirement: ToolExecutionResult includes a page variant (suspend removed)
+The `ToolExecutionResult` discriminated union SHALL be exactly `{ type: "result"; text: string; ... } | { type: "page"; text: string; payload: string }`. The `page` variant SHALL signal that a question was appended and the agent loop must continue. The former `suspend` variant SHALL NOT exist (user decision: "Remove suspend variant entirely") — engine-level `ask_user`/`shell_approval` suspension flows through EngineEvents, not through `ToolExecutionResult`.
 
 #### Scenario: decision_request returns page variant
 - **WHEN** `executeCommonTool("decision_request", { question: {...} }, ctx)` succeeds
 - **THEN** the result is `{ type: "page", text, payload }` and the engine continues the loop
 
-#### Scenario: suspend variant retained for ask_user paths
-- **WHEN** a suspend-loop tool (e.g. ask_user-style path) returns
-- **THEN** the result is `{ type: "suspend", text, payload }` and the engine aborts the loop
+#### Scenario: no common tool returns suspend
+- **WHEN** any common tool is executed via `executeCommonTool`
+- **THEN** the result is never `{ type: "suspend" }` (the variant does not exist in the type)
 
 ### Requirement: Shared pure turn-end flush helper
 The system SHALL provide a pure, IO-free helper `buildDecisionRequestTerminalEvent(buffer: DecisionQuestionBuffer): EngineEvent | null` that returns the terminal `{ type: "decision_request", payload }` event when the buffer is non-empty and `null` when empty. Every engine SHALL call it immediately before emitting `done` and SHALL yield the returned terminal event instead of `done` when non-null. (Decision D10.)

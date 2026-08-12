@@ -134,7 +134,7 @@ The interview panel footer SHALL provide Back and Next/Submit controls: Back nav
 - **AND** the background task is marked unread (matching existing background-message behavior)
 
 ### Requirement: Engine mock adapters mirror the page contract
-Test mock adapters (MockCursorSdkAdapter, MockCopilotSession, MockOpenCodeSdkAdapter, Claude test harness) SHALL inspect tool results in their `callTool` steps: a `{ type: "page" }` result SHALL yield a `decision_request_page` engine event and continue the loop (tool_start/tool_result pair emitted, no abort); a `{ type: "suspend" }` result SHALL retain today's abort semantics. This makes integration scenarios faithful to production. (Decision D11.)
+Test mock adapters (MockCursorSdkAdapter, MockCopilotSession, MockOpenCodeSdkAdapter, Claude test harness) SHALL inspect tool results in their `callTool` steps: a `{ type: "page" }` result SHALL yield a `decision_request_page` engine event and continue the loop (tool_start/tool_result pair emitted, no abort). There is no `suspend` result anymore (D3/D11) — ask_user/shell_approval are engine-level events, not tool results. This makes integration scenarios faithful to production. (Decision D11.)
 
 #### Scenario: callTool with page result emits page event and continues
 - **WHEN** a mock adapter's `callTool` step invokes a tool that returns `{ type: "page", text, payload }`
@@ -142,6 +142,6 @@ Test mock adapters (MockCursorSdkAdapter, MockCopilotSession, MockOpenCodeSdkAda
 - **AND** emits the tool_start/tool_result pair with the returned text
 - **AND** the run continues (no abort signal)
 
-#### Scenario: callTool with suspend result retains abort semantics
-- **WHEN** a mock adapter's `callTool` step invokes a tool that returns `{ type: "suspend", text, payload }`
-- **THEN** the mock keeps the existing abort behavior (no tool_start/tool_result pair; the run's abort path stops the stream)
+#### Scenario: callTool with plain result emits tool pair only
+- **WHEN** a mock adapter's `callTool` step invokes a tool that returns `{ type: "result", text }`
+- **THEN** the mock emits the tool_start/tool_result pair with the returned text and no page event

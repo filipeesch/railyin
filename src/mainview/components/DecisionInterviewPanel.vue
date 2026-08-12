@@ -65,9 +65,6 @@ const questions = computed<DecisionRequestQuestion[]>(() => {
 
 const context = computed<string | undefined>(() => persistedPayload.value?.context ?? undefined);
 
-/** Whether the interview is still streaming (no persisted terminal yet). */
-const isStreaming = computed(() => liveQuestions.value.length > 0 && persistedPayload.value === null);
-
 /** Answered state: a user message follows the terminal prompt in history. */
 const answeredText = computed<string | undefined>(() => {
   const payload = persistedPayload.value;

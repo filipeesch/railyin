@@ -10,7 +10,6 @@ import type {
 } from "../types.ts";
 import type { OpenCodeSdkAdapter } from "./types.ts";
 import { DecisionQuestionBuffer } from "../decision-buffer.ts";
-import { buildDecisionRequestTerminalEvent } from "../decision-request-terminal-event.ts";
 import { TodoRepository } from "../../db/todos.ts";
 import { DecisionRepository } from "../../db/repositories/decision-repository.ts";
 import { NoteRepository } from "../../db/repositories/note-repository.ts";
