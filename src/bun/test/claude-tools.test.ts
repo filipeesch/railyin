@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { buildClaudeToolServer, extractWrittenFilesFromResult } from "../engine/claude/tools.ts";
 import { DECISION_REQUEST_TOOL_DEFINITION } from "../engine/decision-request-tool-definition.ts";
 import { executeCommonTool } from "../engine/common-tools.ts";
+import { DecisionQuestionBuffer } from "../engine/decision-buffer.ts";
 
 // ---------------------------------------------------------------------------
 // Minimal ZodLike spy — records calls so we can assert schema structure
@@ -67,19 +68,19 @@ function strip(node: unknown): SpyNode {
 // Schema shape tests
 // ---------------------------------------------------------------------------
 describe("buildClaudeToolServer — return contract", () => {
-  it("returns { server, takePendingSuspend } — regression guard for adapter.ts destructuring", () => {
+  it("returns { server, takePendingPage } — regression guard for adapter.ts destructuring", () => {
     const z = makeSpyZod();
     const sdk = {
       tool: (_name: string, _desc: string, _shape: unknown, _handler: unknown) => ({}),
       createSdkMcpServer: (opts: unknown) => ({ _mcpServer: true, opts }),
     };
     const result = buildClaudeToolServer(sdk as never, z as never, {} as never);
-    // adapter.ts does: const { server: toolServer, takePendingSuspend } = buildClaudeToolServer(...)
+    // adapter.ts does: const { server: toolServer, takePendingPage } = buildClaudeToolServer(...)
     // If this destructuring returns undefined, the SDK crashes with '$1.type' at runtime.
     expect(result).toHaveProperty("server");
-    expect(result).toHaveProperty("takePendingSuspend");
-    expect(typeof (result as { takePendingSuspend: unknown }).takePendingSuspend).toBe("function");
-    expect((result as { takePendingSuspend: () => unknown }).takePendingSuspend()).toBeUndefined();
+    expect(result).toHaveProperty("takePendingPage");
+    expect(typeof (result as { takePendingPage: unknown }).takePendingPage).toBe("function");
+    expect((result as { takePendingPage: () => unknown }).takePendingPage()).toBeUndefined();
     expect((result as { server: unknown }).server).toBeDefined();
   });
 });
@@ -92,34 +93,24 @@ describe("buildClaudeToolServer — decision_request schema shape", () => {
     expect(tools["decision_request"]).toBeDefined();
   });
 
-  it("questions is advertised as array (not any/{})", () => {
+  it("question is advertised as object (not any/{})", () => {
     const shape = tools["decision_request"].shape;
-    const questions = strip(shape["questions"]);
-    expect(questions.kind).toBe("array");
+    const question = strip(shape["question"]);
+    expect(question.kind).toBe("object");
   });
 
-  it("questions items is an object", () => {
+  it("question.type is advertised as required enum with correct values", () => {
     const shape = tools["decision_request"].shape;
-    const questions = strip(shape["questions"]) as { kind: "array"; items: SpyNode };
-    expect(questions.items.kind).toBe("object");
+    const question = strip(shape["question"]) as { kind: "object"; shape: Record<string, SpyNode> };
+    const typeField = strip(question.shape["type"]);
+    expect(typeField.kind).toBe("enum");
+    expect((typeField as { kind: "enum"; values: string[] }).values).toEqual(["exclusive", "non_exclusive", "freetext"]);
   });
 
-  it("questions[].type is advertised as enum with correct values", () => {
+  it("question.weight is advertised as optional enum", () => {
     const shape = tools["decision_request"].shape;
-    const questions = strip(shape["questions"]) as { kind: "array"; items: SpyNode };
-    const itemShape = (questions.items as { kind: "object"; shape: Record<string, SpyNode> }).shape;
-    const typeField = strip(itemShape["type"]) as { kind: "optional"; inner: SpyNode };
-    // type is optional so unwrap one level
-    const inner = typeField.kind === "optional" ? typeField.inner : typeField;
-    expect(inner.kind).toBe("enum");
-    expect((inner as { kind: "enum"; values: string[] }).values).toEqual(["exclusive", "non_exclusive", "freetext"]);
-  });
-
-  it("questions[].weight is advertised as optional enum", () => {
-    const shape = tools["decision_request"].shape;
-    const questions = strip(shape["questions"]) as { kind: "array"; items: SpyNode };
-    const itemShape = (questions.items as { kind: "object"; shape: Record<string, SpyNode> }).shape;
-    const weightField = strip(itemShape["weight"]) as { kind: "optional"; inner: SpyNode };
+    const question = strip(shape["question"]) as { kind: "object"; shape: Record<string, SpyNode> };
+    const weightField = strip(question.shape["weight"]) as { kind: "optional"; inner: SpyNode };
     const inner = weightField.kind === "optional" ? weightField.inner : weightField;
     expect(inner.kind).toBe("enum");
     expect((inner as { kind: "enum"; values: string[] }).values).toEqual(["critical", "medium", "easy"]);
@@ -127,11 +118,11 @@ describe("buildClaudeToolServer — decision_request schema shape", () => {
 
   it("DECISION_REQUEST_TOOL_DEFINITION.parameters matches what buildClaudeToolServer advertises (regression guard)", () => {
     // Verify the definition still has the enum inline so no future refactor silently breaks it
-    const questionItems = (DECISION_REQUEST_TOOL_DEFINITION.parameters as {
-      properties: { questions: { items: { properties: { type: { type: string; enum: string[] } } } } };
-    }).properties.questions.items.properties.type;
-    expect(questionItems.type).toBe("string");
-    expect(questionItems.enum).toEqual(["exclusive", "non_exclusive", "freetext"]);
+    const questionType = (DECISION_REQUEST_TOOL_DEFINITION.parameters as {
+      properties: { question: { properties: { type: { type: string; enum: string[] } } } };
+    }).properties.question.properties.type;
+    expect(questionType.type).toBe("string");
+    expect(questionType.enum).toEqual(["exclusive", "non_exclusive", "freetext"]);
   });
 });
 
@@ -139,23 +130,18 @@ describe("buildClaudeToolServer — decision_request schema shape", () => {
 // executeCommonTool — decision_request input validation
 // ---------------------------------------------------------------------------
 describe("executeCommonTool — decision_request input validation", () => {
-  const ctx = {} as never;
+  function makeCtx() {
+    return { runtime: { decisionBuffer: new DecisionQuestionBuffer() } } as never;
+  }
 
-  it("returns error when questions is wrong type (not an array)", async () => {
-    const result = await executeCommonTool("decision_request", { questions: "not-an-array" }, ctx);
+  it("returns error when question is missing entirely", async () => {
+    const result = await executeCommonTool("decision_request", {}, makeCtx());
     expect(result.type).toBe("result");
-    expect((result as { type: "result"; text: string }).text).toMatch(/must be array|questions/);
-  });
-
-  it("returns error when questions array is empty", async () => {
-    const result = await executeCommonTool("decision_request", { questions: [] }, ctx);
-    expect(result.type).toBe("result");
-    expect((result as { type: "result"; text: string }).text).toMatch(/at least 1/);
+    expect((result as { type: "result"; text: string }).text).toMatch(/question/);
   });
 
   it("returns clear error when question type is invalid (e.g. single_choice)", async () => {
-    const questions = [{ question: "Pick one", type: "single_choice" }];
-    const result = await executeCommonTool("decision_request", { questions }, ctx);
+    const result = await executeCommonTool("decision_request", { question: { question: "Pick one", type: "single_choice" } }, makeCtx());
     expect(result.type).toBe("result");
     const text = (result as { type: "result"; text: string }).text;
     expect(text).toMatch(/single_choice/);
@@ -165,32 +151,65 @@ describe("executeCommonTool — decision_request input validation", () => {
   });
 
   it("returns error when question.question field is missing", async () => {
-    const questions = [{ type: "exclusive" }];
-    const result = await executeCommonTool("decision_request", { questions }, ctx);
+    const result = await executeCommonTool("decision_request", { question: { type: "exclusive", options: [{ title: "A", description: "a" }, { title: "B", description: "b" }] } }, makeCtx());
     expect(result.type).toBe("result");
     expect((result as { type: "result"; text: string }).text).toMatch(/question/);
   });
 
-  it("suspends with valid exclusive question", async () => {
-    const questions = [
-      { question: "Pick a DB", type: "exclusive", options: [{ title: "PG", description: "Postgres" }, { title: "SQLite", description: "SQLite embedded" }] },
-    ];
-    const result = await executeCommonTool("decision_request", { questions }, ctx);
-    expect(result.type).toBe("suspend");
+  it("returns error when question.type is missing (schema-aware enum hint)", async () => {
+    const result = await executeCommonTool("decision_request", { question: { question: "Pick one" } }, makeCtx());
+    expect(result.type).toBe("result");
+    const text = (result as { type: "result"; text: string }).text;
+    expect(text).toMatch(/question\.type/);
+    expect(text).toMatch(/exclusive/);
+    expect(text).toMatch(/freetext/);
   });
 
-  it("suspends with valid non_exclusive question", async () => {
-    const questions = [
-      { question: "Pick strategies", type: "non_exclusive", options: [{ title: "A", description: "opt A" }, { title: "B", description: "opt B" }] },
-    ];
-    const result = await executeCommonTool("decision_request", { questions }, ctx);
-    expect(result.type).toBe("suspend");
+  it("returns page with valid exclusive question", async () => {
+    const result = await executeCommonTool(
+      "decision_request",
+      { question: { question: "Pick a DB", type: "exclusive", options: [{ title: "PG", description: "Postgres" }, { title: "SQLite", description: "SQLite embedded" }] } },
+      makeCtx(),
+    );
+    expect(result.type).toBe("page");
+    expect((result as { type: "page"; text: string }).text).toMatch(/Question 1 of 1 buffered/);
   });
 
-  it("suspends with valid freetext question", async () => {
-    const questions = [{ question: "Any constraints?", type: "freetext" }];
-    const result = await executeCommonTool("decision_request", { questions }, ctx);
-    expect(result.type).toBe("suspend");
+  it("returns page with valid non_exclusive question", async () => {
+    const result = await executeCommonTool(
+      "decision_request",
+      { question: { question: "Pick strategies", type: "non_exclusive", options: [{ title: "A", description: "opt A" }, { title: "B", description: "opt B" }] } },
+      makeCtx(),
+    );
+    expect(result.type).toBe("page");
+  });
+
+  it("returns page with valid freetext question", async () => {
+    const result = await executeCommonTool(
+      "decision_request",
+      { question: { question: "Any constraints?", type: "freetext" } },
+      makeCtx(),
+    );
+    expect(result.type).toBe("page");
+  });
+
+  it("appends to the buffer across calls", async () => {
+    const ctx = makeCtx();
+    await executeCommonTool("decision_request", { question: { question: "Q1", type: "freetext" } }, ctx);
+    const second = await executeCommonTool("decision_request", { question: { question: "Q2", type: "freetext" } }, ctx);
+    expect(second.type).toBe("page");
+    expect((second as { type: "page"; text: string }).text).toMatch(/Question 2 of 2 buffered/);
+  });
+
+  it("preserves buffer when a later question is invalid (keep-on-error)", async () => {
+    const ctx = makeCtx();
+    await executeCommonTool("decision_request", { question: { question: "Q1", type: "freetext" } }, ctx);
+    const bad = await executeCommonTool("decision_request", { question: { question: "Q2" } }, ctx);
+    expect(bad.type).toBe("result");
+    const good = await executeCommonTool("decision_request", { question: { question: "Q2", type: "freetext" } }, ctx);
+    expect(good.type).toBe("page");
+    const buffer = (ctx as { runtime: { decisionBuffer: DecisionQuestionBuffer } }).runtime.decisionBuffer;
+    expect(buffer.count).toBe(2);
   });
 });
 

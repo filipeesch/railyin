@@ -77,21 +77,20 @@ describe("Cursor backend RPC scenarios", () => {
         await runToolFailureScenario(runtime);
     });
 
-    it("§6.3.5a — decision_request via callTool persists a decision_request_prompt", async () => {
-        const interviewArgs = {
-            questions: [
-                {
-                    question: "Choose architecture",
-                    type: "exclusive",
-                    options: [
-                        { title: "Option A", description: "Tradeoffs" },
-                        { title: "Option B", description: "Alternative tradeoffs" },
-                    ],
-                },
+    it("§6.3.5a — streaming decision_request via callTool persists a decision_request_prompt", async () => {
+        const q1 = {
+            question: "Choose architecture",
+            type: "exclusive",
+            options: [
+                { title: "Option A", description: "Tradeoffs" },
+                { title: "Option B", description: "Alternative tradeoffs" },
             ],
         };
         const adapter = new MockCursorSdkAdapter().queueTurn({
-            steps: [callTool("decision_request", interviewArgs)],
+            steps: [
+                callTool("decision_request", { question: q1 }),
+                callTool("decision_request", { question: { question: "Any constraints?", type: "freetext" } }),
+            ],
         });
         const runtime = createRuntime(adapter);
         const { taskId } = await runtime.createTask();
@@ -100,7 +99,12 @@ describe("Cursor backend RPC scenarios", () => {
         await runtime.waitForExecutionStatus(result.executionId, "waiting_user");
 
         expect(runtime.getTaskState(taskId)).toBe("waiting_user");
-        expect(runtime.getMessages(taskId).some((m) => m.type === "decision_request_prompt")).toBe(true);
+        const messages = runtime.getMessages(taskId);
+        expect(messages.some((m) => m.type === "decision_request_prompt")).toBe(true);
+        // The terminal prompt carries BOTH buffered questions (turn-end flush).
+        const prompt = messages.find((m) => m.type === "decision_request_prompt")!;
+        const parsed = JSON.parse(prompt.content) as { questions: Array<{ question: string }> };
+        expect(parsed.questions.map((q) => q.question)).toEqual(["Choose architecture", "Any constraints?"]);
     });
 
     it("§6.3.5b — sending a follow-up message after decision_request restarts as a fresh execution", async () => {
@@ -108,9 +112,7 @@ describe("Cursor backend RPC scenarios", () => {
         // into its restart branch and starts a brand-new execution.
         const adapter = new MockCursorSdkAdapter()
             .queueTurn({
-                steps: [callTool("decision_request", {
-                    questions: [{ question: "A or B?", type: "freetext" }],
-                })],
+                steps: [callTool("decision_request", { question: { question: "A or B?", type: "freetext" } })],
             })
             .queueTurn({ steps: [token("Resumed with new execution")] });
         const runtime = createRuntime(adapter);

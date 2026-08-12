@@ -7,7 +7,6 @@ import { McpClientRegistry } from "../mcp/registry.ts";
 import { FakeMcpClient } from "./support/fake-mcp-client.ts";
 import {
   MockOpenCodeSdkAdapter,
-  askUser,
   callTool,
   done,
   fatal,
@@ -20,8 +19,6 @@ import {
   waitForAbort,
 } from "./support/opencode-sdk-mock.ts";
 import {
-  runAskUserScenario,
-  runAskUserResumeScenario,
   runCancellationScenario,
   runFatalFailureScenario,
   runMcpDiscoveryScenario,
@@ -89,15 +86,6 @@ describe("OpenCode backend RPC scenarios", () => {
     await runToolFailureScenario(runtime);
   });
 
-  it("covers ask-user suspension via shared scenario", async () => {
-    const adapter = new MockOpenCodeSdkAdapter();
-    // No preceding token — ask_user is the first event so no assistant message is flushed
-    adapter.queueCreate({ steps: [askUser('{"question":"Need input"}')] });
-    const runtime = createOpenCodeRuntime(adapter);
-
-    await runAskUserScenario(runtime);
-  });
-
   it("covers cancellation via shared scenario", async () => {
     const adapter = new MockOpenCodeSdkAdapter();
     adapter.queueCreate({ steps: [token("working"), waitForAbort()] });
@@ -128,25 +116,6 @@ describe("OpenCode backend RPC scenarios", () => {
     const messages = runtime.getMessages(taskId);
     const hasReasoning = messages.some((m) => m.type === "reasoning" || m.content?.includes("internal plan"));
     expect(hasReasoning).toBe(true);
-  });
-});
-
-// ── OpenCode-specific: ask_user resume (same execution continues) ─────────────
-
-describe("OpenCode ask_user resume", () => {
-  it("resumes after ask-user with the same execution (same executionId)", async () => {
-    const adapter = new MockOpenCodeSdkAdapter();
-    // Single script: blocks at ask_user, then continues with reply after respondAskUser()
-    adapter.queueCreate({
-      steps: [
-        askUser('{"question":"Which option?","options":["A","B"]}'),
-        token("Continuing with option A"),
-        done(),
-      ],
-    });
-
-    const runtime = createOpenCodeRuntime(adapter);
-    await runAskUserResumeScenario(runtime);
   });
 });
 

@@ -108,39 +108,50 @@ describe("validateToolArgs — V-5: minItems violation", () => {
 describe("validateToolArgs — V-6: decision_request valid", () => {
   it("returns null for valid decision_request args", () => {
     const args = {
-      questions: [
-        {
-          question: "Which DB?",
-          type: "exclusive",
-          options: [{ title: "PG", description: "Postgres" }, { title: "SQLite", description: "SQLite embedded" }],
-        },
-      ],
+      question: {
+        question: "Which DB?",
+        type: "exclusive",
+        options: [{ title: "PG", description: "Postgres" }, { title: "SQLite", description: "SQLite embedded" }],
+      },
     };
     expect(validateToolArgs(DECISION_REQUEST_TOOL_DEFINITION, args)).toBeNull();
   });
-});
 
-// ---------------------------------------------------------------------------
-// V-7: decision_request — missing questions
-// ---------------------------------------------------------------------------
-
-describe("validateToolArgs — V-7: decision_request missing questions", () => {
-  it("returns required error for missing questions", () => {
-    const err = validateToolArgs(DECISION_REQUEST_TOOL_DEFINITION, {});
-    expect(err).not.toBeNull();
-    expect(err).toContain("'questions' is required");
+  it("returns null for valid freetext question without options", () => {
+    expect(validateToolArgs(DECISION_REQUEST_TOOL_DEFINITION, { question: { question: "Any thoughts?", type: "freetext" } })).toBeNull();
   });
 });
 
 // ---------------------------------------------------------------------------
-// V-8: decision_request — empty questions array
+// V-7: decision_request — missing question
 // ---------------------------------------------------------------------------
 
-describe("validateToolArgs — V-8: decision_request empty array", () => {
-  it("returns minItems error for empty questions array", () => {
-    const err = validateToolArgs(DECISION_REQUEST_TOOL_DEFINITION, { questions: [] });
+describe("validateToolArgs — V-7: decision_request missing question", () => {
+  it("returns required error for missing question", () => {
+    const err = validateToolArgs(DECISION_REQUEST_TOOL_DEFINITION, {});
     expect(err).not.toBeNull();
-    expect(err).toContain("at least 1 item(s)");
+    expect(err).toContain("'question' is required");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// V-8: decision_request — missing question.type lists enum values
+// ---------------------------------------------------------------------------
+
+describe("validateToolArgs — V-8: decision_request missing type", () => {
+  it("returns schema-aware required error listing enum values", () => {
+    const err = validateToolArgs(DECISION_REQUEST_TOOL_DEFINITION, { question: { question: "Pick one" } });
+    expect(err).not.toBeNull();
+    expect(err).toContain("'question.type' is required");
+    expect(err).toContain("exclusive");
+    expect(err).toContain("non_exclusive");
+    expect(err).toContain("freetext");
+  });
+
+  it("returns required error for missing question.question field", () => {
+    const err = validateToolArgs(DECISION_REQUEST_TOOL_DEFINITION, { question: { type: "freetext" } });
+    expect(err).not.toBeNull();
+    expect(err).toContain("question.question");
   });
 });
 
@@ -151,7 +162,7 @@ describe("validateToolArgs — V-8: decision_request empty array", () => {
 describe("validateToolArgs — V-9: decision_request invalid type enum", () => {
   it("names the bad type value and lists valid options", () => {
     const err = validateToolArgs(DECISION_REQUEST_TOOL_DEFINITION, {
-      questions: [{ question: "Pick one", type: "single_choice" }],
+      question: { question: "Pick one", type: "single_choice" },
     });
     expect(err).not.toBeNull();
     expect(err).toContain("single_choice");

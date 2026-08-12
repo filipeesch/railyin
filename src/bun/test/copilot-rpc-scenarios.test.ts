@@ -195,20 +195,22 @@ describe("Copilot backend RPC scenarios", () => {
     });
 
     it("transitions to waiting_user when decision_request is triggered via shared tool handler", async () => {
-        const interviewArgs = {
-            questions: [
-                {
-                    question: "Choose architecture",
-                    type: "exclusive",
-                    options: [{ title: "Option A", description: "Tradeoffs" }, { title: "Option B", description: "Alternative tradeoffs" }],
-                },
-            ],
+        const q1 = {
+            question: "Choose architecture",
+            type: "exclusive",
+            options: [{ title: "Option A", description: "Tradeoffs" }, { title: "Option B", description: "Alternative tradeoffs" }],
         };
         const adapter = new MockCopilotSdkAdapter();
         adapter
             .queueResumeFailure(new Error("no session"))
             .queueCreateSuccess(
-                new MockCopilotSession().queueTurn({ steps: [toolCall("decision_request", interviewArgs)] }),
+                new MockCopilotSession().queueTurn({
+                    steps: [
+                        toolCall("decision_request", { question: q1 }),
+                        toolCall("decision_request", { question: { question: "Any constraints?", type: "freetext" } }),
+                        done(),
+                    ],
+                }),
             );
         const runtime = createCopilotRuntime(adapter);
         const { taskId } = await runtime.createTask();
@@ -217,7 +219,11 @@ describe("Copilot backend RPC scenarios", () => {
 
         await runtime.waitForExecutionStatus(result.executionId, "waiting_user");
         expect(runtime.getTaskState(taskId)).toBe("waiting_user");
-        expect(runtime.getMessages(taskId).some((message) => message.type === "decision_request_prompt")).toBe(true);
+        const messages = runtime.getMessages(taskId);
+        expect(messages.some((message) => message.type === "decision_request_prompt")).toBe(true);
+        const prompt = messages.find((m) => m.type === "decision_request_prompt")!;
+        const parsed = JSON.parse(prompt.content) as { questions: Array<{ question: string }> };
+        expect(parsed.questions.map((q) => q.question)).toEqual(["Choose architecture", "Any constraints?"]);
     });
 
     it("stores raw slash prompts while executing the resolved prompt body", async () => {

@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { buildCommonTools } from "../engine/pi/tools/common.ts";
 import { UndoStack } from "../engine/pi/harness/undo-stack.ts";
 import type { HarnessContext } from "../engine/pi/harness/context.ts";
-import type { CommonToolContext } from "../engine/types.ts";
+import type { CommonToolContext, EngineEvent } from "../engine/types.ts";
 import type { ToolExecutionResult } from "../engine/common-tools.ts";
 import type { AIToolDefinition } from "../ai/types.ts";
 
@@ -125,5 +125,27 @@ describe("Pi common-tools bridge (PCB)", () => {
     expect(result.details.writtenFiles).toBeDefined();
     expect(result.details.writtenFiles).toHaveLength(1);
     expect(result.details.writtenFiles[0].path).toBe("a.ts");
+  });
+
+  it("PCB-5: page result fires pageRef.onPage and returns the text to the model", async () => {
+    const harness = makeHarness(dir);
+    const pageEvents: EngineEvent[] = [];
+    const pageRef = { onPage: (event: EngineEvent) => { pageEvents.push(event); } };
+
+    const fakeResult: ToolExecutionResult = {
+      type: "page",
+      text: "Question 1 of 1 buffered. Call decision_request again or END YOUR TURN.",
+      payload: JSON.stringify({ question: "Q1", type: "freetext" }),
+    };
+    mockExecutor.mockResolvedValueOnce(fakeResult);
+
+    const tools = buildCommonTools(makeCtx(), harness, pageRef, FAKE_TOOL_DEFS, mockExecutor);
+    const decisionTool = tools.find((t) => t.name === "lsp_rename")!;
+    const result = await decisionTool.execute("id", {});
+
+    expect(pageEvents).toHaveLength(1);
+    expect(pageEvents[0].type).toBe("decision_request_page");
+    expect((pageEvents[0] as { payload: string }).payload).toContain("Q1");
+    expect((result.content[0] as { text: string }).text).toContain("Question 1 of 1 buffered");
   });
 });

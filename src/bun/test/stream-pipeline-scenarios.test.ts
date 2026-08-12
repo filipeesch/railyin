@@ -959,3 +959,44 @@ describe("S-15 [subagent]: subagent_stop closes the subagent bubble", () => {
         expect(stopIdx).toBeGreaterThan(startIdx);
     });
 });
+
+// ---------------------------------------------------------------------------
+// S-16: [decision-interview-streaming] decision_request_page is ephemeral
+// Spec: "decision_request_page SHALL be a non-persisted stream event type ...
+//        It SHALL NOT be persisted as a conversation message and SHALL NOT
+//        change execution state."
+// Pipeline assertion: page events on IPC only; the terminal decision_request
+// persists a decision_request_prompt and transitions to waiting_user.
+// ---------------------------------------------------------------------------
+
+describe("S-16 [decision-interview-streaming]: page events ephemeral, terminal prompt persisted", () => {
+    it("decision_request_page on IPC only; decision_request persists prompt + waiting_user", async () => {
+        const engine = new ScriptedEngine();
+        engine.queueTurn([
+            { type: "decision_request_page", payload: JSON.stringify({ question: "Q1", type: "freetext" }) },
+            { type: "decision_request_page", payload: JSON.stringify({ question: "Q2", type: "freetext" }) },
+            { type: "decision_request", payload: JSON.stringify({ questions: [{ question: "Q1", type: "freetext" }, { question: "Q2", type: "freetext" }] }) },
+            scriptDone(),
+        ]);
+
+        runtime = makeRuntime(engine);
+        const { taskId } = await runtime.createTask();
+        const { executionId } = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "go" });
+
+        await runtime.waitForExecutionStatus(executionId, "waiting_user");
+        await runtime.waitForTaskState(taskId, "waiting_user");
+
+        // IPC: page events present
+        const ipc = runtime.getIpcEvents(executionId);
+        const pages = ipc.filter((e) => e.type === "decision_request_page");
+        expect(pages.length).toBeGreaterThan(0);
+
+        // DB: page events NOT persisted
+        const db = runtime.getDbStreamEvents(executionId);
+        expect(db.some((e) => e.type === "decision_request_page")).toBe(false);
+
+        // Persisted prompt message
+        const messages = runtime.getMessages(taskId);
+        expect(messages.some((m) => m.type === "decision_request_prompt")).toBe(true);
+    });
+});
