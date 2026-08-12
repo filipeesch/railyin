@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { ExecutionParamsBuilder } from "../engine/execution/execution-params-builder.ts";
 import type { TaskRow } from "../db/row-types.ts";
+import type { McpRegistryPool } from "../mcp/registry-pool.ts";
+import type { McpClientRegistry } from "../mcp/registry.ts";
 
 const builder = new ExecutionParamsBuilder();
 const noop = () => {};
@@ -223,5 +225,41 @@ describe("ExecutionParamsBuilder.build — workspaceKey", () => {
     );
 
     expect(params.workspaceKey).toBeUndefined();
+  });
+});
+
+describe("ExecutionParamsBuilder.build — MCP registry resolution", () => {
+  const projectRegistry = {} as McpClientRegistry;
+  const globalRegistry = {} as McpClientRegistry;
+
+  function makePool(): McpRegistryPool {
+    return {
+      getForProject: (projectPath: string) => {
+        expect(projectPath).toBe("/project");
+        return projectRegistry;
+      },
+      getGlobalRegistry: () => globalRegistry,
+    } as unknown as McpRegistryPool;
+  }
+
+  it("resolves the project-scoped registry via pool.getForProject when projectPath is given", () => {
+    const builder = new ExecutionParamsBuilder(makePool());
+    const params = builder.build(
+      makeTask(), 1, 1, "prompt", undefined, "/w",
+      new AbortController().signal, noop,
+      undefined, undefined, "/project",
+    );
+
+    expect(params.mcpRegistry).toBe(projectRegistry);
+  });
+
+  it("falls back to the global registry when projectPath is absent", () => {
+    const builder = new ExecutionParamsBuilder(makePool());
+    const params = builder.build(
+      makeTask(), 1, 1, "prompt", undefined, "/w",
+      new AbortController().signal, noop,
+    );
+
+    expect(params.mcpRegistry).toBe(globalRegistry);
   });
 });

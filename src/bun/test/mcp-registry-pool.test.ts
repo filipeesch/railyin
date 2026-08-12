@@ -11,6 +11,7 @@ function makeRegistry(): McpClientRegistry {
     getStatus: vi.fn().mockResolvedValue([]),
     reload: vi.fn().mockResolvedValue([]),
     startAll: vi.fn().mockResolvedValue(undefined),
+    ensureStarted: vi.fn().mockResolvedValue(undefined),
     shutdown: vi.fn().mockResolvedValue(undefined),
   } as unknown as McpClientRegistry;
 }
@@ -178,6 +179,76 @@ describe("McpRegistryPool", () => {
       const b = pool.getForProject(pathB);
       expect(a).not.toBe(b);
       expect(callCount).toBe(2);
+    } finally {
+      if (origDir === undefined) delete process.env.RAILYN_DATA_DIR;
+      else process.env.RAILYN_DATA_DIR = origDir;
+    }
+  });
+
+  it("getForProject() starts the servers of a newly created project registry", () => {
+    const projectPath = join(tempDir, "start-project");
+    const railynDir = join(projectPath, ".railyn");
+    mkdirSync(railynDir, { recursive: true });
+    writeFileSync(join(railynDir, "mcp.json"), JSON.stringify({
+      servers: [{ name: "proj", transport: { type: "stdio", command: "proj-cmd" } }],
+    }), "utf-8");
+
+    const registry = makeRegistry();
+    const pool = new McpRegistryPool(() => registry);
+
+    const emptyDir = join(tempDir, "empty-start");
+    mkdirSync(emptyDir, { recursive: true });
+    const origDir = process.env.RAILYN_DATA_DIR;
+    process.env.RAILYN_DATA_DIR = emptyDir;
+    try {
+      const proj = pool.getForProject(projectPath);
+      expect(proj).toBe(registry);
+      expect(registry.ensureStarted).toHaveBeenCalledOnce();
+    } finally {
+      if (origDir === undefined) delete process.env.RAILYN_DATA_DIR;
+      else process.env.RAILYN_DATA_DIR = origDir;
+    }
+  });
+
+  it("getForProject() does not re-start servers on cached lookups", () => {
+    const projectPath = join(tempDir, "cached-start-project");
+    const railynDir = join(projectPath, ".railyn");
+    mkdirSync(railynDir, { recursive: true });
+    writeFileSync(join(railynDir, "mcp.json"), JSON.stringify({ servers: [] }), "utf-8");
+
+    const registry = makeRegistry();
+    const pool = new McpRegistryPool(() => registry);
+
+    const emptyDir = join(tempDir, "empty-cached-start");
+    mkdirSync(emptyDir, { recursive: true });
+    const origDir = process.env.RAILYN_DATA_DIR;
+    process.env.RAILYN_DATA_DIR = emptyDir;
+    try {
+      pool.getForProject(projectPath);
+      pool.getForProject(projectPath);
+      expect(registry.ensureStarted).toHaveBeenCalledOnce();
+    } finally {
+      if (origDir === undefined) delete process.env.RAILYN_DATA_DIR;
+      else process.env.RAILYN_DATA_DIR = origDir;
+    }
+  });
+
+  it("getForProject() does not start the shared global fallback registry", () => {
+    const projectPath = join(tempDir, "no-config-start-project");
+    mkdirSync(projectPath, { recursive: true });
+
+    const global = makeRegistry();
+    const pool = new McpRegistryPool(() => global);
+
+    const emptyDir = join(tempDir, "empty-fallback-start");
+    mkdirSync(emptyDir, { recursive: true });
+    const origDir = process.env.RAILYN_DATA_DIR;
+    process.env.RAILYN_DATA_DIR = emptyDir;
+    try {
+      pool.getGlobalRegistry();
+      const proj = pool.getForProject(projectPath);
+      expect(proj).toBe(global);
+      expect(global.ensureStarted).not.toHaveBeenCalled();
     } finally {
       if (origDir === undefined) delete process.env.RAILYN_DATA_DIR;
       else process.env.RAILYN_DATA_DIR = origDir;

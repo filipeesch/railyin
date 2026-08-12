@@ -176,4 +176,117 @@ describe("McpClientRegistry (baseline, non-OAuth)", () => {
       expect(registry.getStatus().find((s) => s.name === "beta")?.state).toBe("running");
     });
   });
+
+  describe("ensureStarted", () => {
+    it("starts idle servers and resolves once they reach a terminal state", async () => {
+      const registry = new McpClientRegistry(
+        { servers: [stdioServer("alpha")] },
+        { clientFactory: () => new FakeMcpClient({ tools: [{ name: "read", inputSchema: { type: "object" } }] }) },
+      );
+      // No startAll() — the server starts lazily via ensureStarted().
+      await registry.ensureStarted();
+
+      const status = registry.getStatus().find((s) => s.name === "alpha");
+      expect(status?.state).toBe("running");
+      expect(registry.listTools()).toHaveLength(1);
+    });
+
+    it("is a no-op when every enabled server is already running", async () => {
+      let factoryCalls = 0;
+      const registry = new McpClientRegistry(
+        { servers: [stdioServer("alpha")] },
+        {
+          clientFactory: () => {
+            factoryCalls++;
+            return new FakeMcpClient();
+          },
+        },
+      );
+      await registry.startAll();
+      expect(factoryCalls).toBe(1);
+
+      await registry.ensureStarted();
+
+      expect(factoryCalls).toBe(1);
+      expect(registry.getStatus().find((s) => s.name === "alpha")?.state).toBe("running");
+    });
+
+    it("shares a single start across concurrent callers", async () => {
+      let factoryCalls = 0;
+      const registry = new McpClientRegistry(
+        { servers: [stdioServer("alpha"), stdioServer("beta")] },
+        {
+          clientFactory: () => {
+            factoryCalls++;
+            return new FakeMcpClient();
+          },
+        },
+      );
+
+      await Promise.all([registry.ensureStarted(), registry.ensureStarted(), registry.ensureStarted()]);
+
+      // One client per server — no double-start from concurrent callers.
+      expect(factoryCalls).toBe(2);
+      expect(registry.getStatus().every((s) => s.state === "running")).toBe(true);
+    });
+
+    it("does not start disabled servers", async () => {
+      let factoryCalls = 0;
+      const registry = new McpClientRegistry(
+        { servers: [stdioServer("off", { enabled: false })] },
+        {
+          clientFactory: () => {
+            factoryCalls++;
+            return new FakeMcpClient();
+          },
+        },
+      );
+
+      await registry.ensureStarted();
+
+      expect(factoryCalls).toBe(0);
+      expect(registry.getStatus().find((s) => s.name === "off")?.state).toBe("disabled");
+    });
+
+    it("does not retry servers that previously errored", async () => {
+      let factoryCalls = 0;
+      const registry = new McpClientRegistry(
+        { servers: [stdioServer("broken")] },
+        {
+          clientFactory: () => {
+            factoryCalls++;
+            return new FakeMcpClient({ initializeError: new Error("boom") });
+          },
+        },
+      );
+      await registry.startAll();
+      expect(factoryCalls).toBe(1);
+
+      await registry.ensureStarted();
+
+      expect(factoryCalls).toBe(1);
+      expect(registry.getStatus().find((s) => s.name === "broken")?.state).toBe("error");
+    });
+
+    it("can start again after shutdown()", async () => {
+      let factoryCalls = 0;
+      const registry = new McpClientRegistry(
+        { servers: [stdioServer("alpha")] },
+        {
+          clientFactory: () => {
+            factoryCalls++;
+            return new FakeMcpClient();
+          },
+        },
+      );
+      await registry.startAll();
+      await registry.shutdown();
+      expect(registry.getStatus().find((s) => s.name === "alpha")?.state).toBe("idle");
+
+      await registry.ensureStarted();
+
+      expect(factoryCalls).toBe(2);
+      expect(registry.getStatus().find((s) => s.name === "alpha")?.state).toBe("running");
+    });
+  });
 });

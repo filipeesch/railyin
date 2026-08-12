@@ -16,5 +16,5 @@ All three discovery/invocation executor functions (`execListMcpServers`, `execLi
 - **THEN** it awaits `ensureStarted()` before dispatching `callTool`
 
 #### Scenario: Project-scoped server reaches running (integration)
-- **WHEN** the real server is booted (in-memory DB) with a project config declaring a local stdio MCP server, and `mcp.getStatus` is called for that project
-- **THEN** the server is reported `running`, and `invoke_mcp_tool` against it succeeds (the `grafana-mcpar` shape)
+- **WHEN** a task execution runs in a project whose `.railyn/mcp.json` declares a local stdio MCP server (backend-rpc-runtime harness, in-memory DB; the `mcp.getStatus` RPC is global-only, so the project scope is observed through the execution's MCP tools)
+- **THEN** `list_mcp_servers` reports the server `running` (never `idle`), and `invoke_mcp_tool` against it succeeds (the `grafana-mcpar` shape)

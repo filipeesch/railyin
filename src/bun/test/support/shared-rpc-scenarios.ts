@@ -1,5 +1,8 @@
 import { expect } from "vitest";
+import { mkdirSync, writeFileSync } from "fs";
+import { join } from "path";
 import type { BackendRpcRuntime } from "./backend-rpc-runtime.ts";
+import { getWorkspaceConfig, getDefaultWorkspaceKey } from "../../workspace-context.ts";
 
 export async function runSingleTurnChatScenario(runtime: BackendRpcRuntime): Promise<void> {
     const { taskId } = await runtime.createTask();
@@ -166,6 +169,32 @@ export async function runMcpDiscoveryScenario(runtime: BackendRpcRuntime): Promi
     expect(resultFor("list_mcp_servers")).toContain("alpha");
     expect(resultFor("list_mcp_tools")).toContain("echo");
     expect(resultFor("invoke_mcp_tool")).toContain("echoed!");
+}
+
+/**
+ * Project-scoped MCP regression (fix-project-mcp-registries-never-started):
+ * writes a `.railyn/mcp.json` into the workspace config's project directory, then runs the
+ * standard MCP discovery scenario against it. Because `ExecutionParamsBuilder.build()` resolves
+ * `pool.getForProject(projectPath)` for task executions, the executor receives a registry that
+ * boot never started (only the global registry is started at boot) — so the pool's
+ * fire-and-forget `ensureStarted()` + the executors' readiness await are what make the tools
+ * work. Callers must inject a pool whose factory returns a FRESH `McpClientRegistry` per scope
+ * (not the shared pre-started registry used by `runMcpDiscoveryScenario` callers).
+ */
+export async function runProjectScopedMcpDiscoveryScenario(runtime: BackendRpcRuntime): Promise<void> {
+    const config = getWorkspaceConfig(getDefaultWorkspaceKey());
+    const projectPath = config.projects[0]?.projectPath;
+    if (!projectPath) throw new Error("Test config has no projects[0].projectPath");
+
+    const railynDir = join(projectPath, ".railyn");
+    mkdirSync(railynDir, { recursive: true });
+    writeFileSync(
+        join(railynDir, "mcp.json"),
+        JSON.stringify({ servers: [{ name: "alpha", transport: { type: "stdio", command: "alpha-cmd" } }] }),
+        "utf-8",
+    );
+
+    await runMcpDiscoveryScenario(runtime);
 }
 
 export async function runModelListingScenario(runtime: BackendRpcRuntime): Promise<void> {

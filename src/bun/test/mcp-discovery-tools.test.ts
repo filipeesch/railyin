@@ -5,6 +5,11 @@
  *
  * Uses a real McpClientRegistry with the injected FakeMcpClient DI seam — these functions
  * take a registry directly, so no engine/orchestrator wiring is needed to exercise them.
+ *
+ * The executors call `registry.ensureStarted()` before operating, so an idle server is
+ * lazily started on first access. That makes project-scoped registries (see
+ * mcp-registry-pool.test.ts + runProjectScopedMcpDiscoveryScenario) behave exactly like the
+ * global one — servers are never observed stuck in `idle`.
  */
 
 import { describe, it, expect } from "vitest";
@@ -18,9 +23,9 @@ function stdioServer(name: string, overrides: Partial<McpServerConfig> = {}): Mc
 }
 
 describe("execListMcpServers", () => {
-  it("returns a message when no servers are configured", () => {
+  it("returns a message when no servers are configured", async () => {
     const registry = new McpClientRegistry({ servers: [] });
-    expect(execListMcpServers(registry)).toMatch(/no mcp servers/i);
+    expect(await execListMcpServers(registry)).toMatch(/no mcp servers/i);
   });
 
   it("lists all configured servers regardless of enabled_mcp_tools visibility", async () => {
@@ -30,9 +35,21 @@ describe("execListMcpServers", () => {
     );
     await registry.startAll();
 
-    const result = execListMcpServers(registry);
+    const result = await execListMcpServers(registry);
     expect(result).toContain("alpha");
     expect(result).toContain("Alpha things");
+    expect(result).toContain("running");
+  });
+
+  it("lazily starts an idle server before listing", async () => {
+    const registry = new McpClientRegistry(
+      { servers: [stdioServer("alpha", { description: "Alpha things" })] },
+      { clientFactory: () => new FakeMcpClient() },
+    );
+    // No startAll() — the executor must start the idle server itself.
+
+    const result = await execListMcpServers(registry);
+    expect(result).toContain("alpha");
     expect(result).toContain("running");
   });
 
@@ -43,7 +60,7 @@ describe("execListMcpServers", () => {
     );
     await registry.startAll();
 
-    const result = execListMcpServers(registry);
+    const result = await execListMcpServers(registry);
     expect(result).toContain("broken");
     expect(result).toContain("error");
     expect(result).toContain("connection refused");
@@ -53,7 +70,7 @@ describe("execListMcpServers", () => {
     const registry = new McpClientRegistry({ servers: [stdioServer("off", { enabled: false })] });
     await registry.startAll();
 
-    expect(execListMcpServers(registry)).toContain("disabled");
+    expect(await execListMcpServers(registry)).toContain("disabled");
   });
 });
 
@@ -77,37 +94,52 @@ describe("execListMcpTools", () => {
 
   it("lists only tools present in the enabled_mcp_tools filter", async () => {
     const registry = await buildRunningRegistry();
-    const result = execListMcpTools(registry, ["alpha:read_file"], "alpha");
+    const result = await execListMcpTools(registry, ["alpha:read_file"], "alpha");
     expect(result).toContain("read_file");
     expect(result).not.toContain("write_file");
   });
 
   it("returns an empty-visibility message when enabled_mcp_tools is []", async () => {
     const registry = await buildRunningRegistry();
-    const result = execListMcpTools(registry, [], "alpha");
+    const result = await execListMcpTools(registry, [], "alpha");
     expect(result).toMatch(/no tools are visible/i);
   });
 
   it("treats a missing (undefined/null) filter as unfiltered — all visible by default", async () => {
     const registry = await buildRunningRegistry();
-    expect(execListMcpTools(registry, undefined, "alpha")).toContain("read_file");
-    expect(execListMcpTools(registry, null, "alpha")).toContain("read_file");
+    expect(await execListMcpTools(registry, undefined, "alpha")).toContain("read_file");
+    expect(await execListMcpTools(registry, null, "alpha")).toContain("read_file");
   });
 
-  it("returns an error for a server that is not running", async () => {
+  it("lazily starts an idle server before listing its tools", async () => {
     const registry = new McpClientRegistry(
-      { servers: [stdioServer("idle-one")] },
-      { clientFactory: () => new FakeMcpClient() },
+      { servers: [stdioServer("alpha")] },
+      {
+        clientFactory: () =>
+          new FakeMcpClient({ tools: [{ name: "read_file", description: "Reads a file", inputSchema: { type: "object" } }] }),
+      },
     );
-    // Not started — server stays "idle".
-    const result = execListMcpTools(registry, ["idle-one:whatever"], "idle-one");
+    // No startAll() — the executor must start the idle server itself.
+
+    const result = await execListMcpTools(registry, ["alpha:read_file"], "alpha");
+    expect(result).toContain("read_file");
+  });
+
+  it("returns an error for a server that failed to start", async () => {
+    const registry = new McpClientRegistry(
+      { servers: [stdioServer("broken")] },
+      { clientFactory: () => new FakeMcpClient({ initializeError: new Error("connection refused") }) },
+    );
+    await registry.startAll();
+
+    const result = await execListMcpTools(registry, ["broken:whatever"], "broken");
     expect(result).toMatch(/error/i);
-    expect(result).toMatch(/idle/i);
+    expect(result).toMatch(/connection refused/i);
   });
 
   it("returns an error for an unknown server name", async () => {
     const registry = new McpClientRegistry({ servers: [] });
-    const result = execListMcpTools(registry, [], "ghost");
+    const result = await execListMcpTools(registry, [], "ghost");
     expect(result).toMatch(/not found/i);
   });
 });
@@ -140,12 +172,25 @@ describe("execInvokeMcpTool", () => {
     expect(await execInvokeMcpTool(registry, null, "alpha", "read_file", {})).toBe("file contents");
   });
 
-  it("rejects invocation for a non-running server", async () => {
+  it("lazily starts an idle server before invoking", async () => {
     const registry = new McpClientRegistry(
-      { servers: [stdioServer("idle-one")] },
-      { clientFactory: () => new FakeMcpClient() },
+      { servers: [stdioServer("alpha")] },
+      { clientFactory: () => new FakeMcpClient({ callToolResult: "file contents", tools: [{ name: "read_file", inputSchema: { type: "object" } }] }) },
     );
-    const result = await execInvokeMcpTool(registry, ["idle-one:tool"], "idle-one", "tool", {});
+    // No startAll() — the executor must start the idle server itself.
+
+    const result = await execInvokeMcpTool(registry, ["alpha:read_file"], "alpha", "read_file", {});
+    expect(result).toBe("file contents");
+  });
+
+  it("returns an error for a server that failed to start", async () => {
+    const registry = new McpClientRegistry(
+      { servers: [stdioServer("broken")] },
+      { clientFactory: () => new FakeMcpClient({ initializeError: new Error("connection refused") }) },
+    );
+    await registry.startAll();
+
+    const result = await execInvokeMcpTool(registry, ["broken:tool"], "broken", "tool", {});
     expect(result).toMatch(/not available/i);
   });
 
