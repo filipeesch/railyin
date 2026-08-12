@@ -1066,7 +1066,7 @@ export type RailynAPI = {
   };
   "chatSessions.submitDecisions": {
     params: { sessionId: number; answers: DecisionAnswer[]; generalNotes?: string; recordAsDecisions?: boolean };
-    response: { messageId: number; executionId: number };
+    response: { message: ConversationMessage; executionId: number };
   };
   "chatSessions.setModel": {
     params: { sessionId: number; model: string | null };

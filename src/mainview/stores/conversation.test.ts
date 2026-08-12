@@ -610,6 +610,55 @@ describe("live interview pages", () => {
     expect(store.liveInterviews.get(1)).toHaveLength(2);
     expect(store.liveInterviews.get(1)![0].question).toBe("Q1");
     expect(store.liveInterviews.get(1)![1].question).toBe("Q2");
+    expect(store.liveInterviewExecutions.get(1)).toBe(1);
+  });
+
+  it("DR-5: a page from a NEW execution starts a fresh episode (clears prior pages)", () => {
+    const store = useConversationStore();
+    store.setActiveConversation(1);
+
+    store.onStreamEvent(pageEvent(1, "Q1", 1)); // execution 1
+    expect(store.liveInterviews.get(1)).toHaveLength(1);
+
+    // New execution streams a page — previous episode pages are cleared.
+    store.onStreamEvent({ ...pageEvent(1, "Q2", 1), executionId: 2 });
+    expect(store.liveInterviews.get(1)).toEqual([{ question: "Q2", type: "freetext" }]);
+    expect(store.liveInterviewExecutions.get(1)).toBe(2);
+  });
+
+  it("DR-6: terminal prompt clears both live pages and the execution marker", () => {
+    const store = useConversationStore();
+    store.setActiveConversation(1);
+
+    store.onStreamEvent(pageEvent(1, "Q1", 1));
+    expect(store.liveInterviews.get(1)).toHaveLength(1);
+
+    store.onStreamEvent({
+      taskId: 1,
+      conversationId: 1,
+      executionId: 1,
+      seq: 2,
+      blockId: "done-1",
+      type: "done",
+      content: "",
+      metadata: null,
+      parentBlockId: null,
+      subagentId: null,
+      done: true,
+    });
+    store.onNewMessage({
+      id: 100,
+      taskId: null,
+      conversationId: 1,
+      type: "decision_request_prompt",
+      role: null,
+      content: '{"questions":[{"question":"Q1","type":"freetext"}]}',
+      metadata: null,
+      createdAt: new Date().toISOString(),
+    });
+
+    expect(store.liveInterviews.get(1) ?? []).toHaveLength(0);
+    expect(store.liveInterviewExecutions.get(1)).toBeUndefined();
   });
 
   it("DR-2: malformed page payloads are ignored", () => {

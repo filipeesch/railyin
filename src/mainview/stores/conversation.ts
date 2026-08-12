@@ -100,6 +100,8 @@ export const useConversationStore = defineStore("conversation", () => {
   const contextUsageByConversation = ref(new Map<number, ContextUsage>());
   /** Live streaming interview pages per conversation (from decision_request_page events). */
   const liveInterviews = ref(new Map<number, DecisionRequestQuestion[]>());
+  /** ExecutionId that produced the current live interview pages per conversation. */
+  const liveInterviewExecutions = ref(new Map<number, number>());
 
   const activeStreamState = computed(() =>
     activeConversationId.value != null
@@ -315,9 +317,17 @@ export const useConversationStore = defineStore("conversation", () => {
       // Ephemeral page: append to the live interview (per-conversation). The
       // terminal decision_request_prompt message (persisted) replaces this live
       // state at turn end — see onNewMessage reconciliation below.
+      // A page arriving from a NEW execution starts a new interview episode:
+      // clear any pages left over from a previous execution so episodes don't
+      // mix (e.g. after the user dismissed the previous interview).
       try {
         const parsed = JSON.parse(event.content) as DecisionRequestQuestion;
         if (parsed && typeof parsed.question === "string") {
+          const currentExecution = liveInterviewExecutions.value.get(event.conversationId);
+          if (currentExecution !== event.executionId) {
+            liveInterviews.value.set(event.conversationId, []);
+            liveInterviewExecutions.value.set(event.conversationId, event.executionId);
+          }
           const pages = liveInterviews.value.get(event.conversationId) ?? [];
           pages.push(parsed);
           liveInterviews.value.set(event.conversationId, pages);
@@ -443,6 +453,7 @@ export const useConversationStore = defineStore("conversation", () => {
     // Terminal interview prompt replaces the live streaming pages (reconcile).
     if (message.type === "decision_request_prompt") {
       liveInterviews.value.delete(message.conversationId);
+      liveInterviewExecutions.value.delete(message.conversationId);
     }
   }
 
@@ -464,6 +475,7 @@ export const useConversationStore = defineStore("conversation", () => {
     contextUsage,
     contextUsageByConversation,
     liveInterviews,
+    liveInterviewExecutions,
     activeLiveInterview,
     setActiveConversation,
     appendMessage,

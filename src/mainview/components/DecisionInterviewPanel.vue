@@ -94,12 +94,36 @@ const answeredText = computed<string | undefined>(() => {
   return undefined;
 });
 
-/** Local "dismissed" state so the user can close the panel without answering. */
+/**
+ * Dismissal is scoped to the CURRENT interview episode, not the conversation:
+ * `dismissed` resets automatically when a NEW interview episode begins (a new
+ * `decision_request_page` event arrives from a different execution after
+ * dismissal), so the panel can spawn again for later questions.
+ */
 const dismissed = ref(false);
+const dismissedForExecution = ref<number | null>(null);
 const activeConversationId = computed(() => conversationStore.activeConversationId);
 
+const liveExecutionId = computed<number | null>(() =>
+  props.conversationId === conversationStore.activeConversationId
+    ? conversationStore.liveInterviewExecutions.get(props.conversationId) ?? null
+    : null,
+);
+
 // Reset the dismissed flag when switching conversations.
-watch(activeConversationId, () => { dismissed.value = false; });
+watch(activeConversationId, () => {
+  dismissed.value = false;
+  dismissedForExecution.value = null;
+});
+
+// A new execution streaming pages after dismissal = a new interview episode:
+// reset the dismissed flag so the panel can spawn again.
+watch(liveExecutionId, (executionId) => {
+  if (dismissed.value && executionId !== null && executionId !== dismissedForExecution.value) {
+    dismissed.value = false;
+    dismissedForExecution.value = null;
+  }
+});
 
 const showPanel = computed(() => {
   if (props.conversationId !== conversationStore.activeConversationId) return false;
@@ -112,6 +136,7 @@ const showPanel = computed(() => {
 
 function dismiss() {
   dismissed.value = true;
+  dismissedForExecution.value = liveExecutionId.value;
 }
 
 async function onSubmit(payload: {
@@ -134,6 +159,7 @@ async function onSubmit(payload: {
 
 <style scoped>
 .decision-interview-panel {
+  margin: 5px;
   padding: 4px 0 8px;
   border-bottom: 1px solid var(--p-surface-200, #e2e8f0);
   margin-bottom: 8px;
