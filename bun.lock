@@ -11,7 +11,7 @@
         "@codemirror/language": "^6.11.1",
         "@codemirror/state": "^6.5.2",
         "@codemirror/view": "^6.36.7",
-        "@cursor/sdk": "^1.0.25",
+        "@cursor/sdk": "^1.0.27",
         "@earendil-works/pi-coding-agent": "^0.80.3",
         "@github/copilot-sdk": "^0.3.0",
         "@iconify/vue": "^5.0.0",
@@ -228,17 +228,17 @@
 
     "@connectrpc/connect-web": ["@connectrpc/connect-web@1.7.0", "", { "peerDependencies": { "@bufbuild/protobuf": "^1.10.0", "@connectrpc/connect": "1.7.0" } }, "sha512-qyP0YOnUPRWwCc/VfsoydMJvkb7EyUPr2q9sHgBuJzbADjiqck1gKH5V5ZPzPhTLBvmz5UvG+wiZ5sMRQHU1MQ=="],
 
-    "@cursor/sdk": ["@cursor/sdk@1.0.25", "", { "dependencies": { "@bufbuild/protobuf": "1.10.0", "@connectrpc/connect": "^1.6.1", "@connectrpc/connect-node": "^1.6.1", "@connectrpc/connect-web": "^1.6.1", "@statsig/js-client": "3.31.0", "zod": "^3.25.0" }, "optionalDependencies": { "@cursor/sdk-darwin-arm64": "1.0.25", "@cursor/sdk-darwin-x64": "1.0.25", "@cursor/sdk-linux-arm64": "1.0.25", "@cursor/sdk-linux-x64": "1.0.25", "@cursor/sdk-win32-x64": "1.0.25" } }, "sha512-2Rq6G+xtkHswaC6gq9OrYAfX9Zw09vWw/dI70oeI4lSonTY4ELen5zWLHEerX8TZq6ohr0905U4YOpfTsOOcWQ=="],
+    "@cursor/sdk": ["@cursor/sdk@1.0.27", "", { "dependencies": { "@bufbuild/protobuf": "1.10.0", "@connectrpc/connect": "^1.6.1", "@connectrpc/connect-node": "^1.6.1", "@connectrpc/connect-web": "^1.6.1", "@statsig/js-client": "3.31.0", "zod": "^3.25.0" }, "optionalDependencies": { "@cursor/sdk-darwin-arm64": "1.0.27", "@cursor/sdk-darwin-x64": "1.0.27", "@cursor/sdk-linux-arm64": "1.0.27", "@cursor/sdk-linux-x64": "1.0.27", "@cursor/sdk-win32-x64": "1.0.27" } }, "sha512-QR2RYZagCUlil/A4JcRU8rI4JmYICuMdWkuIsiz/yHvd/N3bisjw9o2uXhkKitDKHgIyeGDHwrQfH/MYttM37g=="],
 
-    "@cursor/sdk-darwin-arm64": ["@cursor/sdk-darwin-arm64@1.0.25", "", { "os": "darwin", "cpu": "arm64", "bin": { "rg": "bin/rg" } }, "sha512-9NF+KtL/AqWYneLVcBSVSMYWy/pguoSQFKpieW6k+/SF98WuRqADZmU1r+2kmmPPqYXuHrFcu7cdff759ZdAAg=="],
+    "@cursor/sdk-darwin-arm64": ["@cursor/sdk-darwin-arm64@1.0.27", "", { "os": "darwin", "cpu": "arm64", "bin": { "rg": "bin/rg" } }, "sha512-lO9chGVwb9lISwYtfolgF9IvTLR0Z0M8vd6AqwUfl607G/hesh+LICMD/tal2JWP0rm/hds66tIRo//M4RVupA=="],
 
-    "@cursor/sdk-darwin-x64": ["@cursor/sdk-darwin-x64@1.0.25", "", { "os": "darwin", "cpu": "x64", "bin": { "rg": "bin/rg" } }, "sha512-3wj5PH0dL+XDkfKBQ0O5V/QK0st9ASoGop9CMfo8JJofwIaJOUwKqrZGvznlrAWoxii/dVqYpr0UizVH77Pz+g=="],
+    "@cursor/sdk-darwin-x64": ["@cursor/sdk-darwin-x64@1.0.27", "", { "os": "darwin", "cpu": "x64", "bin": { "rg": "bin/rg" } }, "sha512-moYR40uq0Mu2Runm7XWa60+8n9Epyah++fkaW/avAYMAel/qOeHTH/uiNKTjwuCledQmczCYWDTVlZQOGEhrxg=="],
 
-    "@cursor/sdk-linux-arm64": ["@cursor/sdk-linux-arm64@1.0.25", "", { "os": "linux", "cpu": "arm64", "bin": { "rg": "bin/rg" } }, "sha512-O1M7zy2Q4opEtuuiM6i8JPfXh6nusT900kzbCa81YcLyxxOFu7poIBLUIU7iEAqq/JPv/CoM9Tw5/ibDubelFQ=="],
+    "@cursor/sdk-linux-arm64": ["@cursor/sdk-linux-arm64@1.0.27", "", { "os": "linux", "cpu": "arm64", "bin": { "rg": "bin/rg" } }, "sha512-caDqO0RPYmaCbQYpJwTMT5YeVqP6WkZq1y7n5v1N3rlkjdaM2mWbkdSFEUL4GOTdkm8oIEx2diRNQ1hrJbVPYQ=="],
 
-    "@cursor/sdk-linux-x64": ["@cursor/sdk-linux-x64@1.0.25", "", { "os": "linux", "cpu": "x64", "bin": { "rg": "bin/rg" } }, "sha512-FU7VSnfCRsYzmINIvMEZScMLc962v1neDEsmI+09UHnHDzx0vfPBp+GIti+IaF79NLQALXyZoPDUSTaeB+lzhQ=="],
+    "@cursor/sdk-linux-x64": ["@cursor/sdk-linux-x64@1.0.27", "", { "os": "linux", "cpu": "x64", "bin": { "rg": "bin/rg" } }, "sha512-z3aVQaXk4T9QjB11u77JihHrSN0XeFYCrnuqvd9PMZQSqiXfUheqX/lQTRxFjfccoU4tK1p/nJ91IWKAUVQU4g=="],
 
-    "@cursor/sdk-win32-x64": ["@cursor/sdk-win32-x64@1.0.25", "", { "os": "win32", "cpu": "x64", "bin": { "rg": "bin/rg.exe" } }, "sha512-zTLDp8OCBemarh8CP3i7J+IDXhcdUHXDqzbcd4V8eaO3FJ6WYQB8N6ORMs6NbimGRSHFIbsZoL3sX8EFcLdIdw=="],
+    "@cursor/sdk-win32-x64": ["@cursor/sdk-win32-x64@1.0.27", "", { "os": "win32", "cpu": "x64", "bin": { "rg": "bin/rg.exe" } }, "sha512-LbkimreWuz+FsyUcRKlvgwnWbXwzzcFexCUGkHCWNuO0JSspjhqUGfDtFFxhHU5ohMMy2FpzU7qs5wKzAc8NgA=="],
 
     "@earendil-works/pi-agent-core": ["@earendil-works/pi-agent-core@0.80.3", "", { "dependencies": { "@earendil-works/pi-ai": "^0.80.3", "ignore": "7.0.5", "typebox": "1.1.38", "yaml": "2.9.0" } }, "sha512-3qw0/GeRQBU/nlGjDe5Yb7ePKTmoxefx2YxyKMFAviFUMXpFexBG/hS7mBtwFahFvzrrTPPoRT6sFIDjwoDWPQ=="],
 

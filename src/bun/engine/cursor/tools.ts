@@ -16,6 +16,7 @@
 import type { SDKCustomTool, SDKJsonValue } from "@cursor/sdk";
 import type { CommonToolContext } from "../types.ts";
 import { COMMON_TOOL_DEFINITIONS, TODO_TOOL_NAMES, executeCommonTool } from "../common-tools.ts";
+import type { SkillResolver } from "../pi/skill-resolver.ts";
 import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { isAbsolute, resolve as resolvePath } from "node:path";
@@ -192,11 +193,58 @@ function buildBypassTools(worktreePath: string): Record<string, SDKCustomTool> {
 }
 
 /**
+ * Build the lazy `skill` SDKCustomTool: loads a skill's `SKILL.md` on demand.
+ *
+ * Mirrors the Pi engine's `buildSkillTool` — the agent sees a compact
+ * `<available_skills>` index in the system prefix and loads only the skill it
+ * needs, instead of inlining every SKILL.md into the prompt.
+ */
+function buildSkillTool(resolver: SkillResolver): SDKCustomTool {
+  return {
+    description:
+      "Load a skill's instructions by name.\n" +
+      "Use this when the task matches a skill listed in <available_skills>.\n" +
+      "The name must exactly match the <name> field from the available skills list.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "The name of the skill to load, exactly as it appears in <available_skills>." },
+      },
+      required: ["name"],
+    },
+    execute: async (args) => {
+      const name = String((args as { name?: unknown }).name ?? "");
+      const content = await resolver.resolve(name);
+      if (content !== null) return content;
+
+      const available = await resolver.list();
+      const errorParts: string[] = [];
+      if (available.length === 0) {
+        errorParts.push(`Skill '${name}' not found. No skills are currently available.`);
+      } else {
+        const fuzzyMatch = available.find((n) => n.toLowerCase() === name.toLowerCase());
+        errorParts.push(
+          fuzzyMatch
+            ? `Skill '${name}' not found. Did you mean: \`${fuzzyMatch}\`?`
+            : `Skill '${name}' not found.`,
+        );
+        errorParts.push(`Available skills: ${available.map((n) => `\`${n}\``).join(", ")}`);
+      }
+      return errorParts.join(" ");
+    },
+  };
+}
+
+/**
  * Build a Record of Cursor SDKCustomTool entries (keyed by tool name) for the
  * given execution context, suitable for `LocalAgentOptions.customTools`.
+ *
+ * @param skillResolver Optional skill resolver — when provided, a lazy `skill`
+ * tool is registered so the agent can load SKILL.md content on demand.
  */
 export function buildCursorTools(
   context: CommonToolContext,
+  skillResolver?: SkillResolver,
   onPage?: (payload: string) => void,
 ): Record<string, SDKCustomTool> {
   const tools: Record<string, SDKCustomTool> = {};
@@ -226,6 +274,10 @@ export function buildCursorTools(
         }
       },
     };
+  }
+
+  if (skillResolver) {
+    tools.skill = buildSkillTool(skillResolver);
   }
 
   if (context.runtime.worktreePath) {

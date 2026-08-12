@@ -5,16 +5,28 @@ import { tmpdir } from "os";
 import { CursorDialect } from "../engine/dialects/cursor-dialect.ts";
 
 let tmpDir: string;
+let homeDir: string;
 let dialect: CursorDialect;
 
 beforeEach(() => {
   tmpDir = mkdtempSync(join(tmpdir(), "cursor-dialect-test-"));
-  dialect = new CursorDialect();
+  // Injectable home scope — keeps home-scope tests deterministic and
+  // independent of the real `~/.cursor` contents on the machine running them.
+  homeDir = mkdtempSync(join(tmpdir(), "cursor-home-"));
+  dialect = new CursorDialect(homeDir);
 });
 
 afterEach(() => {
   rmSync(tmpDir, { recursive: true, force: true });
+  rmSync(homeDir, { recursive: true, force: true });
 });
+
+function writeHomeCommandFile(relativePath: string, content: string): void {
+  const commandDir = join(homeDir, ".cursor", "commands");
+  const fullPath = join(commandDir, relativePath);
+  mkdirSync(join(fullPath, ".."), { recursive: true });
+  writeFileSync(fullPath, content, "utf-8");
+}
 
 function writeCommandFile(relativePath: string, content: string, dir = tmpDir): void {
   const commandDir = join(dir, ".cursor", "commands");
@@ -237,9 +249,9 @@ describe("CursorDialect.resolvePrompt — path priority", () => {
 // ---------------------------------------------------------------------------
 
 describe("CursorDialect.listCommands", () => {
-  it("returns an array even when no .cursor/commands dir exists", () => {
+  it("returns an array even when no .cursor/commands dir exists anywhere", () => {
     const commands = dialect.listCommands(tmpDir);
-    // CursorDialect has no home scope, so result must be empty
+    // Injected home scope is empty, so result must be empty
     expect(commands).toHaveLength(0);
   });
 
@@ -332,12 +344,18 @@ describe("CursorDialect.getSkillPaths", () => {
     expect(result).toEqual([]);
   });
 
-  it("does NOT include ~/.cursor/skills/ (no home scope)", () => {
-    // All candidate dirs must be inside tmpDir, not in homedir()
+  it("includes ~/.cursor/skills/ home scope when it exists", () => {
+    const homeSkillsDir = join(homeDir, ".cursor", "skills");
+    mkdirSync(homeSkillsDir, { recursive: true });
+    const result = dialect.getSkillPaths(tmpDir);
+    expect(result).toContain(homeSkillsDir);
+  });
+
+  it("omits home scope when ~/.cursor/skills/ does not exist", () => {
     const skillsDir = join(tmpDir, ".cursor", "skills");
     mkdirSync(skillsDir, { recursive: true });
     const result = dialect.getSkillPaths(tmpDir);
-    expect(result.every(p => p.startsWith(tmpDir))).toBe(true);
+    expect(result).toEqual([skillsDir]);
   });
 
   it("includes projectPath skills before worktreePath skills when both exist", () => {
@@ -367,6 +385,105 @@ describe("CursorDialect.getSkillPaths", () => {
     try {
       const result = dialect.getSkillPaths(tmpDir, projectDir);
       expect(result).toEqual([]);
+    } finally {
+      rmSync(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it("orders skills project → worktree → home", () => {
+    const projectDir = mkdtempSync(join(tmpdir(), "cursor-project-"));
+    try {
+      const projSkills = join(projectDir, ".cursor", "skills");
+      const wtSkills = join(tmpDir, ".cursor", "skills");
+      const homeSkills = join(homeDir, ".cursor", "skills");
+      mkdirSync(projSkills, { recursive: true });
+      mkdirSync(wtSkills, { recursive: true });
+      mkdirSync(homeSkills, { recursive: true });
+
+      const result = dialect.getSkillPaths(tmpDir, projectDir);
+      expect(result).toEqual([projSkills, wtSkills, homeSkills]);
+    } finally {
+      rmSync(projectDir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Home scope (project → worktree → ~/.cursor)
+// ---------------------------------------------------------------------------
+
+describe("CursorDialect home scope", () => {
+  it("listCommands discovers commands from the home scope", () => {
+    writeHomeCommandFile("home-tool.md", "---\ndescription: Home tool\n---\nHome body");
+    const commands = dialect.listCommands(tmpDir);
+    expect(commands.map((c) => c.name)).toContain("home-tool");
+  });
+
+  it("listCommands deduplicates: projectPath wins over home scope", () => {
+    const projectDir = mkdtempSync(join(tmpdir(), "cursor-project-"));
+    try {
+      writeCommandFile("dup.md", "---\ndescription: From project\n---\nProject body", projectDir);
+      writeHomeCommandFile("dup.md", "---\ndescription: From home\n---\nHome body");
+
+      const commands = dialect.listCommands(tmpDir, projectDir);
+      const matches = commands.filter((c) => c.name === "dup");
+      expect(matches).toHaveLength(1);
+      expect(matches[0]!.description).toBe("From project");
+    } finally {
+      rmSync(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it("listCommands deduplicates: worktreePath wins over home scope", () => {
+    writeCommandFile("dup.md", "---\ndescription: From worktree\n---\nWorktree body");
+    writeHomeCommandFile("dup.md", "---\ndescription: From home\n---\nHome body");
+
+    const commands = dialect.listCommands(tmpDir);
+    const matches = commands.filter((c) => c.name === "dup");
+    expect(matches).toHaveLength(1);
+    expect(matches[0]!.description).toBe("From worktree");
+  });
+
+  it("resolvePrompt resolves a command from the home scope", async () => {
+    writeHomeCommandFile("home-tool.md", "Home command body");
+    const result = await dialect.resolvePrompt("/home-tool", tmpDir);
+    expect(result.wasSlash).toBe(true);
+    expect(result.content).toBe(
+      '<command name="home-tool" args="">\nHome command body\n</command>',
+    );
+  });
+
+  it("resolvePrompt prefers projectPath over home scope", async () => {
+    const projectDir = mkdtempSync(join(tmpdir(), "cursor-project-"));
+    try {
+      writeCommandFile("dup.md", "Project body", projectDir);
+      writeHomeCommandFile("dup.md", "Home body");
+      const result = await dialect.resolvePrompt("/dup", tmpDir, projectDir);
+      expect(result.content).toContain("Project body");
+    } finally {
+      rmSync(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it("resolvePrompt prefers worktreePath over home scope", async () => {
+    writeCommandFile("dup.md", "Worktree body");
+    writeHomeCommandFile("dup.md", "Home body");
+    const result = await dialect.resolvePrompt("/dup", tmpDir);
+    expect(result.content).toContain("Worktree body");
+  });
+
+  it("getSkillPaths includes the home scope after project/worktree", () => {
+    const projectDir = mkdtempSync(join(tmpdir(), "cursor-project-"));
+    try {
+      const projSkills = join(projectDir, ".cursor", "skills");
+      const wtSkills = join(tmpDir, ".cursor", "skills");
+      const homeSkills = join(homeDir, ".cursor", "skills");
+      mkdirSync(projSkills, { recursive: true });
+      mkdirSync(wtSkills, { recursive: true });
+      mkdirSync(homeSkills, { recursive: true });
+
+      const result = dialect.getSkillPaths(tmpDir, projectDir);
+      expect(result).toEqual([projSkills, wtSkills, homeSkills]);
     } finally {
       rmSync(projectDir, { recursive: true, force: true });
     }

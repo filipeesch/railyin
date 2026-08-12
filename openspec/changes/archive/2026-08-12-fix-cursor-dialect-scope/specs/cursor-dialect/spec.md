@@ -1,7 +1,4 @@
-## Purpose
-Defines the `CursorDialect` implementation of `SlashCommandDialect` for the Cursor engine, using native Cursor conventions across three lookup scopes — project, worktree, and user home: `.cursor/commands/` for slash-command files (plain `.md`, recursive with colon-namespaced subdirectories) and `.cursor/skills/` for skill paths.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: CursorDialect implements SlashCommandDialect for the Cursor engine
 The system SHALL provide a `CursorDialect` class that implements `SlashCommandDialect` using native Cursor conventions across three lookup scopes: `.cursor/commands/` for commands (plain `.md`, recursive with colon-namespaced subdirs) and `.cursor/skills/` for skill paths, scanned at `<projectPath>`, then `<worktreePath>`, then user home (`~/.cursor`), mirroring `CopilotDialect` and `ClaudeDialect`.

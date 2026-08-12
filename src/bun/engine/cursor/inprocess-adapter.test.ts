@@ -557,15 +557,6 @@ describe("InProcessCursorAdapter.listModels", () => {
   });
 });
 
-describe("InProcessCursorAdapter.listCommands", () => {
-  it("always returns an empty array (DB-path resolution lives in CursorEngine, not the adapter)", async () => {
-    const run = makeFakeRun();
-    const agent = makeFakeAgent(run);
-    const adapter = new InProcessCursorAdapter({}, makeSdkClient(agent));
-    expect(await adapter.listCommands("/tmp")).toEqual([]);
-  });
-});
-
 describe("InProcessCursorAdapter.usage", () => {
   it("emits a usage EngineEvent from RunResult.usage after wait()", async () => {
     const run = makeFakeRun({

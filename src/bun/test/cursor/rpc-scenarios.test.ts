@@ -322,6 +322,26 @@ describe("Cursor slash-command resolution", () => {
         expect(persisted?.role).toBe("user");
         expect(persisted?.content).toBe("[/opsx-propose|/opsx-propose] add-dark-mode");
     });
+
+    it("sends successfully with the raw slash text when the command cannot be resolved (fail-soft)", async () => {
+        const adapter = new MockCursorSdkAdapter().queueTurn({ steps: [token("response")] });
+        const runtime = createRuntime(adapter);
+        const { taskId } = await runtime.createTask();
+
+        // No .cursor/commands/opsx-missing.md exists in the worktree → the shared
+        // SlashCommandResolver must pass the raw reference through instead of throwing.
+        const result = await runtime.handlers["tasks.sendMessage"]({
+            taskId,
+            content: "[/opsx-missing|/opsx-missing] some-args",
+        });
+        await runtime.recorder.waitForStreamDone(result.executionId);
+        await runtime.waitForExecutionStatus(result.executionId, "completed");
+
+        const sentPrompt = adapter.trace.runConfigs[0]!.prompt;
+        expect(sentPrompt).toContain("/opsx-missing some-args");
+        // NOT XML-wrapped — the reference reached the agent as literal text.
+        expect(sentPrompt).not.toContain('<command name="opsx-missing"');
+    });
 });
 
 describe("Cursor — MCP discovery tools (dynamic-mcp-discovery)", () => {
