@@ -120,19 +120,25 @@
       />
     </div>
 
-    <!-- Footer: Back / Next / Submit -->
+    <!-- Footer: Back / counter / Record toggle / primary action (Next or Submit) -->
     <div class="interview__footer">
-      <div class="interview__footer-nav">
+      <div class="interview__footer-left">
         <button v-if="currentIndex > 0" class="interview__back" @click="goBack">Back</button>
-        <button v-if="!isLastPage" class="interview__next" :disabled="!canAdvanceCurrent" @click="goNext">Next</button>
+        <span v-if="questions.length > 1" class="interview__counter">{{ currentIndex + 1 }} / {{ questions.length }}</span>
       </div>
-      <label class="interview__record-toggle">
-        <input type="checkbox" v-model="recordAsDecisions" />
-        <span>Record as decisions</span>
-      </label>
-      <button class="interview__submit" :disabled="!canSubmit" @click="submit">
-        Submit
-      </button>
+      <div class="interview__footer-right">
+        <label class="interview__record-toggle">
+          <input type="checkbox" v-model="recordAsDecisions" />
+          <span>Record as decisions</span>
+        </label>
+        <!-- Primary action: Next replaces Submit (both green) except on the last page -->
+        <button v-if="!isLastPage" class="interview__primary" :disabled="!canAdvanceCurrent" @click="goNext">
+          Next
+        </button>
+        <button v-else class="interview__primary" :disabled="!canSubmit" @click="submit">
+          Submit
+        </button>
+      </div>
     </div>
   </div>
 </template>
@@ -531,14 +537,22 @@ function submit() {
   border-top: 1px solid var(--p-surface-200, #e2e8f0);
 }
 
-.interview__footer-nav {
+.interview__footer-left,
+.interview__footer-right {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 12px;
 }
 
-.interview__back,
-.interview__next {
+.interview__counter {
+  font-size: 0.78rem;
+  font-weight: 500;
+  color: var(--p-surface-400, #94a3b8);
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+}
+
+.interview__back {
   padding: 7px 16px;
   background: var(--p-surface-100, #f1f5f9);
   color: var(--p-surface-700, #334155);
@@ -546,17 +560,11 @@ function submit() {
   border-radius: 6px;
   font-size: 0.875rem;
   cursor: pointer;
-  transition: opacity 0.15s;
+  transition: background 0.15s;
 }
 
-.interview__back:hover,
-.interview__next:hover:not(:disabled) {
+.interview__back:hover {
   background: var(--p-surface-200, #e2e8f0);
-}
-
-.interview__next:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
 }
 
 .interview__record-toggle {
@@ -576,19 +584,20 @@ function submit() {
   cursor: pointer;
 }
 
-/* ── Submit ───────────────────────────────────────── */.interview__submit {
-  align-self: flex-end;
+/* ── Primary action (Next or Submit) — green, replaces each other ─────────── */
+.interview__primary {
   padding: 7px 20px;
   background: var(--p-primary-color, #6366f1);
   color: #fff;
   border: none;
   border-radius: 6px;
   font-size: 0.875rem;
+  font-weight: 500;
   cursor: pointer;
   transition: opacity 0.15s;
 }
 
-.interview__submit:disabled {
+.interview__primary:disabled {
   opacity: 0.4;
   cursor: not-allowed;
 }
@@ -655,5 +664,19 @@ html.dark-mode .interview__footer {
 
 html.dark-mode .interview__record-toggle {
   color: var(--p-surface-300, #cbd5e1);
+}
+
+html.dark-mode .interview__counter {
+  color: var(--p-surface-500, #64748b);
+}
+
+html.dark-mode .interview__back {
+  background: var(--p-surface-800, #1e293b);
+  color: var(--p-surface-200, #e2e8f0);
+  border-color: var(--p-surface-600, #475569);
+}
+
+html.dark-mode .interview__back:hover {
+  background: var(--p-surface-700, #334155);
 }
 </style>

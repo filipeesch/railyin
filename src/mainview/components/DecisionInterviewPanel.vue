@@ -1,5 +1,9 @@
 <template>
   <div v-if="showPanel" class="decision-interview-panel">
+    <div class="decision-interview-panel__header">
+      <span class="decision-interview-panel__title">Questions from the agent</span>
+      <button class="decision-interview-panel__dismiss" title="Dismiss" @click="dismiss">✕</button>
+    </div>
     <DecisionRequest
       :questions="questions"
       :context="context"
@@ -10,7 +14,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, ref, watch } from "vue";
 import type { DecisionRequestPayload, DecisionRequestQuestion } from "@shared/rpc-types";
 import DecisionRequest from "./DecisionRequest.vue";
 import { useConversationStore } from "../stores/conversation";
@@ -37,24 +41,32 @@ const liveQuestions = computed<DecisionRequestQuestion[]>(() => {
   return conversationStore.liveInterviews.get(props.conversationId) ?? [];
 });
 
-/** Persisted terminal interview payload from conversation_messages (reconcile at turn end). */
-const persistedPayload = computed<DecisionRequestPayload | null>(() => {
+/**
+ * The latest persisted `decision_request_prompt` message for this conversation
+ * (if any). Used to render the terminal interview after the model ends its
+ * turn, and to detect whether the interview has already been answered.
+ */
+const latestPromptIndex = computed<number>(() => {
   const messages = conversationStore.messages;
-  for (let i = messages.length - 1; i >= 0; i--) {
+  let found = -1;
+  for (let i = 0; i < messages.length; i++) {
     const m = messages[i];
     if (m.conversationId !== props.conversationId) continue;
-    if (m.type === "decision_request_prompt") {
-      try {
-        const parsed = JSON.parse(m.content) as DecisionRequestPayload;
-        return Array.isArray(parsed.questions) ? parsed : { questions: [] };
-      } catch {
-        return { questions: [] };
-      }
-    }
-    // Stop at the first non-interview message before it (avoid stale prompts).
-    if (m.type === "assistant" || m.type === "user") break;
+    if (m.type === "decision_request_prompt") found = i;
   }
-  return null;
+  return found;
+});
+
+const persistedPayload = computed<DecisionRequestPayload | null>(() => {
+  const idx = latestPromptIndex.value;
+  if (idx < 0) return null;
+  const raw = conversationStore.messages[idx].content;
+  try {
+    const parsed = JSON.parse(raw) as DecisionRequestPayload;
+    return Array.isArray(parsed.questions) ? parsed : { questions: [] };
+  } catch {
+    return { questions: [] };
+  }
 });
 
 const questions = computed<DecisionRequestQuestion[]>(() => {
@@ -65,27 +77,42 @@ const questions = computed<DecisionRequestQuestion[]>(() => {
 
 const context = computed<string | undefined>(() => persistedPayload.value?.context ?? undefined);
 
-/** Answered state: a user message follows the terminal prompt in history. */
+/**
+ * Answered state: a user message appears AFTER the latest terminal prompt.
+ * When set, the panel closes (the interview has been answered or dismissed by
+ * submitting).
+ */
 const answeredText = computed<string | undefined>(() => {
-  const payload = persistedPayload.value;
-  if (!payload) return undefined;
+  const idx = latestPromptIndex.value;
+  if (idx < 0) return undefined;
   const messages = conversationStore.messages;
-  let seenPrompt = false;
-  for (const m of messages) {
+  for (let i = idx + 1; i < messages.length; i++) {
+    const m = messages[i];
     if (m.conversationId !== props.conversationId) continue;
-    if (m.type === "decision_request_prompt") {
-      seenPrompt = true;
-      continue;
-    }
-    if (seenPrompt && m.type === "user") return m.content;
+    if (m.type === "user") return m.content;
   }
   return undefined;
 });
 
+/** Local "dismissed" state so the user can close the panel without answering. */
+const dismissed = ref(false);
+const activeConversationId = computed(() => conversationStore.activeConversationId);
+
+// Reset the dismissed flag when switching conversations.
+watch(activeConversationId, () => { dismissed.value = false; });
+
 const showPanel = computed(() => {
   if (props.conversationId !== conversationStore.activeConversationId) return false;
+  if (dismissed.value) return false;
+  // Hide once the interview has been answered (a user message follows the
+  // latest terminal prompt) so the panel closes after submission.
+  if (answeredText.value !== undefined) return false;
   return questions.value.length > 0;
 });
+
+function dismiss() {
+  dismissed.value = true;
+}
 
 async function onSubmit(payload: {
   text: string;
@@ -110,5 +137,37 @@ async function onSubmit(payload: {
   padding: 4px 0 8px;
   border-bottom: 1px solid var(--p-surface-200, #e2e8f0);
   margin-bottom: 8px;
+}
+
+.decision-interview-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.decision-interview-panel__title {
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--p-surface-400, #94a3b8);
+}
+
+.decision-interview-panel__dismiss {
+  border: none;
+  background: transparent;
+  color: var(--p-surface-400, #94a3b8);
+  font-size: 0.85rem;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+  line-height: 1;
+}
+
+.decision-interview-panel__dismiss:hover {
+  background: var(--p-surface-200, #e2e8f0);
+  color: var(--p-surface-700, #334155);
 }
 </style>
