@@ -9,8 +9,8 @@ describe("buildDecisionRequestTerminalEvent", () => {
 
   it("returns a terminal decision_request with all buffered questions", () => {
     const buffer = new DecisionQuestionBuffer();
-    buffer.append({ question: { question: "Q1", type: "freetext" } });
-    buffer.append({ question: { question: "Q2", type: "exclusive" }, context: "ctx" });
+    buffer.append({ question: "Q1", type: "freetext" });
+    buffer.append({ question: "Q2", type: "exclusive", context: "ctx" });
 
     const event = buildDecisionRequestTerminalEvent(buffer);
     expect(event).not.toBeNull();
@@ -22,9 +22,9 @@ describe("buildDecisionRequestTerminalEvent", () => {
     expect(parsed.questions[1].question).toBe("Q2");
   });
 
-  it("folds per-question context into the question object (D7)", () => {
+  it("preserves per-question context on the question object (D7)", () => {
     const buffer = new DecisionQuestionBuffer();
-    buffer.append({ question: { question: "Q1", type: "freetext" }, context: "preamble" });
+    buffer.append({ question: "Q1", type: "freetext", context: "preamble" });
 
     const event = buildDecisionRequestTerminalEvent(buffer);
     const parsed = JSON.parse((event as { payload: string }).payload);
@@ -33,7 +33,7 @@ describe("buildDecisionRequestTerminalEvent", () => {
 
   it("does not mutate the buffer (caller drains)", () => {
     const buffer = new DecisionQuestionBuffer();
-    buffer.append({ question: { question: "Q1", type: "freetext" } });
+    buffer.append({ question: "Q1", type: "freetext" });
     buildDecisionRequestTerminalEvent(buffer);
     expect(buffer.count).toBe(1);
   });

@@ -127,7 +127,7 @@ describe("MockCursorSdkAdapter", () => {
       const adapter = new MockCursorSdkAdapter().queueTurn({
         steps: [
           token("thinking..."),
-          callTool("decision_request", { question: { question: "A or B?", type: "freetext" } }),
+          callTool("decision_request", { question: "A or B?", type: "freetext" }),
           token("after tool"),
         ],
       });

@@ -129,13 +129,16 @@ describe("Pi engine — streaming decision_request via faux provider", () => {
 
     faux.setResponses([
       fauxAssistantMessage(fauxToolCall("decision_request", {
-        question: { question: "Q1", type: "freetext" },
+        question: "Q1",
+        type: "freetext",
       }), { stopReason: "toolUse" }),
       fauxAssistantMessage(fauxToolCall("decision_request", {
-        question: { question: "Q2", type: "freetext" },
+        question: "Q2",
+        type: "freetext",
       }), { stopReason: "toolUse" }),
       fauxAssistantMessage(fauxToolCall("decision_request", {
-        question: { question: "Q3", type: "freetext" },
+        question: "Q3",
+        type: "freetext",
       }), { stopReason: "toolUse" }),
       fauxAssistantMessage(fauxText("Done asking.")),
     ]);

@@ -1,29 +1,24 @@
 import type { DecisionRequestQuestion } from "../../shared/rpc-types.ts";
 
-/** A single buffered interview question plus its per-question context preamble. */
-export interface BufferedDecisionQuestion {
-  context?: string;
-  question: DecisionRequestQuestion;
-}
-
 /**
  * Per-execution accumulator for streaming decision_request questions.
  *
- * The model calls `decision_request` once per question; each call appends to
- * this buffer. At turn end the engine drains the buffer into a terminal
- * `decision_request` event via `buildDecisionRequestTerminalEvent`.
+ * The model calls `decision_request` once per question (flat top-level shape);
+ * each call appends a `DecisionRequestQuestion` to this buffer. At turn end the
+ * engine drains the buffer into a terminal `decision_request` event via
+ * `buildDecisionRequestTerminalEvent`.
  *
  * One instance lives per execution on `CommonToolContext.runtime.decisionBuffer`
  * (engines create a fresh buffer before each run — see D2).
  */
 export class DecisionQuestionBuffer {
-  private readonly items: BufferedDecisionQuestion[] = [];
+  private readonly items: DecisionRequestQuestion[] = [];
 
-  append(entry: BufferedDecisionQuestion): void {
-    this.items.push(entry);
+  append(question: DecisionRequestQuestion): void {
+    this.items.push(question);
   }
 
-  get all(): BufferedDecisionQuestion[] {
+  get all(): DecisionRequestQuestion[] {
     return [...this.items];
   }
 

@@ -206,8 +206,8 @@ describe("Copilot backend RPC scenarios", () => {
             .queueCreateSuccess(
                 new MockCopilotSession().queueTurn({
                     steps: [
-                        toolCall("decision_request", { question: q1 }),
-                        toolCall("decision_request", { question: { question: "Any constraints?", type: "freetext" } }),
+                        toolCall("decision_request", q1),
+                        toolCall("decision_request", { question: "Any constraints?", type: "freetext" }),
                         done(),
                     ],
                 }),

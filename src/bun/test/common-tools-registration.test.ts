@@ -84,16 +84,14 @@ describe("shared common tool registration", () => {
 });
 
 describe("executeCommonTool / decision_request", () => {
-    it("returns a suspend result with the structured payload", async () => {
+    it("returns a page result with the structured payload", async () => {
         const result = await executeCommonTool(
             "decision_request",
             {
                 context: "Need a decision",
-                question: {
-                    question: "Which option?",
-                    type: "exclusive",
-                    options: [{ title: "A", description: "Option A" }, { title: "B", description: "Option B" }],
-                },
+                question: "Which option?",
+                type: "exclusive",
+                options: [{ title: "A", description: "Option A" }, { title: "B", description: "Option B" }],
             },
             baseContext,
         );
@@ -102,7 +100,8 @@ describe("executeCommonTool / decision_request", () => {
         if (result.type === "page") {
             const parsed = JSON.parse(result.payload);
             expect(parsed.context).toBe("Need a decision");
-            expect(parsed.question).toBeDefined();
+            expect(parsed.question).toBe("Which option?");
+            expect(parsed.type).toBe("exclusive");
         }
     });
 

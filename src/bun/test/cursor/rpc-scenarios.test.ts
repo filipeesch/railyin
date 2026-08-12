@@ -88,8 +88,8 @@ describe("Cursor backend RPC scenarios", () => {
         };
         const adapter = new MockCursorSdkAdapter().queueTurn({
             steps: [
-                callTool("decision_request", { question: q1 }),
-                callTool("decision_request", { question: { question: "Any constraints?", type: "freetext" } }),
+                callTool("decision_request", q1),
+                callTool("decision_request", { question: "Any constraints?", type: "freetext" }),
             ],
         });
         const runtime = createRuntime(adapter);
@@ -112,7 +112,7 @@ describe("Cursor backend RPC scenarios", () => {
         // into its restart branch and starts a brand-new execution.
         const adapter = new MockCursorSdkAdapter()
             .queueTurn({
-                steps: [callTool("decision_request", { question: { question: "A or B?", type: "freetext" } })],
+                steps: [callTool("decision_request", { question: "A or B?", type: "freetext" })],
             })
             .queueTurn({ steps: [token("Resumed with new execution")] });
         const runtime = createRuntime(adapter);

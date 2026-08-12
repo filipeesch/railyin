@@ -16,15 +16,8 @@ export function buildDecisionRequestTerminalEvent(
   buffer: DecisionQuestionBuffer,
 ): EngineEvent | null {
   if (buffer.count === 0) return null;
-  const questions = buffer.all.map((entry) => {
-    const { question } = entry;
-    // Fold the per-question context into the question object itself so the
-    // UI-facing DecisionRequestPayload shape is preserved (per-question
-    // context replaces the legacy single top-level context — D7).
-    return entry.context && !question.context ? { ...question, context: entry.context } : question;
-  });
   return {
     type: "decision_request",
-    payload: JSON.stringify({ questions }),
+    payload: JSON.stringify({ questions: buffer.all }),
   };
 }

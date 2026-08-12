@@ -5,8 +5,10 @@ import type { DecisionRequestQuestion } from "../../shared/rpc-types.ts";
 /**
  * Executes a single streaming `decision_request` tool call.
  *
- * The tool accepts ONE question per call (D1). A valid call:
- *   - validates the single question strictly (schema + runtime options-count)
+ * The tool accepts ONE question per call with a FLAT, top-level shape (D1):
+ * `{ context?, question: string, type, weight?, model_lean?, options? }`.
+ * A valid call:
+ *   - validates the flat question strictly (schema + runtime options-count)
  *   - appends it to the per-execution decision buffer
  *   - returns `{ type: "page", text, payload }` so the agent loop continues
  *     and the engine can stream a `decision_request_page` event to the UI
@@ -20,18 +22,18 @@ export function executeDecisionRequest(
   ctx: CommonToolContext,
 ): ToolExecutionResult {
   const buffer = ctx.runtime.decisionBuffer;
-  const question = (args.question ?? {}) as Record<string, unknown>;
   const context = typeof args.context === "string" ? args.context.trim() : "";
 
   // Runtime options-count check for choice questions (schema minItems: 2 also
   // guards this, but explicit messaging helps the model self-correct).
-  if (question.type !== "freetext") {
-    const options = question.options;
+  const type = typeof args.type === "string" ? args.type : "";
+  if (type !== "freetext") {
+    const options = args.options;
     if (!Array.isArray(options) || options.length < 2) {
       return {
         type: "result",
         text:
-          `Error: '${String(question.type ?? "(missing type)")}' questions require at least 2 options in the 'options' array. ` +
+          `Error: '${type || "(missing type)"}' questions require at least 2 options in the 'options' array. ` +
           `Do NOT embed choices or alternatives in the 'question' text — list them as separate entries in 'options'.`,
       };
     }
@@ -44,7 +46,21 @@ export function executeDecisionRequest(
     };
   }
 
-  buffer.append({ context: context || undefined, question: question as unknown as DecisionRequestQuestion });
+  // Assemble the UI-facing question object from the flat tool arguments.
+  const question: DecisionRequestQuestion = {
+    question: typeof args.question === "string" ? args.question : "",
+    type: (type as DecisionRequestQuestion["type"]) || "freetext",
+  };
+  if (typeof args.weight === "string") question.weight = args.weight as DecisionRequestQuestion["weight"];
+  if (typeof args.model_lean === "string") question.model_lean = args.model_lean;
+  if (typeof args.model_lean_reason === "string") question.model_lean_reason = args.model_lean_reason;
+  if (typeof args.answers_affect_followup === "boolean") question.answers_affect_followup = args.answers_affect_followup;
+  if (Array.isArray(args.options) && args.options.length > 0) {
+    question.options = args.options as DecisionRequestQuestion["options"];
+  }
+  if (context) question.context = context;
+
+  buffer.append(question);
 
   const text =
     `Question ${buffer.count} of ${buffer.count} buffered. ` +
@@ -53,6 +69,6 @@ export function executeDecisionRequest(
   return {
     type: "page",
     text,
-    payload: JSON.stringify(context ? { ...question, context } : question),
+    payload: JSON.stringify(question),
   };
 }

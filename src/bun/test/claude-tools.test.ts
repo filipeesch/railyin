@@ -93,24 +93,22 @@ describe("buildClaudeToolServer — decision_request schema shape", () => {
     expect(tools["decision_request"]).toBeDefined();
   });
 
-  it("question is advertised as object (not any/{})", () => {
+  it("question is advertised as string (flat top-level shape)", () => {
     const shape = tools["decision_request"].shape;
     const question = strip(shape["question"]);
-    expect(question.kind).toBe("object");
+    expect(question.kind).toBe("string");
   });
 
-  it("question.type is advertised as required enum with correct values", () => {
+  it("type is advertised as required enum with correct values", () => {
     const shape = tools["decision_request"].shape;
-    const question = strip(shape["question"]) as { kind: "object"; shape: Record<string, SpyNode> };
-    const typeField = strip(question.shape["type"]);
+    const typeField = strip(shape["type"]);
     expect(typeField.kind).toBe("enum");
     expect((typeField as { kind: "enum"; values: string[] }).values).toEqual(["exclusive", "non_exclusive", "freetext"]);
   });
 
-  it("question.weight is advertised as optional enum", () => {
+  it("weight is advertised as optional enum", () => {
     const shape = tools["decision_request"].shape;
-    const question = strip(shape["question"]) as { kind: "object"; shape: Record<string, SpyNode> };
-    const weightField = strip(question.shape["weight"]) as { kind: "optional"; inner: SpyNode };
+    const weightField = strip(shape["weight"]) as { kind: "optional"; inner: SpyNode };
     const inner = weightField.kind === "optional" ? weightField.inner : weightField;
     expect(inner.kind).toBe("enum");
     expect((inner as { kind: "enum"; values: string[] }).values).toEqual(["critical", "medium", "easy"]);
@@ -118,11 +116,11 @@ describe("buildClaudeToolServer — decision_request schema shape", () => {
 
   it("DECISION_REQUEST_TOOL_DEFINITION.parameters matches what buildClaudeToolServer advertises (regression guard)", () => {
     // Verify the definition still has the enum inline so no future refactor silently breaks it
-    const questionType = (DECISION_REQUEST_TOOL_DEFINITION.parameters as {
-      properties: { question: { properties: { type: { type: string; enum: string[] } } } };
-    }).properties.question.properties.type;
-    expect(questionType.type).toBe("string");
-    expect(questionType.enum).toEqual(["exclusive", "non_exclusive", "freetext"]);
+    const typeProp = (DECISION_REQUEST_TOOL_DEFINITION.parameters as {
+      properties: { type: { type: string; enum: string[] } };
+    }).properties.type;
+    expect(typeProp.type).toBe("string");
+    expect(typeProp.enum).toEqual(["exclusive", "non_exclusive", "freetext"]);
   });
 });
 
@@ -141,7 +139,7 @@ describe("executeCommonTool — decision_request input validation", () => {
   });
 
   it("returns clear error when question type is invalid (e.g. single_choice)", async () => {
-    const result = await executeCommonTool("decision_request", { question: { question: "Pick one", type: "single_choice" } }, makeCtx());
+    const result = await executeCommonTool("decision_request", { question: "Pick one", type: "single_choice" }, makeCtx());
     expect(result.type).toBe("result");
     const text = (result as { type: "result"; text: string }).text;
     expect(text).toMatch(/single_choice/);
@@ -150,17 +148,17 @@ describe("executeCommonTool — decision_request input validation", () => {
     expect(text).toMatch(/freetext/);
   });
 
-  it("returns error when question.question field is missing", async () => {
-    const result = await executeCommonTool("decision_request", { question: { type: "exclusive", options: [{ title: "A", description: "a" }, { title: "B", description: "b" }] } }, makeCtx());
+  it("returns error when question field is missing", async () => {
+    const result = await executeCommonTool("decision_request", { type: "exclusive", options: [{ title: "A", description: "a" }, { title: "B", description: "b" }] }, makeCtx());
     expect(result.type).toBe("result");
     expect((result as { type: "result"; text: string }).text).toMatch(/question/);
   });
 
-  it("returns error when question.type is missing (schema-aware enum hint)", async () => {
-    const result = await executeCommonTool("decision_request", { question: { question: "Pick one" } }, makeCtx());
+  it("returns error when type is missing (schema-aware enum hint)", async () => {
+    const result = await executeCommonTool("decision_request", { question: "Pick one" }, makeCtx());
     expect(result.type).toBe("result");
     const text = (result as { type: "result"; text: string }).text;
-    expect(text).toMatch(/question\.type/);
+    expect(text).toMatch(/'type' is required/);
     expect(text).toMatch(/exclusive/);
     expect(text).toMatch(/freetext/);
   });
@@ -168,7 +166,7 @@ describe("executeCommonTool — decision_request input validation", () => {
   it("returns page with valid exclusive question", async () => {
     const result = await executeCommonTool(
       "decision_request",
-      { question: { question: "Pick a DB", type: "exclusive", options: [{ title: "PG", description: "Postgres" }, { title: "SQLite", description: "SQLite embedded" }] } },
+      { question: "Pick a DB", type: "exclusive", options: [{ title: "PG", description: "Postgres" }, { title: "SQLite", description: "SQLite embedded" }] },
       makeCtx(),
     );
     expect(result.type).toBe("page");
@@ -178,7 +176,7 @@ describe("executeCommonTool — decision_request input validation", () => {
   it("returns page with valid non_exclusive question", async () => {
     const result = await executeCommonTool(
       "decision_request",
-      { question: { question: "Pick strategies", type: "non_exclusive", options: [{ title: "A", description: "opt A" }, { title: "B", description: "opt B" }] } },
+      { question: "Pick strategies", type: "non_exclusive", options: [{ title: "A", description: "opt A" }, { title: "B", description: "opt B" }] },
       makeCtx(),
     );
     expect(result.type).toBe("page");
@@ -187,7 +185,7 @@ describe("executeCommonTool — decision_request input validation", () => {
   it("returns page with valid freetext question", async () => {
     const result = await executeCommonTool(
       "decision_request",
-      { question: { question: "Any constraints?", type: "freetext" } },
+      { question: "Any constraints?", type: "freetext" },
       makeCtx(),
     );
     expect(result.type).toBe("page");
@@ -195,18 +193,18 @@ describe("executeCommonTool — decision_request input validation", () => {
 
   it("appends to the buffer across calls", async () => {
     const ctx = makeCtx();
-    await executeCommonTool("decision_request", { question: { question: "Q1", type: "freetext" } }, ctx);
-    const second = await executeCommonTool("decision_request", { question: { question: "Q2", type: "freetext" } }, ctx);
+    await executeCommonTool("decision_request", { question: "Q1", type: "freetext" }, ctx);
+    const second = await executeCommonTool("decision_request", { question: "Q2", type: "freetext" }, ctx);
     expect(second.type).toBe("page");
     expect((second as { type: "page"; text: string }).text).toMatch(/Question 2 of 2 buffered/);
   });
 
   it("preserves buffer when a later question is invalid (keep-on-error)", async () => {
     const ctx = makeCtx();
-    await executeCommonTool("decision_request", { question: { question: "Q1", type: "freetext" } }, ctx);
-    const bad = await executeCommonTool("decision_request", { question: { question: "Q2" } }, ctx);
+    await executeCommonTool("decision_request", { question: "Q1", type: "freetext" }, ctx);
+    const bad = await executeCommonTool("decision_request", { question: "Q2" }, ctx);
     expect(bad.type).toBe("result");
-    const good = await executeCommonTool("decision_request", { question: { question: "Q2", type: "freetext" } }, ctx);
+    const good = await executeCommonTool("decision_request", { question: "Q2", type: "freetext" }, ctx);
     expect(good.type).toBe("page");
     const buffer = (ctx as { runtime: { decisionBuffer: DecisionQuestionBuffer } }).runtime.decisionBuffer;
     expect(buffer.count).toBe(2);
