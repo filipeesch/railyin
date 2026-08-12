@@ -58,6 +58,8 @@ Run `bun run build` first — Playwright config spares `dist/` via `vite preview
 ## Gotchas
 
 - Default DB state is **in-memory** when using `--real-db` flag. Without it, data persists since `bun run prod` uses the SQLite DB by default.
+- **SQLite multi-instance**: multiple servers may share one DB file (WAL, `busy_timeout=20000`), but one writer at a time still applies — running several `bun run prod` servers against the same DB causes lock contention and event-loop stalls up to the busy timeout. Prefer ONE server per DB; the app tolerates transient SQLITE_BUSY (WriteBuffer retries/drops, best-effort error-path writes) but does not eliminate contention.
+- `model_raw_messages` and the `logs` table were **dropped** (migrations 055/056): raw model payloads are no longer persisted (WS broadcast preserved), and `realLogger` writes JSON lines to the file log (`~/.railyn/logs/bun.log`).
 - Shell env resolution at startup is required for tool visibility in `.app` bundles. If slow, set `RAILYN_CLI=1` to skip it.
 - Playwright runs headless by default in parallel (`fullyParallel: true`). The `webServer` config starts `vite preview` on `dist/` before each test run.
 - Mutation testing uses Stryker (`stryker.backend.json` / `stryker.frontend.json`). Runs separately from normal test suites.
