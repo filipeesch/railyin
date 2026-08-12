@@ -12,6 +12,8 @@ import type { AIToolDefinition } from "../ai/types.ts";
 import type { CommonToolContext } from "./types.ts";
 import type { BoardToolContext } from "../workflow/tools/types.ts";
 import { DECISION_REQUEST_TOOL_DEFINITION } from "./decision-request-tool-definition.ts";
+import { executeDecisionRequest } from "./decision-request-executor.ts";
+import { normalizeToolArguments } from "./normalize-args.ts";
 import { LSP_TOOL_DEFINITIONS } from "./lsp-tool-definitions.ts";
 import {
   executeLspGoToDefinition,
@@ -384,15 +386,23 @@ export function buildCommonToolDisplay(name: string, args: Record<string, unknow
 /**
  * Execute a common task-management tool by name.
  * Returns a plain JSON/text string suitable for sending back to the LLM.
+ *
+ * - `result` — normal tool completion (text returned to the model)
+ * - `page` — a streaming decision_request question was appended; the engine
+ *   emits a `decision_request_page` event and the agent loop continues
+ *
+ * The engine-level ask_user / shell_approval suspension flows through
+ * EngineEvents, not through ToolExecutionResult.
  */
 export type ToolExecutionResult =
   | { type: "result"; text: string; writtenFiles?: import("../../shared/rpc-types.ts").FileDiffPayload[]; beforeFiles?: Record<string, string | null> }
-  | { type: "suspend"; text: string; payload: string };
+  | { type: "page"; text: string; payload: string };
 
 /**
  * Execute a common tool and return a typed result.
- * Tools marked with `suspendLoop: true` on their definition return `{ type: "suspend" }`
- * — the engine is responsible for stopping the agent loop and emitting the event.
+ * All args are normalized at this single choke-point (D5) before AJV
+ * validation, so string-encoded array/object params from models are reconciled
+ * identically across every engine.
  */
 export async function executeCommonTool(
   name: string,
@@ -400,32 +410,15 @@ export async function executeCommonTool(
   ctx: CommonToolContext,
 ): Promise<ToolExecutionResult> {
   const def = COMMON_TOOL_DEFINITIONS.find((d) => d.name === name);
+  // Normalize at the choke-point before validation (idempotent; Pi's
+  // prepareArguments double-run is harmless).
+  const normalized = def ? normalizeToolArguments(def.parameters, args) : args;
   if (def) {
-    const err = validateToolArgs(def, args);
+    const err = validateToolArgs(def, normalized);
     if (err) return { type: "result", text: err };
   }
   if (name === "decision_request") {
-    const questions = args.questions;
-    if (Array.isArray(questions)) {
-      for (let i = 0; i < questions.length; i++) {
-        const q = questions[i] as Record<string, unknown>;
-        if (q.type === "exclusive" || q.type === "non_exclusive") {
-          const options = q.options;
-          if (!Array.isArray(options) || options.length < 2) {
-            return {
-              type: "result",
-              text:
-                `Error in question[${i}]: '${q.type}' questions require at least 2 options in the 'options' array. ` +
-                `Do NOT embed choices or alternatives in the 'question' text — list them as separate entries in 'options'.`,
-            };
-          }
-        }
-      }
-    }
-    const context = typeof args.context === "string" ? args.context.trim() : "";
-    const payload: Record<string, unknown> = { questions: args.questions };
-    if (context) payload.context = context;
-    return { type: "suspend", text: "", payload: JSON.stringify(payload) };
+    return executeDecisionRequest(normalized, ctx);
   }
   if (name === "lsp_rename") {
     if (!ctx.runtime.lspManager) return { type: "result", text: "Error: LSP is not configured. Add lsp.servers to workspace.yaml." };

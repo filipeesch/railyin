@@ -243,3 +243,33 @@ export async function runCursorEditToolScenario(runtime: BackendRpcRuntime): Pro
     expect(resultContent.writtenFiles?.length).toBeGreaterThan(0);
     expect(resultContent.writtenFiles?.[0]?.operation).toBe("edit_file");
 }
+
+/* ─── Streaming decision_request scenarios ───────────────────────── */
+
+/**
+ * Validates the streaming decision_request flow end-to-end:
+ * the model appends questions via `decision_request` calls, page events reach
+ * the IPC channel (ephemeral, NOT persisted), and the terminal
+ * `decision_request` persists a `decision_request_prompt` + transitions to
+ * `waiting_user` at turn end.
+ */
+export async function runDecisionStreamingScenario(runtime: BackendRpcRuntime): Promise<void> {
+    const { taskId } = await runtime.createTask();
+    const result = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "Need interview input" });
+
+    await runtime.waitForExecutionStatus(result.executionId, "waiting_user");
+    await runtime.waitForTaskState(taskId, "waiting_user");
+
+    const messages = runtime.getMessages(taskId);
+    const prompt = messages.find((m) => m.type === "decision_request_prompt");
+    expect(prompt).toBeDefined();
+    const parsed = JSON.parse(prompt!.content) as { questions: Array<{ question: string }> };
+    expect(parsed.questions.length).toBeGreaterThan(0);
+
+    // Page events are ephemeral: present on IPC, absent from persisted DB events.
+    const ipcEvents = runtime.getIpcEvents(result.executionId);
+    expect(ipcEvents.some((e) => e.type === "decision_request_page")).toBe(true);
+
+    const dbEvents = runtime.getDbStreamEvents(result.executionId);
+    expect(dbEvents.some((e) => e.type === "decision_request_page")).toBe(false);
+}

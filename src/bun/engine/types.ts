@@ -38,6 +38,7 @@ export type EngineEvent = (
   }
   | { type: "ask_user"; payload: string /* serialised AskUserPrompt JSON */ }
   | { type: "decision_request"; payload: string /* serialised DecisionRequestPayload JSON */ }
+  | { type: "decision_request_page"; payload: string /* serialised single DecisionRequestQuestion JSON */ }
   | { type: "shell_approval"; command: string; executionId: number }
   | { type: "status"; message: string }
   | { type: "usage"; inputTokens: number; outputTokens: number; contextWindow?: number }
@@ -272,5 +273,12 @@ export interface CommonToolContext {
      * null/undefined = all tools visible (default); [] = none visible; non-empty = allow-list.
      */
     mcpEnabledTools?: string[] | null;
+    /**
+     * Per-execution accumulator for streaming decision_request questions.
+     * Engines create a fresh buffer before each run (D2). When present and
+     * non-empty at turn end, engines emit the terminal `decision_request`
+     * event via `buildDecisionRequestTerminalEvent` instead of `done`.
+     */
+    decisionBuffer?: import("./decision-buffer.ts").DecisionQuestionBuffer;
   };
 }

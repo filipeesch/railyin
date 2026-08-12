@@ -7,9 +7,10 @@
  * EngineEvents (cursor's adapter contract is already in EngineEvent shape).
  *
  * Custom-tool dispatch is supported via the `callTool` step — the mock
- * invokes the registered tool's `execute(args, {})` so suspend-loop tools
- * (decision_request) can fire the engine's onSuspend callback exactly as in
- * production. It also emits a real tool_start/tool_result event pair using
+ * invokes the registered tool's `execute(args, {})` exactly as production
+ * does. Streaming decision_request calls route their page payload through the
+ * engine's onPage callback (wired via buildCursorTools) and continue the loop.
+ * It also emits a real tool_start/tool_result event pair using
  * the tool's actual return value, so scenarios can assert on genuine tool
  * output (e.g. dynamic MCP discovery tools).
  */
@@ -80,13 +81,13 @@ export class MockCursorSdkAdapter implements CursorSdkAdapter {
           const tool = config.customTools?.[step.toolName];
           if (!tool) throw new Error(`Mock cursor tool not found: ${step.toolName}`);
           const callId = `call_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-          // Real worker invokes execute() and ignores the return when the tool suspends —
-          // the onSuspend side-effect (abort signal) is what stops the stream, and no
-          // tool_start/tool_result pair is ever emitted for a suspended call (the real
-          // turn resumes later once the user answers). For non-suspending tools, capture
-          // the real return value and emit a genuine tool_start/tool_result pair so
-          // scenarios can assert on it (Cursor's custom tools return a plain string — see
-          // buildCursorTools in engine/cursor/tools.ts).
+          // Real worker invokes execute() and captures the return value. Streaming
+          // decision_request returns `page` — the engine-side onPage callback
+          // (wired through buildCursorTools) pushes a decision_request_page event
+          // into the run loop, and the tool_start/tool_result pair is emitted so
+          // scenarios can assert genuine tool output. There is no suspend/abort
+          // path anymore (ask_user/shell_approval are engine-level events, not
+          // common-tool results).
           let resultText: string | undefined;
           let errored = false;
           try {

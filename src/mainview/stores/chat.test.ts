@@ -413,10 +413,34 @@ describe("chatStore — submitDecisions recordAsDecisions", () => {
     setActivePinia(createPinia());
   });
 
+  function stubSubmitResponse(): void {
+    apiMock.mockImplementation((async (method: unknown) => {
+      if (method === "chatSessions.submitDecisions") {
+        return {
+          message: {
+            id: 500,
+            taskId: null,
+            conversationId: 10,
+            type: "user",
+            role: "user",
+            content: "A: SQLite",
+            metadata: null,
+            createdAt: new Date().toISOString(),
+          },
+          executionId: 900,
+        };
+      }
+      return [];
+    }) as typeof apiMock);
+  }
+
   it("C-14: submitDecisions passes recordAsDecisions=false to API", async () => {
+    stubSubmitResponse();
     const store = useChatStore();
     store.sessions.push(makeChatSession({ id: 1, conversationId: 10 }));
     store.activeChatSessionId = 1;
+    const conversationStore = useConversationStore();
+    conversationStore.setActiveConversation(10);
 
     await store.submitDecisions(1, [], undefined, false);
 
@@ -427,9 +451,12 @@ describe("chatStore — submitDecisions recordAsDecisions", () => {
   });
 
   it("C-15: submitDecisions defaults recordAsDecisions to true", async () => {
+    stubSubmitResponse();
     const store = useChatStore();
     store.sessions.push(makeChatSession({ id: 1, conversationId: 10 }));
     store.activeChatSessionId = 1;
+    const conversationStore = useConversationStore();
+    conversationStore.setActiveConversation(10);
 
     await store.submitDecisions(1, []);
 
@@ -437,5 +464,31 @@ describe("chatStore — submitDecisions recordAsDecisions", () => {
     const call = submitCalls[submitCalls.length - 1];
     expect(call).toBeDefined();
     expect(call[1]).toEqual(expect.objectContaining({ sessionId: 1, recordAsDecisions: true }));
+  });
+
+  it("C-16: submitDecisions appends the returned user message so the panel closes", async () => {
+    stubSubmitResponse();
+    const store = useChatStore();
+    store.sessions.push(makeChatSession({ id: 1, conversationId: 10 }));
+    store.activeChatSessionId = 1;
+    const conversationStore = useConversationStore();
+    conversationStore.setActiveConversation(10);
+    // Seed the interview prompt so answeredText can resolve.
+    conversationStore.appendMessage({
+      id: 400,
+      taskId: null,
+      conversationId: 10,
+      type: "decision_request_prompt",
+      role: null,
+      content: '{"questions":[{"question":"Which DB?","type":"freetext"}]}',
+      metadata: null,
+      createdAt: new Date().toISOString(),
+    });
+
+    await store.submitDecisions(1, [{ question: "Which DB?", answer: "SQLite" }]);
+
+    const userMsg = conversationStore.messages.find((m) => m.type === "user");
+    expect(userMsg).toBeDefined();
+    expect(userMsg!.content).toBe("A: SQLite");
   });
 });

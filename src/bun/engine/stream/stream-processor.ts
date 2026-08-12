@@ -481,6 +481,26 @@ export class StreamProcessor {
             break;
           }
 
+          case "decision_request_page": {
+            // Ephemeral page event: streams the question to the live interview
+            // panel while the model is still running. NOT persisted, no
+            // execution-state change.
+            this.onStreamEvent?.({
+              taskId,
+              conversationId,
+              executionId,
+              seq: 0,
+              blockId: "",
+              type: "decision_request_page",
+              content: event.payload,
+              metadata: null,
+              parentBlockId: null,
+              done: false,
+              subagentId: null,
+            });
+            break;
+          }
+
           case "decision_request": {
             convBuffer.enqueue({ taskId, conversationId, type: "decision_request_prompt", role: null, content: event.payload, notify: true });
             convBuffer.flush().forEach((msg) => this.onNewMessage(msg));

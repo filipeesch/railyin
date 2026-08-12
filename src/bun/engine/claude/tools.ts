@@ -71,10 +71,10 @@ function jsonSchemaToZodShape(z: ZodLike, schema: Record<string, unknown>): Reco
 export interface ClaudeToolServer {
   server: unknown;
   /**
-   * Atomically reads and clears the pending suspend payload set by the last tool call.
-   * Returns `undefined` if no tool suspended during the current turn.
+   * Atomically reads and clears the pending page payload set by the last tool call.
+   * Returns `undefined` if the last call did not append a decision_request page.
    */
-  takePendingSuspend: () => string | undefined;
+  takePendingPage: () => string | undefined;
 }
 
 export function buildClaudeToolServer(
@@ -83,9 +83,9 @@ export function buildClaudeToolServer(
   context: CommonToolContext,
 ): ClaudeToolServer {
   // Shared between the tool handler and the PostToolUse hook.
-  // The handler sets this when a tool returns a suspend result;
+  // The handler sets this when a tool returns a `page` result;
   // the hook reads and clears it — no tool-name awareness needed.
-  let pendingSuspendPayload: string | undefined;
+  let pendingPagePayload: string | undefined;
 
   // Filter out task-scoped tools (todos) when taskId is null (chat session context)
   const activeDefs = context.task?.id == null
@@ -99,12 +99,11 @@ export function buildClaudeToolServer(
     async (args: Record<string, unknown>) => {
       try {
         const result = await executeCommonTool(def.name, args ?? {}, context);
-        if (result.type === "suspend") {
-          pendingSuspendPayload = result.payload;
+        if (result.type === "page") {
+          pendingPagePayload = result.payload;
         }
-        const text = result.type === "result" ? result.text : "Interview suspended - awaiting user response.";
         return {
-          content: [{ type: "text", text }],
+          content: [{ type: "text", text: result.text }],
         };
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
@@ -124,9 +123,9 @@ export function buildClaudeToolServer(
 
   return {
     server,
-    takePendingSuspend: () => {
-      const payload = pendingSuspendPayload;
-      pendingSuspendPayload = undefined;
+    takePendingPage: () => {
+      const payload = pendingPagePayload;
+      pendingPagePayload = undefined;
       return payload;
     },
   };

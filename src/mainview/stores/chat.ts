@@ -207,7 +207,13 @@ export const useChatStore = defineStore("chat", () => {
       lastActivityAt: now,
       lastReadAt: now,
     });
-    await api("chatSessions.submitDecisions", { sessionId, answers, generalNotes, recordAsDecisions });
+    const { message } = await api("chatSessions.submitDecisions", { sessionId, answers, generalNotes, recordAsDecisions });
+    // Append the user's answer message locally so the interview panel closes
+    // (mirrors taskStore.submitDecisions; the WS message.new push also arrives
+    // but is deduped by id).
+    if (message.conversationId === conversationStore.activeConversationId) {
+      conversationStore.appendMessage(message);
+    }
   }
 
   async function renameSession(sessionId: number, title: string) {

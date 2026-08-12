@@ -24,6 +24,8 @@ import { NoteRepository } from "../../db/repositories/note-repository.ts";
 import type { Task } from "../../../shared/rpc-types.ts";import { getDb } from "../../db/index.ts";
 import { getDefaultWorkspaceKey } from "../../workspace-context.ts";
 import { getLoadedProjectByKey } from "../../project-store.ts";
+import { DecisionQuestionBuffer } from "../decision-buffer.ts";
+import { buildDecisionRequestTerminalEvent } from "../decision-request-terminal-event.ts";
 
 export { createDefaultCursorSdkAdapter };
 
@@ -167,25 +169,24 @@ export class CursorEngine implements ExecutionEngine {
     // (e.g. "claude-sonnet-4-6", not "cursor/claude-sonnet-4-6").
     const resolvedModel = model?.startsWith("cursor/") ? model.slice("cursor/".length) : model;
 
-    // The Cursor SDK has no in-handler stop signal. When a suspend-loop tool
-    // (e.g. decision_request) fires, we record the payload and abort the run
-    // externally so the stream cuts before the model generates a next turn.
-    let pendingDecisionPayload: string | null = null;
-    const decisionAbort = new AbortController();
-    const onSuspend = (payload: string) => {
-      pendingDecisionPayload = payload;
-      decisionAbort.abort();
+    // Streaming decision_request: the tool returns `page` per question and the
+    // loop continues (no per-call abort). Page payloads are queued here and
+    // drained by the run loop so the UI streams them live; the terminal
+    // decision_request is emitted at turn end from the buffer instead of `done`.
+    const pageQueue: EngineEvent[] = [];
+    const onPage = (payload: string) => {
+      pageQueue.push({ type: "decision_request_page", payload });
     };
 
     // Merge the external cancel signal with the internal decision-abort signal
-    // into a single signal handed to the adapter.
+    // into a single signal handed to the adapter. (decision_request no longer
+    // aborts; only user cancel and eviction drive this signal.)
     const combinedAbort = new AbortController();
     const forward = () => combinedAbort.abort();
     if (signal) {
       if (signal.aborted) forward();
       else signal.addEventListener("abort", forward, { once: true });
     }
-    decisionAbort.signal.addEventListener("abort", forward, { once: true });
 
     this.executions.set(executionId, { abort: combinedAbort });
 
@@ -219,6 +220,7 @@ export class CursorEngine implements ExecutionEngine {
         worktreePath: workingDirectory,
         mcpRegistry: params.mcpRegistry ?? undefined,
         mcpEnabledTools: params.enabledMcpTools ?? null,
+        decisionBuffer: new DecisionQuestionBuffer(),
       },
       workspaceKey: params.workspaceKey!,
     };
@@ -233,7 +235,7 @@ export class CursorEngine implements ExecutionEngine {
     // of inlining every skill into the prompt prefix.
     const skillResolver = new FileSystemSkillResolver(this.dialect.getSkillPaths(worktreePath, projectPath));
 
-    const customTools = buildCursorTools(toolContext, skillResolver, onSuspend);
+    const customTools = buildCursorTools(toolContext, skillResolver, onPage);
 
     // The Cursor SDK has no system-message slot — inline the task context and
     // stage instructions as a prefix to the user prompt.
@@ -311,23 +313,25 @@ export class CursorEngine implements ExecutionEngine {
         // Swallow the adapter's terminal "done" — we emit our own terminal
         // event (either decision_request or done) once the stream ends.
         if (event.type === "done") break;
+        // Drain queued decision_request_page events before forwarding the
+        // adapter event so the UI sees pages in tool-call order (D11).
+        while (pageQueue.length > 0) yield pageQueue.shift()!;
         yield event;
       }
+      while (pageQueue.length > 0) yield pageQueue.shift()!;
 
-      if (pendingDecisionPayload !== null) {
-        yield { type: "decision_request", payload: pendingDecisionPayload };
+      // Turn-end flush: present the interview instead of done when the model
+      // appended questions but ended its turn.
+      const terminal = buildDecisionRequestTerminalEvent(toolContext.runtime.decisionBuffer!);
+      if (terminal !== null) {
+        yield terminal;
         return;
       }
 
       if (signal?.aborted) return;
       yield { type: "done" };
     } catch (err) {
-      if (signal?.aborted || decisionAbort.signal.aborted) {
-        if (pendingDecisionPayload !== null) {
-          yield { type: "decision_request", payload: pendingDecisionPayload };
-        }
-        return;
-      }
+      if (signal?.aborted) return;
       yield { type: "error", message: err instanceof Error ? err.message : String(err), fatal: true };
     } finally {
       if (signal) signal.removeEventListener("abort", forward);
