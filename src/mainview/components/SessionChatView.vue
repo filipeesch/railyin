@@ -97,6 +97,13 @@
       :refresh-trigger="notesRefreshTrigger"
     />
 
+    <!-- Streaming interview panel (above prompt input, outside chat stream) -->
+    <DecisionInterviewPanel
+      v-if="session && !conversationStore.messagesLoading && activeTab === 'chat' && session.conversationId != null"
+      :conversation-id="session.conversationId"
+      :chat-session-id="session.id"
+    />
+
     <!-- Input bar -->
     <ConversationInput
       v-if="session && !conversationStore.messagesLoading && activeTab === 'chat'"
@@ -144,6 +151,7 @@ import InputText from "primevue/inputtext";
 import ProgressSpinner from "primevue/progressspinner";
 import ConversationBody from "./ConversationBody.vue";
 import ConversationInput from "./ConversationInput.vue";
+import DecisionInterviewPanel from "./DecisionInterviewPanel.vue";
 import ManageModelsModal from "./ManageModelsModal.vue";
 import DecisionsPanel from "./DecisionsPanel.vue";
 import NotesPanel from "./NotesPanel.vue";

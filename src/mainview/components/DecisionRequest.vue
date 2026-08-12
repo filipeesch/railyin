@@ -1,111 +1,115 @@
 <template>
   <!-- Interactive -->
   <div v-if="!answered" ref="interviewEl" class="interview">
-    <!-- Context preamble -->
-    <div v-if="context" class="interview__context prose" v-html="renderMd(context)" />
+    <!-- Legacy top-level context preamble (rendered above page 1) -->
+    <div v-if="currentIndex === 0 && context" class="interview__context prose" v-html="renderMd(context)" />
 
-    <div v-for="(q, qi) in questions" :key="qi" class="interview__section">
-      <!-- Question header -->
-      <div class="interview__question-header">
-        <span class="interview__question-text prose" v-html="renderMd(q.question)" />
-        <span v-if="q.weight" class="interview__weight-badge" :class="`interview__weight-badge--${q.weight}`">
-          {{ weightLabel(q.weight) }}
-        </span>
-      </div>
+    <div class="interview__section">
+      <template v-if="currentQuestion">
+        <!-- Per-question context preamble -->
+        <div v-if="currentQuestion.context" class="interview__context prose" v-html="renderMd(currentQuestion.context)" />
 
-      <!-- Model lean -->
-      <div v-if="q.model_lean" class="interview__model-lean">
-        🤖 I lean toward <strong>{{ q.model_lean }}</strong>
-        <template v-if="q.model_lean_reason"> · {{ q.model_lean_reason }}</template>
-      </div>
-
-      <!-- Freetext — just a textarea -->
-      <template v-if="q.type === 'freetext'">
-        <textarea
-          v-model="freetextValues[qi]"
-          class="interview__textarea interview__textarea--freetext"
-          placeholder="Your answer…"
-        />
-      </template>
-
-      <!-- Exclusive / non_exclusive options -->
-      <template v-else>
-        <!-- Option rows -->
-        <div class="interview__options">
-          <div
-            v-for="opt in q.options ?? []"
-            :key="opt.title"
-            class="interview__option"
-            :class="{ 'interview__option--focused': focusedOption[qi] === opt.title, 'interview__option--selected': isSelected(qi, q, opt.title) }"
-            @click="onRowClick(qi, q, opt.title)"
-          >
-            <input
-              v-if="q.type === 'non_exclusive'"
-              type="checkbox"
-              class="interview__checkbox"
-              :checked="isSelected(qi, q, opt.title)"
-              @click.stop="onCheckboxClick(qi, q, opt.title)"
-            />
-            <span class="interview__option-title">{{ opt.title }}</span>
-            <span v-if="q.model_lean === opt.title" class="interview__lean-badge">AI suggests</span>
-          </div>
-
-          <!-- Other option -->
-          <div
-            class="interview__option"
-            :class="{ 'interview__option--focused': focusedOption[qi] === '__other__', 'interview__option--selected': isSelected(qi, q, '__other__') }"
-            @click="onRowClick(qi, q, '__other__')"
-          >
-            <input
-              v-if="q.type === 'non_exclusive'"
-              type="checkbox"
-              class="interview__checkbox"
-              :checked="isSelected(qi, q, '__other__')"
-              @click.stop="onCheckboxClick(qi, q, '__other__')"
-            />
-            <span class="interview__option-title">Other</span>
-          </div>
+        <!-- Question header -->
+        <div class="interview__question-header">
+          <span class="interview__question-text prose" v-html="renderMd(currentQuestion.question)" />
+          <span v-if="currentQuestion.weight" class="interview__weight-badge" :class="`interview__weight-badge--${currentQuestion.weight}`">
+            {{ weightLabel(currentQuestion.weight) }}
+          </span>
         </div>
 
-        <!-- Description panel or Other textarea -->
-        <div class="interview__desc-area" :class="{ 'interview__desc-area--other': isSelected(qi, q, '__other__') || focusedOption[qi] === '__other__' }">
-          <template v-if="isSelected(qi, q, '__other__') || focusedOption[qi] === '__other__'">
-            <textarea
-              v-model="otherValues[qi]"
-              class="interview__textarea interview__textarea--other"
-              placeholder="Describe your choice…"
-            />
-          </template>
-          <template v-else-if="focusedOption[qi]">
-            <div
-              class="interview__desc-panel prose"
-              v-html="renderMd(descriptionFor(q, focusedOption[qi]!))"
-            />
-          </template>
-          <template v-else>
-            <div class="interview__desc-placeholder">Select an option to see details.</div>
-          </template>
+        <!-- Model lean -->
+        <div v-if="currentQuestion.model_lean" class="interview__model-lean">
+          🤖 I lean toward <strong>{{ currentQuestion.model_lean }}</strong>
+          <template v-if="currentQuestion.model_lean_reason"> · {{ currentQuestion.model_lean_reason }}</template>
         </div>
 
-        <!-- Notes (hidden when Other is focused or selected) -->
-        <div v-if="focusedOption[qi] !== '__other__' && !isSelected(qi, q, '__other__')" class="interview__notes">
-          <label class="interview__notes-label">Notes <span class="interview__notes-optional">(optional)</span></label>
+        <!-- Freetext — just a textarea -->
+        <template v-if="currentQuestion.type === 'freetext'">
           <textarea
-            v-model="notesValues[qi]"
-            class="interview__textarea interview__textarea--notes"
-            placeholder="Any additional context…"
+            v-model="freetextValues[currentIndex]"
+            class="interview__textarea interview__textarea--freetext"
+            placeholder="Your answer…"
           />
+        </template>
+
+        <!-- Exclusive / non_exclusive options -->
+        <template v-else>
+          <div class="interview__options">
+            <div
+              v-for="opt in currentQuestion.options ?? []"
+              :key="opt.title"
+              class="interview__option"
+              :class="{ 'interview__option--focused': focusedOption[currentIndex] === opt.title, 'interview__option--selected': isSelected(currentIndex, currentQuestion, opt.title) }"
+              @click="onRowClick(currentIndex, currentQuestion, opt.title)"
+            >
+              <input
+                v-if="currentQuestion.type === 'non_exclusive'"
+                type="checkbox"
+                class="interview__checkbox"
+                :checked="isSelected(currentIndex, currentQuestion, opt.title)"
+                @click.stop="onCheckboxClick(currentIndex, currentQuestion, opt.title)"
+              />
+              <span class="interview__option-title">{{ opt.title }}</span>
+              <span v-if="currentQuestion.model_lean === opt.title" class="interview__lean-badge">AI suggests</span>
+            </div>
+
+            <!-- Other option -->
+            <div
+              class="interview__option"
+              :class="{ 'interview__option--focused': focusedOption[currentIndex] === '__other__', 'interview__option--selected': isSelected(currentIndex, currentQuestion, '__other__') }"
+              @click="onRowClick(currentIndex, currentQuestion, '__other__')"
+            >
+              <input
+                v-if="currentQuestion.type === 'non_exclusive'"
+                type="checkbox"
+                class="interview__checkbox"
+                :checked="isSelected(currentIndex, currentQuestion, '__other__')"
+                @click.stop="onCheckboxClick(currentIndex, currentQuestion, '__other__')"
+              />
+              <span class="interview__option-title">Other</span>
+            </div>
+          </div>
+
+          <!-- Description panel or Other textarea -->
+          <div class="interview__desc-area" :class="{ 'interview__desc-area--other': isSelected(currentIndex, currentQuestion, '__other__') || focusedOption[currentIndex] === '__other__' }">
+            <template v-if="isSelected(currentIndex, currentQuestion, '__other__') || focusedOption[currentIndex] === '__other__'">
+              <textarea
+                v-model="otherValues[currentIndex]"
+                class="interview__textarea interview__textarea--other"
+                placeholder="Describe your choice…"
+              />
+            </template>
+            <template v-else-if="focusedOption[currentIndex]">
+              <div
+                class="interview__desc-panel prose"
+                v-html="renderMd(descriptionFor(currentQuestion, focusedOption[currentIndex]!))"
+              />
+            </template>
+            <template v-else>
+              <div class="interview__desc-placeholder">Select an option to see details.</div>
+            </template>
+          </div>
+
+          <!-- Notes (hidden when Other is focused or selected) -->
+          <div v-if="focusedOption[currentIndex] !== '__other__' && !isSelected(currentIndex, currentQuestion, '__other__')" class="interview__notes">
+            <label class="interview__notes-label">Notes <span class="interview__notes-optional">(optional)</span></label>
+            <textarea
+              v-model="notesValues[currentIndex]"
+              class="interview__textarea interview__textarea--notes"
+              placeholder="Any additional context…"
+            />
+          </div>
+        </template>
+
+        <!-- answers_affect_followup hint -->
+        <div v-if="currentQuestion.answers_affect_followup" class="interview__followup-hint">
+          ✦ Your answer here will shape follow-up questions
         </div>
       </template>
-
-      <!-- answers_affect_followup hint -->
-      <div v-if="q.answers_affect_followup" class="interview__followup-hint">
-        ✦ Your answer here will shape follow-up questions
-      </div>
     </div>
 
-    <!-- General notes -->
-    <div class="interview__general-notes">
+    <!-- General notes (shown on the last page) -->
+    <div v-if="isLastPage" class="interview__general-notes">
       <label class="interview__notes-label">
         Additional context <span class="interview__notes-optional">(optional)</span>
       </label>
@@ -116,7 +120,12 @@
       />
     </div>
 
+    <!-- Footer: Back / Next / Submit -->
     <div class="interview__footer">
+      <div class="interview__footer-nav">
+        <button v-if="currentIndex > 0" class="interview__back" @click="goBack">Back</button>
+        <button v-if="!isLastPage" class="interview__next" :disabled="!canAdvanceCurrent" @click="goNext">Next</button>
+      </div>
       <label class="interview__record-toggle">
         <input type="checkbox" v-model="recordAsDecisions" />
         <span>Record as decisions</span>
@@ -135,6 +144,8 @@ import mermaid from "mermaid";
 import type { DecisionRequestQuestion } from "@shared/rpc-types";
 import {
   canSubmitDecisionRequest,
+  canAdvancePage,
+  clampPageIndex,
   buildDecisionAnswers,
   buildSubmissionText,
   isOptionSelected as isOptionSelectedUtil,
@@ -173,6 +184,8 @@ const emit = defineEmits<{
 const answered = computed(() => props.answeredText !== undefined);
 
 const interviewEl = ref<HTMLElement>();
+const currentIndex = ref(0);
+
 const focusedOption = ref<string[]>(props.questions.map(() => ""));
 
 watch(
@@ -203,8 +216,31 @@ watch(
     freetextValues.value = newQuestions.map(() => "");
     generalNotes.value = "";
     recordAsDecisions.value = true;
+    currentIndex.value = clampPageIndex(currentIndex.value, newQuestions.length);
   },
 );
+
+const currentQuestion = computed<DecisionRequestQuestion | undefined>(() => props.questions[currentIndex.value]);
+
+const isLastPage = computed(() => props.questions.length === 0 || currentIndex.value >= props.questions.length - 1);
+
+const canAdvanceCurrent = computed(() => {
+  const q = currentQuestion.value;
+  if (!q) return false;
+  return canAdvancePage(q, currentIndex.value, formState());
+});
+
+const canSubmit = computed(() => canSubmitDecisionRequest(props.questions, formState()));
+
+function goNext() {
+  if (!canAdvanceCurrent.value || isLastPage.value) return;
+  currentIndex.value++;
+}
+
+function goBack() {
+  if (currentIndex.value <= 0) return;
+  currentIndex.value--;
+}
 
 function weightLabel(weight: string): string {
   if (weight === "critical") return "⚠️ Hard to change later";
@@ -247,8 +283,6 @@ function onCheckboxClick(qi: number, q: DecisionRequestQuestion, title: string) 
     multiSelected.value[qi] = [...arr, title];
   }
 }
-
-const canSubmit = computed(() => canSubmitDecisionRequest(props.questions, formState()));
 
 function submit() {
   if (!canSubmit.value) return;
@@ -495,6 +529,34 @@ function submit() {
   gap: 12px;
   padding-top: 8px;
   border-top: 1px solid var(--p-surface-200, #e2e8f0);
+}
+
+.interview__footer-nav {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.interview__back,
+.interview__next {
+  padding: 7px 16px;
+  background: var(--p-surface-100, #f1f5f9);
+  color: var(--p-surface-700, #334155);
+  border: 1px solid var(--p-surface-200, #e2e8f0);
+  border-radius: 6px;
+  font-size: 0.875rem;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+
+.interview__back:hover,
+.interview__next:hover:not(:disabled) {
+  background: var(--p-surface-200, #e2e8f0);
+}
+
+.interview__next:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 .interview__record-toggle {

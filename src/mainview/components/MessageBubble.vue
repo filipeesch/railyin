@@ -36,12 +36,16 @@
   </div>
 
   <div v-else-if="chunk.type === 'decision_request_prompt'" class="msg msg--interview-prompt">
-    <DecisionRequest
-      :questions="interviewPayload.questions"
-      :context="interviewPayload.context"
-      :answered-text="interviewAnsweredText"
-      @submit="onInterviewSubmit"
-    />
+    <!-- Legacy/read-only rendering: new interactive interviews live in the fixed
+         DecisionInterviewPanel above the prompt input. Persisted prompts from
+         before the streaming change remain renderable here (answered/read-only). -->
+    <div v-if="interviewAnsweredText" class="interview__answered">
+      <div class="interview__answered-header">Interview answered</div>
+      <div class="interview__answered-body prose" v-html="renderMd(interviewAnsweredText)" />
+    </div>
+    <div v-else class="interview__legacy-hint">
+      An interview is waiting for your input above the message box.
+    </div>
   </div>
 
   <!-- Persisted reasoning messages from DB (collapsed, non-streaming) -->
@@ -65,10 +69,8 @@ import { useMarkdown } from "../composables/useMarkdown";
 import type {
   ConversationMessage,
   AskUserPromptContent,
-  DecisionRequestPayload,
 } from "@shared/rpc-types";
 import AskUserPrompt from "./AskUserPrompt.vue";
-import DecisionRequest from "./DecisionRequest.vue";
 import InlineChipText from "./InlineChipText.vue";
 import ReasoningBubble from "./ReasoningBubble.vue";
 import ShellApprovalPrompt from "./ShellApprovalPrompt.vue";
@@ -191,17 +193,7 @@ async function onShellApprovalRespond(decision: "approve_once" | "approve_all" |
   await api("executions.respondShellApproval", { executionId, decision });
 }
 
-// ─── decision_request_prompt support ─────────────────────────────────────────
-
-const interviewPayload = computed<DecisionRequestPayload>(() => {
-  if (props.chunk.type !== "decision_request_prompt") return { questions: [] };
-  try {
-    const parsed = JSON.parse(props.chunk.content) as DecisionRequestPayload;
-    return Array.isArray(parsed.questions) ? parsed : { ...parsed, questions: [] };
-  } catch {
-    return { questions: [] };
-  }
-});
+// ─── decision_request_prompt support (legacy rendering only) ─────────────────
 
 const interviewAnsweredText = computed(() => {
   if (props.chunk.type !== "decision_request_prompt" || props.index === undefined) return undefined;
@@ -210,20 +202,6 @@ const interviewAnsweredText = computed(() => {
   const reply = later.find((m) => m.type === "user");
   return reply?.content;
 });
-
-async function onInterviewSubmit(payload: { text: string; decisions: Array<{ question: string; answer: string; weight: string; notes?: string }>; generalNotes?: string; recordAsDecisions?: boolean }) {
-  const { decisions, generalNotes, recordAsDecisions } = payload;
-  const answers = decisions.map(d => ({ question: d.question, answer: d.answer, weight: d.weight, notes: d.notes }));
-  if (props.chunk.taskId != null) {
-    const taskId = taskStore.activeTaskId;
-    if (taskId === null) return;
-    await taskStore.submitDecisions(taskId, answers, generalNotes, recordAsDecisions);
-    return;
-  }
-
-  if (chatStore.activeChatSessionId == null) return;
-  await chatStore.submitDecisions(chatStore.activeChatSessionId, answers, generalNotes, recordAsDecisions);
-}
 </script>
 
 <style scoped>
@@ -374,6 +352,31 @@ async function onInterviewSubmit(payload: { text: string; decisions: Array<{ que
 .msg--interview-prompt {
   align-items: flex-start;
   max-width: 100%;
+}
+
+.interview__answered {
+  background: var(--p-surface-50, #f8fafc);
+  border: 1px solid var(--p-surface-200, #e2e8f0);
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-size: 0.85rem;
+  color: var(--p-surface-700, #334155);
+}
+
+.interview__answered-header {
+  font-weight: 600;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--p-surface-500, #64748b);
+  margin-bottom: 4px;
+}
+
+.interview__legacy-hint {
+  font-size: 0.85rem;
+  color: var(--p-surface-500, #64748b);
+  font-style: italic;
+  padding: 6px 0;
 }
 
 .msg--prompt {

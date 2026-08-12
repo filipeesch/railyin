@@ -576,3 +576,108 @@ describe("stream block state", () => {
   });
 });
 
+// ─── Live interview pages (DR-1..DR-4) ───────────────────────────────────────
+
+describe("live interview pages", () => {
+  beforeEach(() => {
+    setActivePinia(createPinia());
+    apiMock.mockImplementation(async () => ({ messages: [], hasMore: false }));
+  });
+
+  function pageEvent(conversationId: number, question: string, seq: number): import("@shared/rpc-types").StreamEvent {
+    return {
+      taskId: 1,
+      conversationId,
+      executionId: 1,
+      seq,
+      blockId: `page-${seq}`,
+      type: "decision_request_page",
+      content: JSON.stringify({ question, type: "freetext" }),
+      metadata: null,
+      parentBlockId: null,
+      subagentId: null,
+      done: false,
+    };
+  }
+
+  it("DR-1: decision_request_page appends to liveInterviews for the active conversation", () => {
+    const store = useConversationStore();
+    store.setActiveConversation(1);
+
+    store.onStreamEvent(pageEvent(1, "Q1", 1));
+    store.onStreamEvent(pageEvent(1, "Q2", 2));
+
+    expect(store.liveInterviews.get(1)).toHaveLength(2);
+    expect(store.liveInterviews.get(1)![0].question).toBe("Q1");
+    expect(store.liveInterviews.get(1)![1].question).toBe("Q2");
+  });
+
+  it("DR-2: malformed page payloads are ignored", () => {
+    const store = useConversationStore();
+    store.setActiveConversation(1);
+
+    store.onStreamEvent({
+      taskId: 1,
+      conversationId: 1,
+      executionId: 1,
+      seq: 1,
+      blockId: "page-1",
+      type: "decision_request_page",
+      content: "not-json",
+      metadata: null,
+      parentBlockId: null,
+      subagentId: null,
+      done: false,
+    });
+
+    expect(store.liveInterviews.get(1) ?? []).toHaveLength(0);
+  });
+
+  it("DR-3: terminal decision_request_prompt clears the live pages (reconcile)", () => {
+    const store = useConversationStore();
+    store.setActiveConversation(1);
+
+    store.onStreamEvent(pageEvent(1, "Q1", 1));
+    expect(store.liveInterviews.get(1)).toHaveLength(1);
+
+    // Stream ends (done) before the persisted terminal message arrives.
+    store.onStreamEvent({
+      taskId: 1,
+      conversationId: 1,
+      executionId: 1,
+      seq: 2,
+      blockId: "done-1",
+      type: "done",
+      content: "",
+      metadata: null,
+      parentBlockId: null,
+      subagentId: null,
+      done: true,
+    });
+
+    store.onNewMessage({
+      id: 100,
+      taskId: null,
+      conversationId: 1,
+      type: "decision_request_prompt",
+      role: null,
+      content: '{"questions":[{"question":"Q1","type":"freetext"}]}',
+      metadata: null,
+      createdAt: new Date().toISOString(),
+    });
+
+    expect(store.liveInterviews.get(1) ?? []).toHaveLength(0);
+  });
+
+  it("DR-4: activeLiveInterview reflects the active conversation only", () => {
+    const store = useConversationStore();
+    store.setActiveConversation(1);
+
+    store.onStreamEvent(pageEvent(1, "Q1", 1));
+    expect(store.activeLiveInterview).toHaveLength(1);
+
+    store.setActiveConversation(2);
+    expect(store.activeLiveInterview).toHaveLength(0);
+  });
+});
+

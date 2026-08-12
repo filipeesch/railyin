@@ -1,7 +1,7 @@
 import { computed, ref } from "vue";
 import { defineStore } from "pinia";
 import { api } from "../rpc";
-import type { ConversationMessage, StreamError, StreamEvent, StreamEventType } from "@shared/rpc-types";
+import type { ConversationMessage, DecisionRequestQuestion, StreamError, StreamEvent, StreamEventType } from "@shared/rpc-types";
 
 function tryParseJson(s: string): Record<string, unknown> | null {
   try { return JSON.parse(s); } catch { return null; }
@@ -98,6 +98,8 @@ export const useConversationStore = defineStore("conversation", () => {
 
   const streamStates = ref(new Map<number, ConversationStreamState>());
   const contextUsageByConversation = ref(new Map<number, ContextUsage>());
+  /** Live streaming interview pages per conversation (from decision_request_page events). */
+  const liveInterviews = ref(new Map<number, DecisionRequestQuestion[]>());
 
   const activeStreamState = computed(() =>
     activeConversationId.value != null
@@ -309,6 +311,21 @@ export const useConversationStore = defineStore("conversation", () => {
       return;
     }
 
+    if (event.type === "decision_request_page") {
+      // Ephemeral page: append to the live interview (per-conversation). The
+      // terminal decision_request_prompt message (persisted) replaces this live
+      // state at turn end — see onNewMessage reconciliation below.
+      try {
+        const parsed = JSON.parse(event.content) as DecisionRequestQuestion;
+        if (parsed && typeof parsed.question === "string") {
+          const pages = liveInterviews.value.get(event.conversationId) ?? [];
+          pages.push(parsed);
+          liveInterviews.value.set(event.conversationId, pages);
+        }
+      } catch { /* ignore malformed page payloads */ }
+      return;
+    }
+
     if (event.type === "text_chunk" || event.type === "reasoning_chunk") {
       const blockType = event.type === "text_chunk" ? "text_chunk" : "reasoning_chunk";
       let lastBlockId: string | undefined;
@@ -423,7 +440,18 @@ export const useConversationStore = defineStore("conversation", () => {
     if (message.type === "compaction_summary") {
       fetchContextUsage({ conversationId: message.conversationId }).catch(console.error);
     }
+    // Terminal interview prompt replaces the live streaming pages (reconcile).
+    if (message.type === "decision_request_prompt") {
+      liveInterviews.value.delete(message.conversationId);
+    }
   }
+
+  /** Live interview pages for the active conversation (empty when none streaming). */
+  const activeLiveInterview = computed<DecisionRequestQuestion[]>(() =>
+    activeConversationId.value != null
+      ? liveInterviews.value.get(activeConversationId.value) ?? []
+      : [],
+  );
 
   return {
     activeConversationId,
@@ -435,6 +463,8 @@ export const useConversationStore = defineStore("conversation", () => {
     activeStreamState,
     contextUsage,
     contextUsageByConversation,
+    liveInterviews,
+    activeLiveInterview,
     setActiveConversation,
     appendMessage,
     loadMessages,

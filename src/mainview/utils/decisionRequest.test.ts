@@ -2,6 +2,8 @@ import { describe, it, expect } from "vitest";
 import type { DecisionRequestQuestion } from "../../shared/rpc-types";
 import {
   canSubmitDecisionRequest,
+  canAdvancePage,
+  clampPageIndex,
   buildDecisionAnswerParts,
   buildDecisionAnswers,
   buildSubmissionText,
@@ -200,5 +202,47 @@ describe("isOptionSelected", () => {
 
     const stateNon = makeState({ multiSelected: [["__other__"]] });
     expect(isOptionSelected(nonExclusiveQuestion, "__other__", stateNon, 0)).toBe(true);
+  });
+});
+
+describe("canAdvancePage", () => {
+  it("DRU-14: gated by per-question validity for exclusive", () => {
+    const empty = makeState({ singleSelected: [""] });
+    expect(canAdvancePage(exclusiveQuestion, 0, empty)).toBe(false);
+
+    const selected = makeState({ singleSelected: ["PostgreSQL"] });
+    expect(canAdvancePage(exclusiveQuestion, 0, selected)).toBe(true);
+  });
+
+  it("DRU-15: gated by freetext length", () => {
+    const empty = makeState({ freetextValues: [""] });
+    expect(canAdvancePage(freetextQuestion, 0, empty)).toBe(false);
+
+    const filled = makeState({ freetextValues: ["my use case"] });
+    expect(canAdvancePage(freetextQuestion, 0, filled)).toBe(true);
+  });
+
+  it("DRU-16: gated by non_exclusive selections (and other text when __other__)", () => {
+    const empty = makeState({ multiSelected: [[]] });
+    expect(canAdvancePage(nonExclusiveQuestion, 0, empty)).toBe(false);
+
+    const selected = makeState({ multiSelected: [["Auth"]] });
+    expect(canAdvancePage(nonExclusiveQuestion, 0, selected)).toBe(true);
+
+    const otherEmpty = makeState({ multiSelected: [["__other__"]], otherValues: [""] });
+    expect(canAdvancePage(nonExclusiveQuestion, 0, otherEmpty)).toBe(false);
+
+    const otherFilled = makeState({ multiSelected: [["__other__"]], otherValues: ["custom"] });
+    expect(canAdvancePage(nonExclusiveQuestion, 0, otherFilled)).toBe(true);
+  });
+});
+
+describe("clampPageIndex", () => {
+  it("DRU-17: clamps out-of-range indices and handles empty lists", () => {
+    expect(clampPageIndex(0, 3)).toBe(0);
+    expect(clampPageIndex(2, 3)).toBe(2);
+    expect(clampPageIndex(-1, 3)).toBe(0);
+    expect(clampPageIndex(99, 3)).toBe(2);
+    expect(clampPageIndex(0, 0)).toBe(-1);
   });
 });
