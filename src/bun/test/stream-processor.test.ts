@@ -1,15 +1,14 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { initDb, seedProjectAndTask, setupTestConfig } from "./helpers.ts";
 import { StreamProcessor } from "../engine/stream/stream-processor.ts";
-import { WriteBuffer } from "../pipeline/write-buffer.ts";
-import type { RawMessageItem } from "../engine/stream/raw-message-buffer.ts";
+import type { RawMessageItem } from "../engine/stream/types.ts";
 import type { ExecutionEngine, ExecutionParams, EngineEvent, EngineResumeInput } from "../engine/types.ts";
 import type { ConversationMessage } from "../../shared/rpc-types.ts";
 import type { Database } from "bun:sqlite";
 
 function noop(..._args: unknown[]): void {}
 
-const fakeRawBuffer = new WriteBuffer<RawMessageItem>({ flushFn: () => {} });
+const fakeRawBuffer = () => {};
 
 let db: Database;
 let configCleanup: () => void;

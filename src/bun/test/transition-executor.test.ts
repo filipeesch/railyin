@@ -18,8 +18,7 @@ import { BoardToolExecutor } from "../workflow/tools/board-tool-executor.ts";
 import { ExecutionParamsBuilder } from "../engine/execution/execution-params-builder.ts";
 import { IWorkingDirectoryResolver } from "../engine/execution/working-directory-resolver.ts";
 import { StreamProcessor } from "../engine/stream/stream-processor.ts";
-import { WriteBuffer } from "../pipeline/write-buffer.ts";
-import type { RawMessageItem } from "../engine/stream/raw-message-buffer.ts";
+import type { RawMessageItem } from "../engine/stream/types.ts";
 import type { ExecutionEngine, ExecutionParams, EngineEvent, EngineResumeInput, RawModelMessage } from "../engine/types.ts";
 import type { TaskRow } from "../db/row-types.ts";
 import { initDb, seedProjectAndTask, setupTestConfig, makeTestRegistry, makeTestRegistryWith } from "./helpers.ts";
@@ -27,7 +26,7 @@ import { appendMessage } from "../conversation/messages.ts";
 import type { EngineRegistry } from "../engine/engine-registry.ts";
 import { ExecutionParamsEnricher } from "../engine/execution/execution-params-enricher.ts";
 
-const fakeRawBuffer = new WriteBuffer<RawMessageItem>({ flushFn: () => {} });
+const fakeRawBuffer = () => {};
 
 let db: Database;
 let gitDir: string;
@@ -104,7 +103,7 @@ class StubStreamProcessor extends StreamProcessor {
     return new AbortController().signal;
   }
 
-  override makePersistCallback(): (raw: RawModelMessage) => void {
+  override makeRawMessageCallback(): (raw: RawModelMessage) => void {
     return (_raw) => {};
   }
 

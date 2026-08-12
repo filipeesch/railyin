@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect } from "vitest";
 import { WriteBuffer } from "../pipeline/write-buffer.ts";
 import { createMockWait } from "./support/mock-wait.ts";
 
@@ -145,5 +145,132 @@ describe("WriteBuffer — WB-4: stop flushes remaining items", () => {
 
     expect(flushed.flat()).toContain("x");
     expect(flushed.flat()).toContain("y");
+  });
+});
+
+// ─── WB-5: error handling — SQLITE_BUSY requeue, bounded retry, never-die ─────
+
+describe("WriteBuffer — WB-5: error handling", () => {
+  function busyError(): Error & { code: string } {
+    const err = new Error("database is locked") as Error & { code: string };
+    err.code = "SQLITE_BUSY";
+    return err;
+  }
+
+  it("requeues a SQLITE_BUSY batch and retries it on the next flush", () => {
+    const flushed: number[][] = [];
+    const errors: unknown[] = [];
+    let attempts = 0;
+    const buf = new WriteBuffer<number>({
+      maxBatch: 100,
+      flushFn: (items) => {
+        attempts++;
+        if (attempts === 1) throw busyError();
+        flushed.push([...items]);
+      },
+      onError: (err, items) => errors.push({ err, items }),
+    });
+
+    buf.enqueue(1);
+    buf.enqueue(2);
+
+    const first = buf.flush(); // busy → requeued, nothing flushed
+    expect(first).toEqual([]);
+    expect(flushed).toHaveLength(0);
+    expect(errors).toHaveLength(0);
+
+    const second = buf.flush(); // retry succeeds
+    expect(second).toEqual([1, 2]);
+    expect(flushed).toEqual([[1, 2]]);
+    expect(errors).toHaveLength(0);
+  });
+
+  it("drops the batch after maxBusyRetries consecutive failures", () => {
+    const errors: unknown[] = [];
+    const buf = new WriteBuffer<number>({
+      maxBatch: 100,
+      flushFn: () => { throw busyError(); },
+      maxBusyRetries: 1, // allow 1 requeue; drop on the 2nd consecutive failure
+      onError: (err, items) => errors.push({ err, items }),
+    });
+
+    buf.enqueue(1);
+    buf.flush(); // attempt 1 — requeued
+    expect(errors).toHaveLength(0);
+    buf.flush(); // attempt 2 — dropped
+    expect(errors).toHaveLength(1);
+
+    // Buffer continues to accept new items; the failure counter resets
+    buf.enqueue(2);
+    buf.flush(); // attempt 1 for the new batch — requeued
+    buf.flush(); // attempt 2 — dropped again
+    expect(errors).toHaveLength(2);
+  });
+
+  it("non-busy errors drop the batch immediately (never requeued)", () => {
+    const errors: unknown[] = [];
+    let failNext = true;
+    const buf = new WriteBuffer<number>({
+      maxBatch: 100,
+      flushFn: (items) => {
+        if (failNext) {
+          failNext = false;
+          throw new Error("constraint violation");
+        }
+      },
+      onError: (err, items) => errors.push({ err, items }),
+    });
+
+    buf.enqueue(7);
+    const result = buf.flush();
+    expect(result).toEqual([]);
+    expect(errors).toHaveLength(1);
+    expect((errors[0] as { items: number[] }).items).toEqual([7]);
+
+    // Fresh batch flushes normally
+    buf.enqueue(8);
+    expect(buf.flush()).toEqual([8]);
+    expect(errors).toHaveLength(1);
+  });
+
+  it("background loop keeps running after a busy flush failure", async () => {
+    const flushed: number[][] = [];
+    const { waitFn, tick } = createMockWait();
+    let failNext = true;
+    const buf = new WriteBuffer<number>({
+      maxBatch: 100,
+      flushFn: (items) => {
+        if (failNext) {
+          failNext = false;
+          throw busyError();
+        }
+        flushed.push([...items]);
+      },
+      waitFn,
+    });
+
+    buf.start();
+    buf.enqueue(1);
+
+    tick(); // first flush fails with busy → batch requeued
+    await new Promise((r) => setTimeout(r, 0));
+    expect(flushed).toHaveLength(0);
+
+    tick(); // retry succeeds
+    await new Promise((r) => setTimeout(r, 0));
+    expect(flushed).toEqual([[1]]);
+
+    buf.stop();
+  });
+
+  it("stop() never throws when flushFn fails", () => {
+    const buf = new WriteBuffer<number>({
+      maxBatch: 100,
+      flushFn: () => { throw busyError(); },
+      maxBusyRetries: 0,
+    });
+
+    buf.enqueue(1);
+    expect(() => buf.stop()).not.toThrow();
   });
 });

@@ -1716,11 +1716,14 @@ describe("AnthropicProvider — logger injection", () => {
     expect(spy.calls.some((c) => c.level === "warn")).toBe(true);
   });
 
-  it("3.3 production default: realLogger writes debug row to logs table on message_stop", async () => {
-    const db = initDb();
-    server = Bun.serve({
-      port: 0,
-      fetch() {
+  it("3.3 production default: realLogger emits a structured debug line on message_stop", async () => {
+    const lines: string[] = [];
+    const origLog = console.log;
+    console.log = (m: unknown) => { lines.push(String(m)); };
+    try {
+      server = Bun.serve({
+        port: 0,
+        fetch() {
         const body = anthropicSse([
           { type: "message_start", data: { message: { usage: { input_tokens: 3, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } } } },
           { type: "content_block_start", data: { index: 0, content_block: { type: "text", text: "" } } },
@@ -1736,13 +1739,14 @@ describe("AnthropicProvider — logger injection", () => {
     // Construct without logger arg → defaults to realLogger
     const provider = new AnthropicProvider("key", "claude-test", `http://localhost:${server.port}`, undefined, undefined, undefined, realLogger);
     for await (const _ of provider.stream([{ role: "user", content: "Hi" }])) { /* drain */ }
+    } finally {
+      console.log = origLog;
+    }
 
-    const row = db
-      .query<{ level: string; message: string }, []>(
-        "SELECT level, message FROM logs WHERE level = 'debug' AND message LIKE '%usage%' LIMIT 1",
-      )
-      .get();
-    expect(row).not.toBeNull();
-    expect(row?.level).toBe("debug");
+    const entry = lines
+      .map((l) => { try { return JSON.parse(l) as { level?: string; message?: string }; } catch { return null; } })
+      .find((e) => e?.level === "debug" && typeof e?.message === "string" && e.message.includes("usage"));
+    expect(entry).not.toBeNull();
+    expect(entry?.level).toBe("debug");
   });
 });
