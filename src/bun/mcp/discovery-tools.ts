@@ -34,7 +34,8 @@ function serverUnavailableError(registry: McpClientRegistry, server: string): st
   return null;
 }
 
-export function execListMcpServers(registry: McpClientRegistry): string {
+export async function execListMcpServers(registry: McpClientRegistry): Promise<string> {
+  await registry.ensureStarted();
   const statuses = registry.getStatus();
   if (statuses.length === 0) return "No MCP servers are configured.";
 
@@ -48,7 +49,8 @@ export function execListMcpServers(registry: McpClientRegistry): string {
   return lines.join("\n");
 }
 
-export function execListMcpTools(registry: McpClientRegistry, enabledMcpTools: string[] | null | undefined, server: string): string {
+export async function execListMcpTools(registry: McpClientRegistry, enabledMcpTools: string[] | null | undefined, server: string): Promise<string> {
+  await registry.ensureStarted();
   const unavailable = serverUnavailableError(registry, server);
   if (unavailable) return unavailable;
 
@@ -82,6 +84,7 @@ export async function execInvokeMcpTool(
     );
   }
 
+  await registry.ensureStarted();
   const unavailable = serverUnavailableError(registry, server);
   if (unavailable) return unavailable;
 

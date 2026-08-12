@@ -29,6 +29,7 @@ import {
     runCancellationScenario,
     runFatalFailureScenario,
     runMcpDiscoveryScenario,
+    runProjectScopedMcpDiscoveryScenario,
     runModelListingScenario,
     runMultiTurnChatScenario,
     runSingleTurnChatScenario,
@@ -630,6 +631,39 @@ describe("Copilot — MCP discovery tools (dynamic-mcp-discovery)", () => {
         const runtime = createCopilotRuntime(adapter, registryPool);
 
         await runMcpDiscoveryScenario(runtime);
+    });
+
+    it("starts project-scoped MCP servers on first use (never idle)", async () => {
+        const adapter = new MockCopilotSdkAdapter();
+        adapter
+            .queueResumeFailure(new Error("missing session"))
+            .queueCreateSuccess(new MockCopilotSession().queueTurn({
+                steps: [
+                    toolCall("list_mcp_servers", {}),
+                    toolCall("list_mcp_tools", { server: "alpha" }),
+                    toolCall("invoke_mcp_tool", { server: "alpha", tool: "echo", arguments: {} }),
+                    token("done"),
+                    done(),
+                ],
+            }));
+
+        // Factory returns a FRESH registry per scope — unlike the shared-registry
+        // scenario above, the project registry is brand new and boot never started
+        // it (boot only calls startAll() on the global registry). The pool's
+        // fire-and-forget ensureStarted() + executor readiness await must bring it
+        // to running before the MCP tools are observed.
+        const registryPool = new McpRegistryPool((config) =>
+            new McpClientRegistry(config, {
+                clientFactory: () =>
+                    new FakeMcpClient({
+                        tools: [{ name: "echo", description: "echoes input", inputSchema: { type: "object" } }],
+                        callToolResult: "echoed!",
+                    }),
+            }),
+        );
+        const runtime = createCopilotRuntime(adapter, registryPool);
+
+        await runProjectScopedMcpDiscoveryScenario(runtime);
     });
 });
 

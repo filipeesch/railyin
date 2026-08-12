@@ -56,6 +56,9 @@ export class McpRegistryPool {
       const config = loadMcpConfigFile(projectConfigPath);
       const registry = this.factory(config, railynDir);
       this.projectRegistries.set(projectPath, registry);
+      void registry.ensureStarted().catch((err: unknown) => {
+        console.error("[mcp] Failed to start project MCP servers:", err);
+      });
       return registry;
     }
     // No project config — fall back to global

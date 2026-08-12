@@ -62,6 +62,7 @@ interface ServerInstance {
 
 export class McpClientRegistry {
   private servers = new Map<string, ServerInstance>();
+  private startPromise: Promise<void> | null = null;
   private config: McpConfig;
   private readonly clientFactory: McpClientFactory;
   private readonly browserOpener: BrowserOpener;
@@ -99,6 +100,37 @@ export class McpClientRegistry {
   // ─── Public API ───────────────────────────────────────────────────────────
 
   async startAll(): Promise<void> {
+    if (this.startPromise) return this.startPromise;
+    const start = this._startAll().finally(() => {
+      this.startPromise = null;
+    });
+    this.startPromise = start;
+    return start;
+  }
+
+  /** Starts any enabled servers still in `idle`, resolving once they reach a terminal state. */
+  async ensureStarted(): Promise<void> {
+    if (this.startPromise) return this.startPromise;
+    const idleNames = this._idleServerNames();
+    if (idleNames.length === 0) return;
+    const start = this._startServers(idleNames).finally(() => {
+      this.startPromise = null;
+    });
+    this.startPromise = start;
+    return start;
+  }
+
+  private _idleServerNames(): string[] {
+    return [...this.servers.entries()]
+      .filter(([, s]) => s.state === "idle")
+      .map(([name]) => name);
+  }
+
+  private async _startServers(names: string[]): Promise<void> {
+    await Promise.allSettled(names.map((name) => this._startServer(name)));
+  }
+
+  private async _startAll(): Promise<void> {
     const starts = [...this.servers.values()]
       .filter((s) => s.state !== "disabled")
       .map((s) => this._startServer(s.config.name));
@@ -106,6 +138,7 @@ export class McpClientRegistry {
   }
 
   async shutdown(): Promise<void> {
+    this.startPromise = null;
     const shutdowns = [...this.servers.values()]
       .filter((s) => s.client !== null)
       .map((s) => this._stopServer(s.config.name));
