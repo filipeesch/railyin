@@ -1,7 +1,4 @@
-## Purpose
-Provides a background job that periodically cleans up old database rows, moving retention logic off the hot write path. All deletes run in short auto-commit batches so the SQLite write lock is never held for a long transaction, and failures are logged and isolated per phase.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: RetentionJob performs batched, error-safe cleanup without model_raw_messages
 The `RetentionJob` SHALL delete `stream_events` older than 4 hours and clean up archived chat sessions (archived > 7 days, including dependent `task_execution_checkpoints`, `executions`, and `conversations`) **without** touching `model_raw_messages` (table dropped). Every DELETE SHALL run in short batches (e.g. `LIMIT 500` loops that auto-commit per statement) instead of one long transaction, and every cleanup phase SHALL be wrapped in error handling so a failure is logged and the job continues with the next phase.

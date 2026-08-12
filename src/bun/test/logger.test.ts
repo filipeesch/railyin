@@ -5,10 +5,9 @@
  * Integration tests call initDb() so realLogger can write to the logs table.
  */
 
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { noopLogger, realLogger } from "../logger.ts";
 import { makeSpyLogger } from "./support/logger-test-utils.ts";
-import { initDb } from "./helpers.ts";
 
 // ─── noopLogger ───────────────────────────────────────────────────────────────
 
@@ -63,37 +62,56 @@ describe("makeSpyLogger", () => {
   });
 });
 
-// ─── realLogger integration ───────────────────────────────────────────────────
+// ─── realLogger (console output) ──────────────────────────────────────────────
 
-describe("realLogger (integration)", () => {
-  let db: ReturnType<typeof initDb>;
+describe("realLogger (console output)", () => {
+  let logged: unknown[] = [];
+  let warned: unknown[] = [];
+  let errored: unknown[] = [];
+  const origLog = console.log;
+  const origWarn = console.warn;
+  const origError = console.error;
 
   beforeEach(() => {
-    db = initDb();
+    logged = [];
+    warned = [];
+    errored = [];
+    console.log = (m: unknown) => { logged.push(m); };
+    console.warn = (m: unknown) => { warned.push(m); };
+    console.error = (m: unknown) => { errored.push(m); };
   });
 
-  it("writes a log row to the logs table", () => {
+  afterEach(() => {
+    console.log = origLog;
+    console.warn = origWarn;
+    console.error = origError;
+  });
+
+  it("writes a structured JSON line to console", () => {
     realLogger.log("info", "test-entry");
-    const row = db
-      .query<{ level: string; message: string }, []>("SELECT level, message FROM logs WHERE message = 'test-entry' LIMIT 1")
-      .get();
-    expect(row).not.toBeNull();
-    expect(row?.level).toBe("info");
-    expect(row?.message).toBe("test-entry");
+    expect(logged).toHaveLength(1);
+    const entry = JSON.parse(String(logged[0]));
+    expect(entry.level).toBe("info");
+    expect(entry.message).toBe("test-entry");
   });
 
-  it("stores taskId and executionId when provided", () => {
+  it("includes taskId and executionId when provided", () => {
     realLogger.log("debug", "with-ids", { taskId: 7, executionId: 42 });
-    const row = db
-      .query<{ task_id: number | null; execution_id: number | null }, []>(
-        "SELECT task_id, execution_id FROM logs WHERE message = 'with-ids' LIMIT 1",
-      )
-      .get();
-    expect(row?.task_id).toBe(7);
-    expect(row?.execution_id).toBe(42);
+    const entry = JSON.parse(String(logged[0]));
+    expect(entry.taskId).toBe(7);
+    expect(entry.executionId).toBe(42);
   });
 
   it("does not throw with undefined opts", () => {
     expect(() => realLogger.log("warn", "no-opts")).not.toThrow();
+  });
+
+  it("routes warn and error levels to console.warn/error", () => {
+    realLogger.log("warn", "careful");
+    realLogger.log("error", "boom");
+    expect(warned).toHaveLength(1);
+    expect(errored).toHaveLength(1);
+    expect(JSON.parse(String(warned[0])).message).toBe("careful");
+    expect(JSON.parse(String(errored[0])).message).toBe("boom");
   });
 });
