@@ -71,7 +71,22 @@ export class SlashCommandResolver {
     const dialectName = this.dialectNameFor(config, engineId);
     if (!dialectName) return prompt;
     const dialect = this.registry.create(dialectName);
-    const resolved = await dialect.resolvePrompt(prompt, workingDirectory, projectPath);
-    return resolved.content;
+    try {
+      const resolved = await dialect.resolvePrompt(prompt, workingDirectory, projectPath);
+      return resolved.content;
+    } catch (err) {
+      // Fail-soft policy: an unresolvable slash reference must not hard-fail the
+      // send. The raw text reaches the agent as a literal `/command` the model
+      // can still act on — matching the resilience of the Claude/OpenCode native
+      // engines. Dialects keep their throwing contract; this resolver owns the
+      // resilience policy for every dialect-driven engine (Copilot/Cursor/Pi).
+      const trimmed = prompt.trim();
+      const snippet = trimmed.length > 120 ? `${trimmed.slice(0, 120)}…` : trimmed;
+      const detail = err instanceof Error ? err.message : String(err);
+      console.warn(
+        `[slash-command-resolver] Slash reference could not be resolved for engine '${engineId}' (dialect '${dialectName}'); passing through unchanged: ${snippet} (${detail})`,
+      );
+      return prompt;
+    }
   }
 }

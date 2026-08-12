@@ -10,13 +10,12 @@
  * Auth: handled via the api_key in engines.yaml or process.env.CURSOR_API_KEY.
  */
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, readdirSync } from "node:fs";
-import { join } from "node:path";
 import type { SlashCommandDialect } from "../dialects/slash-command-dialect.ts";
 import { CursorDialect } from "../dialects/cursor-dialect.ts";
 import type { ExecutionEngine, ExecutionParams, EngineEvent, EngineModelInfo, CommandInfo, OnTaskUpdated, OnNewMessage, CommonToolContext } from "../types.ts";
 import { createDefaultCursorSdkAdapter, type CursorSdkAdapter } from "./adapter.ts";
 import { buildCursorTools } from "./tools.ts";
+import { FileSystemSkillResolver } from "../pi/skill-resolver.ts";
 import { taskLspRegistry } from "../../lsp/task-registry.ts";
 import { getConfig } from "../../config/index.ts";
 import { TodoRepository } from "../../db/todos.ts";
@@ -83,6 +82,29 @@ export class CursorEngine implements ExecutionEngine {
   }
 
   async listCommands(taskId: number): Promise<CommandInfo[]> {
+    const { worktreePath, projectPath } = this.resolveTaskPaths(taskId, process.cwd());
+    return this.dialect.listCommands(worktreePath, projectPath);
+  }
+
+  /**
+   * Resolve the worktree and project paths for a task from the database.
+   *
+   * Single source of truth shared by `listCommands()` and `_run()` so the two
+   * call sites can never drift (both must hand the dialect the DB-derived git
+   * worktree root, not the engine's `workingDirectory` parameter, which may be
+   * a monorepo sub-directory or the project root in pre-worktree states).
+   *
+   * @param taskId Task id, or null for detached chat sessions.
+   * @param fallbackWorktreePath Used when the task has no git context yet.
+   */
+  private resolveTaskPaths(
+    taskId: number | null,
+    fallbackWorktreePath: string,
+  ): { worktreePath: string; projectPath?: string } {
+    if (taskId == null) {
+      return { worktreePath: fallbackWorktreePath };
+    }
+
     const db = getDb();
     const taskRow = db
       .query<{ board_id: number; project_key: string }, [number]>(
@@ -96,7 +118,7 @@ export class CursorEngine implements ExecutionEngine {
       )
       .get(taskId);
 
-    const worktreePath = gitRow?.worktree_path ?? process.cwd();
+    const worktreePath = gitRow?.worktree_path ?? fallbackWorktreePath;
 
     let projectPath: string | undefined;
     if (taskRow) {
@@ -110,7 +132,7 @@ export class CursorEngine implements ExecutionEngine {
       }
     }
 
-    return this.dialect.listCommands(worktreePath, projectPath);
+    return { worktreePath, projectPath };
   }
 
   async shutdown(_options?: unknown): Promise<void> {
@@ -201,7 +223,17 @@ export class CursorEngine implements ExecutionEngine {
       workspaceKey: params.workspaceKey!,
     };
 
-    const customTools = buildCursorTools(toolContext, onSuspend);
+    // Resolve task paths from the DB (same source as listCommands) so skills are
+    // looked up at the git worktree root, not the engine's workingDirectory param
+    // (which may be a monorepo sub-directory or the project root pre-worktree).
+    const { worktreePath, projectPath } = this.resolveTaskPaths(taskId, workingDirectory);
+
+    // Lazy skill loading: the agent sees a compact <available_skills> index and
+    // loads SKILL.md content on demand via the `skill` tool (Pi pattern) instead
+    // of inlining every skill into the prompt prefix.
+    const skillResolver = new FileSystemSkillResolver(this.dialect.getSkillPaths(worktreePath, projectPath));
+
+    const customTools = buildCursorTools(toolContext, skillResolver, onSuspend);
 
     // The Cursor SDK has no system-message slot — inline the task context and
     // stage instructions as a prefix to the user prompt.
@@ -227,55 +259,13 @@ export class CursorEngine implements ExecutionEngine {
     // composed string) would fail to match the dialect's leading "/command" pattern.
     const effectivePrompt = prompt;
 
-    // Resolve projectPath from DB for skill loading
-    let projectPath: string | undefined;
-    if (taskId != null) {
-      const db = getDb();
-      const taskRow = db
-        .query<{ board_id: number; project_key: string }, [number]>(
-          "SELECT board_id, project_key FROM tasks WHERE id = ?",
-        )
-        .get(taskId);
+    // Build the bounded <available_skills> index (name + one-line description)
+    // from the dialect's skill paths; no SKILL.md body is inlined — the agent
+    // loads content on demand through the `skill` tool.
+    const skillDescriptions = await skillResolver.listWithDescriptions();
+    const availableSkillsBlock = formatAvailableSkillsBlock(skillDescriptions);
 
-      const gitRow = db
-        .query<{ worktree_path: string | null }, [number]>(
-          "SELECT worktree_path FROM task_git_context WHERE task_id = ?",
-        )
-        .get(taskId);
-
-      const worktreePath = gitRow?.worktree_path ?? workingDirectory;
-
-      if (taskRow) {
-        const wsKey =
-          db.query<{ workspace_key: string }, [number]>(
-            "SELECT workspace_key FROM boards WHERE id = ?",
-          ).get(taskRow.board_id)?.workspace_key ?? getDefaultWorkspaceKey();
-        const project = getLoadedProjectByKey(wsKey, taskRow.project_key);
-        if (project?.projectPath && project.projectPath !== worktreePath) {
-          projectPath = project.projectPath;
-        }
-      }
-    }
-
-    // Read skill SKILL.md files and prepend to system instructions
-    const skillPaths = this.dialect.getSkillPaths(workingDirectory, projectPath);
-    const skillBlocks: string[] = [];
-    for (const skillDir of skillPaths) {
-      if (!existsSync(skillDir)) continue;
-      const skillFiles = readdirSync(skillDir, { withFileTypes: true }).filter(e => e.isDirectory()).map(e => e.name);
-      for (const name of skillFiles) {
-        const skillMd = join(skillDir, name, "SKILL.md");
-        if (existsSync(skillMd)) {
-          try {
-            const content = readFileSync(skillMd, "utf-8");
-            skillBlocks.push(`## Skill: ${name}\n\n${content}`);
-          } catch { /* skip unreadable */ }
-        }
-      }
-    }
-    const skillsBlock = skillBlocks.length > 0 ? skillBlocks.join("\n\n") : null;
-
-    const prefix = [skillsBlock, systemBlock, taskBlock, bypassNotice].filter(Boolean).join("\n\n");
+    const prefix = [availableSkillsBlock, systemBlock, taskBlock, bypassNotice].filter(Boolean).join("\n\n");
     const composedPrompt = prefix ? `${prefix}\n\n---\n\n${effectivePrompt}` : effectivePrompt;
 
     // Deterministic agent id derived from the conversation so the Cursor SDK
@@ -435,6 +425,47 @@ function buildCursorSettings(m: import("./adapter.ts").CursorSdkModelInfo): impo
   return [];
 }
 
-function capitalize(s: string): string {
-  return s.charAt(0).toUpperCase() + s.slice(1);
+/** Maximum length of a skill description in the `<available_skills>` index. */
+const MAX_SKILL_DESCRIPTION_CHARS = 200;
+
+/** Escape XML special characters so skill names/descriptions are safe inside `<available_skills>`. */
+function escapeXml(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;");
+}
+
+/** Normalize whitespace and bound a skill description to `MAX_SKILL_DESCRIPTION_CHARS`. */
+function truncateSkillDescription(value: string): string {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  return normalized.length > MAX_SKILL_DESCRIPTION_CHARS
+    ? `${normalized.slice(0, MAX_SKILL_DESCRIPTION_CHARS)}…`
+    : normalized;
+}
+
+/**
+ * Build the bounded `<available_skills>` index injected into the Cursor agent's
+ * system prefix. Lists skill names with one-line descriptions parsed from each
+ * `SKILL.md` frontmatter — never the skill body content (that stays lazy,
+ * loaded via the `skill` tool). Returns null when no skills are available.
+ */
+export function formatAvailableSkillsBlock(
+  skills: Array<{ name: string; description?: string }>,
+): string | null {
+  if (skills.length === 0) return null;
+
+  const lines = ["## Available Skills", "<available_skills>"];
+  for (const skill of skills) {
+    const name = escapeXml(skill.name);
+    if (skill.description) {
+      const description = escapeXml(truncateSkillDescription(skill.description));
+      lines.push(`  <skill>\n    <name>${name}</name>\n    <description>${description}</description>\n  </skill>`);
+    } else {
+      lines.push(`  <skill>\n    <name>${name}</name>\n  </skill>`);
+    }
+  }
+  lines.push("</available_skills>");
+  return lines.join("\n");
 }

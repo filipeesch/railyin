@@ -430,13 +430,6 @@ export class InProcessCursorAdapter implements CursorSdkAdapter {
     }));
   }
 
-  async listCommands(_workingDirectory: string): Promise<Array<{ name: string; description: string }>> {
-    // No-op: DB-path-resolution + CursorDialect.listCommands() delegation
-    // live in CursorEngine.listCommands(), not the adapter. Matches the
-    // former SubprocessCursorAdapter's stub behavior.
-    return [];
-  }
-
   async shutdownAll(): Promise<void> {
     for (const state of this.activeRuns.values()) {
       state.aborted = true;

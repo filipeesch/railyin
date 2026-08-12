@@ -202,7 +202,51 @@ describe("CursorEngine dialect injection", () => {
     expect(sentPrompt).toContain("plain text prompt");
   });
 
-  it("skill SKILL.md content is prepended to composed prompt", async () => {
+  it("injects a compact <available_skills> listing and registers the skill tool", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "cursor-engine-skills-"));
+    try {
+      const skillDir = join(tmpDir, ".cursor", "skills", "my-skill");
+      mkdirSync(skillDir, { recursive: true });
+      writeFileSync(
+        join(skillDir, "SKILL.md"),
+        "---\ndescription: My awesome skill\n---\n# My Skill\n\nDo amazing things.",
+        "utf-8",
+      );
+
+      const adapter = new MockCursorSdkAdapter().queueTurn({ steps: [token("done")] });
+      const engine = new CursorEngine(() => {}, () => {}, adapter);
+
+      const gen = engine.execute({
+        executionId: 1,
+        taskId: null,
+        boardId: undefined,
+        conversationId: 101,
+        model: "cursor/mock-model",
+        workingDirectory: tmpDir,
+        prompt: "do something",
+        signal: new AbortController().signal,
+        boardTools: {} as any,
+      });
+      for await (const _ of gen) {}
+
+      const sentPrompt = adapter.trace.runConfigs[0]!.prompt;
+      // Listing (name + description) is present, body content is NOT inlined.
+      expect(sentPrompt).toContain("## Available Skills");
+      expect(sentPrompt).toContain("<available_skills>");
+      expect(sentPrompt).toContain("my-skill");
+      expect(sentPrompt).toContain("My awesome skill");
+      expect(sentPrompt).not.toContain("# My Skill");
+      expect(sentPrompt.indexOf("## Available Skills")).toBeLessThan(sentPrompt.indexOf("do something"));
+
+      // The lazy skill tool is registered alongside the common tools.
+      const customTools = adapter.trace.runConfigs[0]!.customTools ?? {};
+      expect(customTools.skill).toBeDefined();
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("skill tool resolves SKILL.md content on demand and reports unknown skills", async () => {
     const tmpDir = mkdtempSync(join(tmpdir(), "cursor-engine-skills-"));
     try {
       const skillDir = join(tmpDir, ".cursor", "skills", "my-skill");
@@ -225,11 +269,13 @@ describe("CursorEngine dialect injection", () => {
       });
       for await (const _ of gen) {}
 
-      const sentPrompt = adapter.trace.runConfigs[0]!.prompt;
-      expect(sentPrompt).toContain("## Skill: my-skill");
-      expect(sentPrompt).toContain("# My Skill");
-      // Skills appear before the user prompt
-      expect(sentPrompt.indexOf("## Skill: my-skill")).toBeLessThan(sentPrompt.indexOf("do something"));
+      const skillTool = adapter.trace.runConfigs[0]!.customTools!.skill!;
+      const loaded = await skillTool.execute({ name: "my-skill" }, {});
+      expect(loaded).toContain("# My Skill");
+
+      const missing = await skillTool.execute({ name: "nope" }, {});
+      expect(String(missing)).toContain("Skill 'nope' not found");
+      expect(String(missing)).toContain("my-skill");
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
     }
@@ -313,6 +359,43 @@ describe("CursorEngine getSkillPaths — projectPath resolution (§5.1-5.2)", ()
     expect(call.projectPath).not.toBe(worktreeDir);
     // The configured project lives at <configDir>/workspace/test-project.
     expect(call.projectPath!.endsWith("test-project")).toBe(true);
+  });
+
+  it("passes the DB-derived worktree path to getSkillPaths when it differs from workingDirectory", async () => {
+    // The engine's `workingDirectory` param may point anywhere (monorepo subdir,
+    // project root pre-worktree); skill lookup must use task_git_context.worktree_path.
+    const dbWorktreeDir = mkdtempSync(join(tmpdir(), "cursor-db-wt-"));
+    try {
+      const seed = seedProjectAndTask(db, "/test-git");
+      db.run(
+        "INSERT INTO task_git_context (task_id, git_root_path, worktree_path, worktree_status) VALUES (?, ?, ?, 'ready')",
+        [seed.taskId, "/test-git", dbWorktreeDir],
+      );
+
+      const spy = new SpyDialect();
+      const adapter = new MockCursorSdkAdapter().queueTurn({ steps: [token("done")] });
+      const engine = new CursorEngine(() => {}, () => {}, adapter, spy);
+
+      const gen = engine.execute({
+        executionId: 1,
+        taskId: seed.taskId,
+        boardId: seed.boardId,
+        conversationId: seed.conversationId,
+        model: "cursor/mock-model",
+        workingDirectory: worktreeDir, // deliberately different from the DB worktree_path
+        prompt: "do something",
+        signal: new AbortController().signal,
+        boardTools: {} as any,
+      });
+      for await (const _ of gen) {}
+
+      expect(spy.getSkillPathsCalls.length).toBeGreaterThan(0);
+      const call = spy.getSkillPathsCalls[0];
+      expect(call.worktreePath).toBe(dbWorktreeDir);
+      expect(call.worktreePath).not.toBe(worktreeDir);
+    } finally {
+      rmSync(dbWorktreeDir, { recursive: true, force: true });
+    }
   });
 
   it("calls getSkillPaths with undefined projectPath when no task project configured", async () => {
