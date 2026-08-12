@@ -214,8 +214,8 @@ test.describe("T-C — freetext question submit", () => {
 
 // ─── T-D: Multi-question — all must be answered before submit ────────────────
 
-test.describe("T-D — multi-question batch", () => {
-    test("T-D: submit disabled until all questions are answered", async ({ page, api, task }) => {
+test.describe("T-D — multi-question batch (paginated)", () => {
+    test("T-D: submit disabled until all questions are answered; Next advances pages", async ({ page, api, task }) => {
         const msg = makeInterviewPrompt(task.id, {
             questions: [exclusiveQuestion, freetextQuestion],
         });
@@ -225,15 +225,42 @@ test.describe("T-D — multi-question batch", () => {
         await openTaskDrawer(page, task.id);
 
         const submit = page.locator(".interview__submit");
+        const next = page.locator(".interview__next");
+        await expect(submit).toBeDisabled();
+        await expect(next).toBeVisible();
+
+        // Page 1 is the exclusive question — answering enables Next, not Submit.
+        await page.locator(".interview__option").filter({ hasText: "PostgreSQL" }).first().click();
+        await expect(next).toBeEnabled();
         await expect(submit).toBeDisabled();
 
-        // Answer only the first question
-        await page.locator(".interview__option").filter({ hasText: "PostgreSQL" }).first().click();
-        await expect(submit).toBeDisabled();
+        // Advance to page 2 (freetext).
+        await next.click();
+        await expect(page.locator(".interview__textarea--freetext")).toBeVisible();
+        // On the last page Next is gone, Submit remains disabled until answered.
+        await expect(next).not.toBeVisible();
 
         // Answer the second question
         await page.locator(".interview__textarea--freetext").fill("My answer to question 2");
         await expect(submit).toBeEnabled();
+    });
+
+    test("T-D2: Back returns to previous page preserving answers", async ({ page, api, task }) => {
+        const msg = makeInterviewPrompt(task.id, {
+            questions: [exclusiveQuestion, freetextQuestion],
+        });
+        api.handle("conversations.getMessages", () => messagePage([msg]));
+
+        await page.goto("/");
+        await openTaskDrawer(page, task.id);
+
+        // Answer page 1, go to page 2, come back.
+        await page.locator(".interview__option").filter({ hasText: "PostgreSQL" }).first().click();
+        await page.locator(".interview__next").click();
+        await page.locator(".interview__back").click();
+
+        // The option selected on page 1 is preserved.
+        await expect(page.locator(".interview__option--selected").filter({ hasText: "PostgreSQL" })).toBeVisible();
     });
 });
 
@@ -399,10 +426,10 @@ test.describe("T-I — Decisions tab panel", () => {
     });
 });
 
-// ─── T-J: Full streaming flow — decision_request_prompt via refreshLatestPage ─
+// ─── T-J: Full streaming flow — pages stream live, terminal persists ─────────
 
-test.describe("T-J — streaming flow renders decision_request_prompt", () => {
-    test("T-J: decision_request_prompt appears after done event triggers refreshLatestPage", async ({ page, api, ws, task }) => {
+test.describe("T-J — streaming flow renders pages live + persisted prompt", () => {
+    test("T-J: decision_request_page events stream pages into the panel before done", async ({ page, api, ws, task }) => {
         const promptMsg = makeInterviewPrompt(task.id, { questions: [exclusiveQuestion] });
 
         // Initially empty — no prompt seeded
@@ -417,32 +444,24 @@ test.describe("T-J — streaming flow renders decision_request_prompt", () => {
         // No form yet
         await expect(page.locator(".interview__submit")).not.toBeVisible();
 
-        // Simulate: agent sends tool_call stream event for decision_request
-        ws.pushStreamEvent({
-            taskId: task.id,
-            executionId: 7001,
-            seq: 1,
-            blockId: "7001-tc",
-            type: "tool_call",
-            content: JSON.stringify({ name: "decision_request", display: { label: "decision request" } }),
-            metadata: null,
-            parentBlockId: null,
-            subagentId: null,
-            done: false,
-        });
+        // Agent streams a decision_request_page event while still running.
+        ws.pushDecisionRequestPage(task.id, 7001, exclusiveQuestion);
 
-        // Now update the API to include the prompt (simulating DB write that happened on backend)
+        // The page streams live into the fixed panel BEFORE done.
+        await expect(page.locator(".decision-interview-panel .interview__question-text")).toContainText("Which database do you prefer?", { timeout: 5000 });
+        // Submit is disabled while streaming (waiting_user not reached).
+        await expect(page.locator(".interview__submit")).toBeDisabled();
+
+        // Now update the API to include the persisted prompt (backend wrote at turn end)
         servePrompt = true;
-
-        // Push the done event — this triggers refreshLatestPage in conversation store
         ws.pushDone(task.id, 7001);
 
-        // The form should now appear (via refreshLatestPage fetching the prompt from API)
+        // Panel reconciles to the persisted payload; form still present.
         await expect(page.locator(".interview__submit")).toBeVisible({ timeout: 5000 });
         await expect(page.locator(".interview__submit")).toBeDisabled();
     });
 
-    test("T-J2: decision_request_prompt is interactive — can select option and submit", async ({ page, api, ws, task }) => {
+    test("T-J2: persisted decision_request_prompt is interactive — select option and submit", async ({ page, api, ws, task }) => {
         const promptId = 6000;
         const promptMsg = makeInterviewPrompt(task.id, { questions: [exclusiveQuestion] }, { id: promptId });
         const replyMsg = makeUserMessage(task.id, "A: SQLite", { id: promptId + 1 });
@@ -454,7 +473,7 @@ test.describe("T-J — streaming flow renders decision_request_prompt", () => {
         await page.goto("/");
         await openTaskDrawer(page, task.id);
 
-        // Trigger the streaming flow to make the prompt appear
+        // Persisted prompt arrives via done + refreshLatestPage.
         serveMessages = [promptMsg];
         ws.pushDone(task.id, 7002);
 
@@ -472,7 +491,7 @@ test.describe("T-J — streaming flow renders decision_request_prompt", () => {
         ws.pushNewMessage(replyMsg);
 
         // After submit + user message arrives, form should be hidden (answered state)
-        await expect(page.locator(".interview")).not.toBeVisible({ timeout: 5000 });
+        await expect(page.locator(".decision-interview-panel .interview")).not.toBeVisible({ timeout: 5000 });
     });
 });
 
@@ -494,7 +513,7 @@ test.describe("T-K — message.new push event", () => {
         // when there is no active stream (isDone guard should not block this)
         ws.pushNewMessage(promptMsg);
 
-        await expect(page.locator(".interview__submit")).toBeVisible({ timeout: 5000 });
+        await expect(page.locator(".decision-interview-panel .interview__submit")).toBeVisible({ timeout: 5000 });
     });
 });
 

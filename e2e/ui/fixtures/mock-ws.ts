@@ -104,6 +104,29 @@ export class WsMock {
         this.push({ type: "message.new", payload: message });
     }
 
+    /** Convenience: push a streaming decision_request_page event (ephemeral interview page). */
+    pushDecisionRequestPage(
+        taskId: number,
+        executionId: number,
+        payload: import("@shared/rpc-types").DecisionRequestQuestion,
+        seq = 1,
+        conversationId: number | null = taskId,
+    ): void {
+        this.pushStreamEvent({
+            taskId,
+            conversationId: conversationId ?? undefined,
+            executionId,
+            seq,
+            blockId: `${executionId}-page-${seq}`,
+            type: "decision_request_page",
+            content: JSON.stringify(payload),
+            metadata: null,
+            parentBlockId: null,
+            subagentId: null,
+            done: false,
+        });
+    }
+
     /**
      * Close the server-side WebSocket, simulating a network disconnect.
      * The browser's reconnect logic will fire `_onWsReconnect` on the next successful connection.
