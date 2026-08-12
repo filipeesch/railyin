@@ -10,6 +10,8 @@
  */
 
 import type { ExecutionEngine, ExecutionParams, EngineEvent, EngineModelInfo, EngineResumeInput, CommandInfo, OnTaskUpdated, OnNewMessage } from "../types.ts";
+import { DecisionQuestionBuffer } from "../decision-buffer.ts";
+import { buildDecisionRequestTerminalEvent } from "../decision-request-terminal-event.ts";
 import type { CopilotSdkAdapter, CopilotSdkAttachment, CopilotSdkSession, CopilotSdkModelInfo } from "./session";
 import { copilotSessionIdForConversation, copilotSessionIdForTask, createDefaultCopilotSdkAdapter } from "./session";
 import { approveAll } from "@github/copilot-sdk";
@@ -132,14 +134,13 @@ export class CopilotEngine implements ExecutionEngine {
     const rawModel = model;
     const resolvedModel = rawModel?.startsWith("copilot/") ? rawModel.slice("copilot/".length) : rawModel;
 
-    // When a suspend-loop tool fires (e.g. decision_request), store the payload and abort
-    // the session. The Copilot SDK provides no in-handler stop signal, so we abort
-    // externally. The abort cuts the stream before the model generates a next turn.
-    let pendingDecisionPayload: string | null = null;
-    const decisionAbortController = new AbortController();
-    const onSuspend = (payload: string) => {
-      pendingDecisionPayload = payload;
-      decisionAbortController.abort();
+    // Streaming decision_request: the tool returns `page` per question and the
+    // loop continues (no per-call abort). Page payloads are queued here and
+    // drained by the run loop so the UI streams them live; the terminal
+    // decision_request is emitted at turn end from the buffer instead of `done`.
+    const pageQueue: EngineEvent[] = [];
+    const onPage = (payload: string) => {
+      pageQueue.push({ type: "decision_request_page", payload });
     };
 
     // Build tool context for common task-management tools
@@ -176,11 +177,12 @@ export class CopilotEngine implements ExecutionEngine {
         worktreePath: workingDirectory,
         mcpRegistry: params.mcpRegistry ?? undefined,
         mcpEnabledTools: params.enabledMcpTools ?? null,
+        decisionBuffer: new DecisionQuestionBuffer(),
       },
       workspaceKey: params.workspaceKey!,
     };
 
-    const tools = buildCopilotTools(toolContext, onSuspend);
+    const tools = buildCopilotTools(toolContext, onPage);
 
     // Build system message — prepend task identity then append stage_instructions
     const taskBlock = taskContext
@@ -317,10 +319,6 @@ export class CopilotEngine implements ExecutionEngine {
         const combinedController = new AbortController();
         params.signal?.addEventListener("abort", () => combinedController.abort(), { once: true });
         evictionController.signal.addEventListener("abort", () => combinedController.abort(), { once: true });
-        decisionAbortController.signal.addEventListener("abort", () => {
-          this.sdkAdapter.abortSession(session!).catch(() => { });
-          combinedController.abort();
-        }, { once: true });
 
         const isTextType = (mediaType: string) =>
           mediaType.startsWith("text/") ||
@@ -391,6 +389,9 @@ export class CopilotEngine implements ExecutionEngine {
           } else {
             this.sdkAdapter.touchLease(sdkSessionId, "running");
           }
+          // Drain queued decision_request_page events before forwarding the
+          // SDK event so the UI sees pages in tool-call order (D11).
+          while (pageQueue.length > 0) yield pageQueue.shift()!;
           yield event;
 
           if (event.type === "ask_user" || event.type === "shell_approval") {
@@ -406,10 +407,17 @@ export class CopilotEngine implements ExecutionEngine {
             break;
           }
         }
+        while (pageQueue.length > 0) yield pageQueue.shift()!;
 
-        if (pendingDecisionPayload !== null) {
-          yield { type: "decision_request", payload: pendingDecisionPayload };
-          return;
+        // Turn-end flush: present the interview instead of done when the model
+        // appended questions but ended its turn.
+        const buffer = toolContext.runtime.decisionBuffer;
+        if (buffer) {
+          const terminalDecision = buildDecisionRequestTerminalEvent(buffer);
+          if (terminalDecision !== null) {
+            yield terminalDecision;
+            return;
+          }
         }
 
         if (params.signal?.aborted || terminal) {

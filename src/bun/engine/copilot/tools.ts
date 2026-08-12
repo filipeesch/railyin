@@ -21,7 +21,7 @@ import { COMMON_TOOL_DEFINITIONS, TODO_TOOL_NAMES, executeCommonTool } from "../
  */
 export function buildCopilotTools(
   context: CommonToolContext,
-  onSuspend?: (payload: string) => void,
+  onPage?: (payload: string) => void,
 ): Tool[] {
   // Filter out task-scoped tools (todos) when taskId is null (chat session context)
   const activeDefs = context.task?.id == null
@@ -40,9 +40,8 @@ export function buildCopilotTools(
           ((args && typeof args === "object" ? args : {}) as Record<string, unknown>),
           context,
         );
-        if (result.type === "suspend") {
-          onSuspend?.(result.payload);
-          return "Interview suspended - awaiting user response.";
+        if (result.type === "page") {
+          onPage?.(result.payload);
         }
         return result.text;
       } catch (err) {

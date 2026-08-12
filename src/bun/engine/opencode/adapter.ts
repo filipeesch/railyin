@@ -1,5 +1,6 @@
 import type { OpenCodeEngineConfig, OpenCodeProviderConfig } from "../../config/index.ts";
 import type { EngineEvent, EngineModelInfo, CommandInfo } from "../types.ts";
+import { buildDecisionRequestTerminalEvent } from "../decision-request-terminal-event.ts";
 import type { OpenCodeRunParams, OpenCodeSdkAdapter } from "./types.ts";
 import type { Config as OpenCodeConfig, Event as OpenCodeEvent } from "@opencode-ai/sdk/v2";
 import { createOpencodeServer } from "@opencode-ai/sdk/v2/server";
@@ -66,8 +67,9 @@ export class DefaultOpenCodeSdkAdapter implements OpenCodeSdkAdapter {
       onRawEvent,
     } = params;
 
-    // Side-channel for events injected by the MCP server (e.g. ask_user from decision_request).
-    // Uses a wake-up signal so the event loop can unblock even when no SSE events arrive.
+    // Side-channel for events injected by the MCP server (streaming
+    // decision_request page events). Uses a wake-up signal so the event loop
+    // can unblock even when no SSE events arrive.
     const sideEvents: EngineEvent[] = [];
     let pendingWakeUp = false;
     let wakeUpResolve: (() => void) | null = null;
@@ -84,9 +86,8 @@ export class DefaultOpenCodeSdkAdapter implements OpenCodeSdkAdapter {
     this.contextMap.set(conversationId, {
       commonToolContext,
       executionId,
-      pendingQuestion: null,
-      onAskUser: (payload: string) => {
-        sideEvents.push({ type: "ask_user" as const, payload });
+      onPage: (payload: string) => {
+        sideEvents.push({ type: "decision_request_page" as const, payload });
         triggerWakeUp();
       },
     });
@@ -173,15 +174,17 @@ export class DefaultOpenCodeSdkAdapter implements OpenCodeSdkAdapter {
       }
 
       if (!signal.aborted) {
-        yield { type: "done" };
+        // Turn-end flush: present the interview instead of done when the model
+        // appended questions but ended its turn.
+        const buffer = commonToolContext.runtime.decisionBuffer;
+        const terminal = buffer ? buildDecisionRequestTerminalEvent(buffer) : null;
+        if (terminal !== null) {
+          yield terminal;
+        } else {
+          yield { type: "done" };
+        }
       }
     } finally {
-      // Resolve any pending ask_user so the MCP HTTP response isn't left open
-      const entry = this.contextMap.get(conversationId);
-      if (entry?.pendingQuestion) {
-        entry.pendingQuestion.resolve("cancelled");
-        entry.pendingQuestion = null;
-      }
       this.contextMap.delete(conversationId);
       this.pendingPermissions.delete(executionId);
     }
@@ -191,17 +194,6 @@ export class DefaultOpenCodeSdkAdapter implements OpenCodeSdkAdapter {
     // Cancellation is handled via the AbortSignal passed to run().
     // The signal triggers client.session.abort() when aborted.
     void executionId;
-  }
-
-  async respondAskUser(executionId: number, content: string): Promise<void> {
-    for (const entry of this.contextMap.values()) {
-      if (entry.executionId === executionId && entry.pendingQuestion) {
-        entry.pendingQuestion.resolve(content);
-        entry.pendingQuestion = null;
-        return;
-      }
-    }
-    throw new Error(`No pending ask_user for execution ${executionId}`);
   }
 
   async respondPermission(executionId: number, decision: "approve_once" | "approve_all" | "deny"): Promise<void> {

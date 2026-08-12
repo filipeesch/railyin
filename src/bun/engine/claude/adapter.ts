@@ -1,6 +1,7 @@
 import { createHash } from "crypto";
 import type { CommonToolContext, EngineEvent, EngineResumeInput } from "../types.ts";
 import { buildClaudeToolServer } from "./tools.ts";
+import { buildDecisionRequestTerminalEvent } from "../decision-request-terminal-event.ts";
 import { translateClaudeMessage, type ToolMetadata } from "./events.ts";
 import type { FileStateCache } from "./file-state-cache.ts";
 import { ShellApprovalRepository, getUnapprovedShellBinaries } from "../../db/repositories/shell-approval-repository.ts";
@@ -231,6 +232,17 @@ class DefaultClaudeSdkAdapter implements ClaudeSdkAdapter {
     };
 
     const emit = (event: EngineEvent) => {
+      // Turn-end flush: when the model finishes its turn (done) with buffered
+      // decision_request questions, present the interview instead of done.
+      if (event.type === "done") {
+        const buffer = config.commonToolContext.runtime.decisionBuffer;
+        const terminal = buffer ? buildDecisionRequestTerminalEvent(buffer) : null;
+        if (terminal !== null) {
+          queue.push(terminal);
+          wake();
+          return;
+        }
+      }
       queue.push(event);
       wake();
     };
@@ -244,7 +256,7 @@ class DefaultClaudeSdkAdapter implements ClaudeSdkAdapter {
         const toolContext = {
           ...config.commonToolContext,
         };
-        const { server: toolServer, takePendingSuspend } = buildClaudeToolServer(sdk, zod.z, toolContext);
+        const { server: toolServer, takePendingPage } = buildClaudeToolServer(sdk, zod.z, toolContext);
         // Use getSessionMessages to check session existence — getSessionInfo is unreliable
         // for sessions without a summary entry (returns undefined even when the file exists).
         // getSessionMessages returns [] if the session file is not found.
@@ -352,11 +364,11 @@ class DefaultClaudeSdkAdapter implements ClaudeSdkAdapter {
               }],
               PostToolUse: [{
                 hooks: [async () => {
-                  // If the handler set a suspend payload, emit the event and stop the loop.
-                  const payload = takePendingSuspend();
+                  // If the handler appended a decision_request page, emit the
+                  // ephemeral event and let the loop continue (no continue:false).
+                  const payload = takePendingPage();
                   if (payload !== undefined) {
-                    emit({ type: "decision_request", payload });
-                    return { continue: false };
+                    emit({ type: "decision_request_page", payload });
                   }
                   return {};
                 }],
