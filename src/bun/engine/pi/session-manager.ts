@@ -12,6 +12,7 @@ import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { SessionFactory } from "./engine.ts";
 import type { PiEngineConfig } from "../../config/index.ts";
 import type { Model } from "@earendil-works/pi-ai";
+import type { PiApiMode } from "./api-mode.ts";
 import { buildToolAllowlist } from "./constants.ts";
 import { mkdir } from "fs/promises";
 import { homedir } from "os";
@@ -55,7 +56,7 @@ export class PiSessionManager {
 
   async getOrCreate(
     conversationId: number,
-    model: Model<"openai-completions">,
+    model: Model<PiApiMode>,
     tools: AgentTool<any>[],
     systemPrompt: string | undefined,
     cwd: string,

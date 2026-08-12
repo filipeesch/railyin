@@ -6,10 +6,16 @@ engines:
   - id: pi-local
     type: pi
     model: lmstudio/qwen3.6-27b
+    # API mode: "openai-completions" → /v1/chat/completions, "openai-responses" → /v1/responses.
+    # Defaults to "openai-responses" when omitted; a per-provider `api:` overrides this.
+    api: openai-responses
     context_window: 128000
     providers:
       lmstudio:
         base_url: http://localhost:1234/v1
+        # LM Studio still exposes /v1/chat/completions by default — override the
+        # engine-level responses mode per endpoint.
+        api: openai-completions
         max_inflight: 2
         queue_timeout_ms: 60000
     harness:

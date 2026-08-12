@@ -22,19 +22,10 @@ import { NullModelSettingsRepository } from "../../db/repositories/model-setting
 import { CopilotEngine } from "../../engine/copilot/engine.ts";
 import { MockCopilotSdkAdapter, MockCopilotSession, token, done } from "../support/copilot-sdk-mock.ts";
 import type { EngineEvent } from "../../engine/types.ts";
-import {
-  createAgentSession,
-  AuthStorage,
-  SessionManager,
-  DefaultResourceLoader,
-  SettingsManager,
-  getAgentDir,
-  defineTool,
-} from "@earendil-works/pi-coding-agent";
 import { registerFauxProvider } from "@earendil-works/pi-ai/compat";
 import type { FauxProviderRegistration } from "@earendil-works/pi-ai/compat";
 import { fauxAssistantMessage, fauxText } from "@earendil-works/pi-ai/providers/faux";
-import { SDK_BUILTIN_TOOL_NAMES } from "../../engine/pi/constants.ts";
+import { createFauxSessionFactory } from "../support/pi-faux-session.ts";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -72,52 +63,9 @@ describe("Pi Engine integration — instruction injection into system prompt", (
     cwd: string;
     config: import("../../config/index.ts").PiEngineConfig;
   }) {
-    const { tools, systemPrompt, conversationId, cwd, config } = options;
-    capturedSystemPrompt = systemPrompt;
-    const model = faux.getModel();
-
-    const sessionManager = SessionManager.open(join(cwd, `session-${conversationId}.jsonl`));
-    const agentDir = getAgentDir();
-    const resourceLoader = new DefaultResourceLoader({
-      cwd,
-      agentDir,
-      ...(systemPrompt ? { systemPromptOverride: () => systemPrompt } : {}),
-    });
-    await resourceLoader.reload();
-
-    const authStorage = AuthStorage.inMemory();
-    for (const [provider, cfg] of Object.entries(config.providers ?? {})) {
-      authStorage.setRuntimeApiKey(provider, cfg.api_key ?? "no-key");
-    }
-    authStorage.setRuntimeApiKey(model.provider, config.providers?.[model.provider]?.api_key ?? "no-key");
-
-    const piTools = tools.map((t) =>
-      defineTool({
-        name: t.name,
-        label: t.label ?? t.name,
-        description: t.description,
-        parameters: t.parameters as any,
-        prepareArguments: t.prepareArguments,
-        execute: t.execute as any,
-      }),
-    );
-
-    const { session } = await createAgentSession({
-      cwd,
-      agentDir,
-      model: model as any,
-      customTools: piTools,
-      tools: [...SDK_BUILTIN_TOOL_NAMES, ...piTools.map((t) => t.name)],
-      sessionManager,
-      resourceLoader,
-      authStorage,
-      settingsManager: SettingsManager.inMemory({
-        compaction: { enabled: false, reserveTokens: 16_384, keepRecentTokens: 20_000 },
-      }),
-    });
-
-    session.agent.state.thinkingLevel = "off";
-    return session;
+    capturedSystemPrompt = options.systemPrompt;
+    // Build the shared factory lazily so it captures the per-test faux registration.
+    return createFauxSessionFactory(faux)(options as any);
   }
 
   beforeEach(() => {

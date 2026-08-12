@@ -169,4 +169,35 @@ describe("validatePiEngineConfig", () => {
     };
     expect(() => validatePiEngineConfig(config)).not.toThrow();
   });
+
+  test("CV-20: invalid engine-level api rejected with field-naming message", () => {
+    const config: PiEngineConfig = {
+      type: "pi",
+      api: "chat-completions" as never,
+    };
+    expect(() => validatePiEngineConfig(config)).toThrow(/api/);
+    expect(() => validatePiEngineConfig(config)).toThrow(/openai-completions, openai-responses/);
+  });
+
+  test("CV-21: invalid provider-level api rejected with provider name in message", () => {
+    const config: PiEngineConfig = {
+      type: "pi",
+      providers: {
+        lmstudio: { base_url: "http://localhost:1234/v1", api: "not-a-mode" as never },
+      },
+    };
+    expect(() => validatePiEngineConfig(config)).toThrow(/providers\.lmstudio\.api/);
+  });
+
+  test("CV-22: valid api values pass at both levels", () => {
+    const config: PiEngineConfig = {
+      type: "pi",
+      api: "openai-responses",
+      providers: {
+        lmstudio: { base_url: "http://localhost:1234/v1", api: "openai-completions" },
+        vllm: { base_url: "http://localhost:8000/v1", api: "openai-responses" },
+      },
+    };
+    expect(() => validatePiEngineConfig(config)).not.toThrow();
+  });
 });

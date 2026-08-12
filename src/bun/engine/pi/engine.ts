@@ -16,16 +16,12 @@ import type { SlashCommandDialect } from "../dialects/slash-command-dialect.ts";
 import { NullDialect } from "../dialects/null-dialect.ts";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import {
-  AuthStorage,
-  createAgentSession,
-  defineTool,
-  DefaultResourceLoader,
-  getAgentDir,
   SessionManager,
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import type { ModelSettingsRepository } from "../../db/repositories/model-settings-repository.ts";
 import type { Model } from "@earendil-works/pi-ai";
+import type { PiApiMode } from "./api-mode.ts";
 import { buildAllTools } from "./tools/index.ts";
 import { getDb } from "../../db/index.ts";
 import { appendMessage } from "../../conversation/messages.ts";
@@ -34,7 +30,6 @@ import { formatPiError } from "./pi-error.ts";
 import { validatePiEngineConfig } from "./pi-config-validation.ts";
 import { buildDecisionRequestTerminalEvent } from "../decision-request-terminal-event.ts";
 import { LOOP_MAX_REPEAT, LOOP_WINDOW_SIZE } from "./harness/tool-loop-detector.ts";
-import { buildToolAllowlist } from "./constants.ts";
 import { join } from "path";
 import { homedir } from "os";
 
@@ -49,13 +44,14 @@ import { DefaultRunDriver } from "./run-driver.ts";
 import { PiCompactionCoordinator, DefaultMessageAppender } from "./compaction-coordinator.ts";
 import { startExecution } from "./execution-controller.ts";
 import { formatInstructionBlocks } from "./instruction-formatter.ts";
+import { createPiAgentSession } from "./pi-session-factory.ts";
 
 /** Options passed to a SessionFactory when creating a new Pi agent session. */
 export interface SessionFactoryOptions {
   tools: ReturnType<typeof buildAllTools>;
   systemPrompt: string | undefined;
   conversationId: number;
-  model: Model<"openai-completions">;
+  model: Model<PiApiMode>;
   cwd: string;
   config: PiEngineConfig;
 }
@@ -77,52 +73,12 @@ async function defaultSessionFactory(options: SessionFactoryOptions): Promise<Ag
   const { tools, systemPrompt, conversationId, model, cwd, config } = options;
 
   const pathResolver = new DefaultSessionPathResolver(PI_SESSIONS_DIR);
-  const sessionPath = pathResolver.pathForConversation(conversationId);
-  const sessionManager = SessionManager.open(sessionPath);
-
-  const agentDir = getAgentDir();
-  const resourceLoader = new DefaultResourceLoader({
-    cwd,
-    agentDir,
-    // Only pass systemPromptOverride when the resolved system prompt is non-empty.
-    // Passing an override that returns undefined can yield an empty system prompt
-    // for chat sessions, which may degrade behavior.
-    ...(systemPrompt ? { systemPromptOverride: () => systemPrompt } : {}),
-  });
-  await resourceLoader.reload();
-
-  const piTools = tools.map((t) =>
-    defineTool({
-      name: t.name,
-      label: t.label ?? t.name,
-      description: t.description,
-      parameters: t.parameters as any,
-      prepareArguments: t.prepareArguments,
-      execute: t.execute as any,
-    }),
-  );
-
-  const authStorage = AuthStorage.inMemory();
-  for (const [provider, cfg] of Object.entries(config.providers ?? {})) {
-    authStorage.setRuntimeApiKey(provider, cfg.api_key ?? "no-key");
-  }
-  authStorage.setRuntimeApiKey(model.provider, config.providers?.[model.provider]?.api_key ?? "no-key");
-
-  const { session } = await createAgentSession({
-    cwd,
-    agentDir,
-    model: model as any,
-    customTools: piTools,
-    tools: buildToolAllowlist(piTools),
-    sessionManager,
-    resourceLoader,
-    authStorage,
-    settingsManager: SettingsManager.inMemory({
-      compaction: { enabled: false, reserveTokens: 16_384, keepRecentTokens: 20_000 },
-    }),
+  const sessionManager = SessionManager.open(pathResolver.pathForConversation(conversationId));
+  const settingsManager = SettingsManager.inMemory({
+    compaction: { enabled: false, reserveTokens: 16_384, keepRecentTokens: 20_000 },
   });
 
-  return session;
+  return createPiAgentSession({ config, model, tools, cwd, systemPrompt, sessionManager, settingsManager });
 }
 
 export class PiEngine implements ExecutionEngine {
@@ -599,7 +555,7 @@ export class PiEngine implements ExecutionEngine {
   /** @deprecated Use engine.sessionManager.getOrCreate() */
   private getOrCreateSession(
     conversationId: number,
-    model: Model<"openai-completions">,
+    model: Model<PiApiMode>,
     tools: ReturnType<typeof buildAllTools>,
     systemPrompt: string | undefined,
     cwd: string,

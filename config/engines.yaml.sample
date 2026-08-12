@@ -61,6 +61,10 @@ engines:
   # - id: pi-local
   #   type: pi
   #   model: lmstudio/qwen3-8b   # provider/model-id format
+  #   api: openai-responses      # optional. OpenAI-compatible API mode for this engine:
+  #                              # "openai-completions" → /v1/chat/completions
+  #                              # "openai-responses"  → /v1/responses (DEFAULT when omitted)
+  #                              # Per-provider `api:` below overrides this.
   #   context_window: 128000     # optional; default 128000. Set to your model's
   #                              # actual context window. Auto-compaction fires at
   #                              # (context_window - 16384) tokens. Lower this for
@@ -68,6 +72,10 @@ engines:
   #   providers:
   #     lmstudio:
   #       base_url: http://localhost:1234/v1
+  #       api: openai-completions # optional per-provider override. Only needed when a
+  #                               # provider endpoint speaks a different API than the
+  #                               # engine-level `api` (e.g. LM Studio still on
+  #                               # /v1/chat/completions while vLLM exposes /v1/responses).
   #       max_inflight: 2        # max concurrent requests (default: 8; use 1-2 for LM Studio)
   #       queue_timeout_ms: 60000  # queue wait timeout in ms (default: 60000)
   #       # Note: for vLLM, max_inflight: 8 is a good default
