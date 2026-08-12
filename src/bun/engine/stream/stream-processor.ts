@@ -12,21 +12,8 @@ import type {
 import type { MessageType } from "../../../shared/rpc-types.ts";
 import type { Database } from "bun:sqlite";
 import { ConvMessageBuffer } from "../../conversation/conv-message-buffer.ts";
-import type { WriteBuffer } from "../../pipeline/write-buffer.ts";
-import type { RawMessageItem } from "./raw-message-buffer.ts";
+import type { RawMessageItem } from "./types.ts";
 import { fetchTaskWithModel } from "../../db/task-queries.ts";
-
-/**
- * Per-token delta event types that are broadcast immediately but not persisted to
- * model_raw_messages. Skipping persistence for these reduces write load by ~90%
- * during active streaming without losing any information (assembled content is
- * stored via stream_events and conversation_messages).
- */
-const HIGH_FREQ_RAW_EVENT_TYPES = new Set([
-  "assistant.message_delta",   // Copilot text token
-  "assistant.reasoning_delta", // Copilot reasoning token
-  "content_block_delta",       // Claude text/tool-input token
-]);
 
 /**
  * Owns the AbortController lifecycle and stream event processing for non-native engines.
@@ -41,8 +28,6 @@ const HIGH_FREQ_RAW_EVENT_TYPES = new Set([
 export class StreamProcessor {
   /** executionId → AbortController; single registration site */
   private readonly abortControllers = new Map<number, AbortController>();
-  /** executionId → next seq number for raw model messages */
-  private readonly rawMessageSeq = new Map<number, number>();
 
   private onStreamEvent?: OnStreamEvent;
   /** Execution IDs for which onRawMessageEnqueued is already broadcasting text/reasoning chunks.
@@ -51,7 +36,7 @@ export class StreamProcessor {
 
   constructor(
     private readonly db: Database,
-    private readonly rawBuffer: WriteBuffer<RawMessageItem>,
+    private readonly onRawMessage: (item: RawMessageItem) => void,
     private readonly onToken: OnToken,
     private readonly onError: OnError,
     private readonly onTaskUpdated: OnTaskUpdated,
@@ -95,28 +80,18 @@ export class StreamProcessor {
   }
 
   /**
-   * Returns a bound callback for persisting raw model messages for the given execution.
+   * Returns a bound callback that forwards raw model messages to the
+   * onRawMessage sink (live WS broadcast for Claude/Copilot chunk events).
    * Used by ExecutionParamsBuilder to populate onRawModelMessage.
-   *
-   * High-frequency per-token events (text/reasoning deltas) are broadcast via
-   * signalOnly() so the WS push fires immediately, but they are NOT written to
-   * model_raw_messages — this reduces write load by ~90% during active streaming.
+   * Raw messages are no longer persisted — model_raw_messages was dropped.
    */
-  makePersistCallback(
+  makeRawMessageCallback(
     taskId: number | null,
     conversationId: number,
     executionId: number,
   ): (raw: RawModelMessage) => void {
     return (raw) => {
-      const seq = (this.rawMessageSeq.get(executionId) ?? 0) + 1;
-      this.rawMessageSeq.set(executionId, seq);
-      const item = { taskId, conversationId, executionId, seq, raw };
-      if (HIGH_FREQ_RAW_EVENT_TYPES.has(raw.eventType)) {
-        // Broadcast immediately but skip DB persistence for token-level deltas.
-        this.rawBuffer.signalOnly(item);
-      } else {
-        this.rawBuffer.enqueue(item);
-      }
+      this.onRawMessage({ taskId, conversationId, executionId, raw });
     };
   }
 
@@ -188,14 +163,14 @@ export class StreamProcessor {
           tokenAccum = "";
           reasoningAccum = "";
           if (taskId != null) {
-            db.run("UPDATE tasks SET execution_state = 'waiting_user' WHERE id = ?", [taskId]);
+            this.bestEffort("abort: mark task waiting_user", () => db.run("UPDATE tasks SET execution_state = 'waiting_user' WHERE id = ?", [taskId]));
           } else {
-            db.run("UPDATE chat_sessions SET status = 'idle' WHERE conversation_id = ?", [conversationId]);
+            this.bestEffort("abort: mark chat session idle", () => db.run("UPDATE chat_sessions SET status = 'idle' WHERE conversation_id = ?", [conversationId]));
           }
-          db.run(
+          this.bestEffort("abort: mark execution cancelled", () => db.run(
             "UPDATE executions SET status = 'cancelled', finished_at = datetime('now') WHERE id = ?",
             [executionId],
-          );
+          ));
           this.onToken(taskId, conversationId, executionId, "", true);
           this.onStreamEvent?.({ taskId, conversationId, executionId, seq: 0, blockId: `${executionId}-done`, type: "done", content: "", metadata: null, parentBlockId: null, done: true, subagentId: null });
           return;
@@ -554,66 +529,80 @@ export class StreamProcessor {
         tokenAccum = "";
         reasoningAccum = "";
         if (taskId != null) {
-          db.run("UPDATE tasks SET execution_state = 'waiting_user' WHERE id = ?", [taskId]);
+          this.bestEffort("abort: mark task waiting_user", () => db.run("UPDATE tasks SET execution_state = 'waiting_user' WHERE id = ?", [taskId]));
         } else {
-          db.run("UPDATE chat_sessions SET status = 'idle' WHERE conversation_id = ?", [conversationId]);
+          this.bestEffort("abort: mark chat session idle", () => db.run("UPDATE chat_sessions SET status = 'idle' WHERE conversation_id = ?", [conversationId]));
         }
-        db.run(
+        this.bestEffort("abort: mark execution cancelled", () => db.run(
           "UPDATE executions SET status = 'cancelled', finished_at = datetime('now') WHERE id = ?",
           [executionId],
-        );
+        ));
         this.onToken(taskId, conversationId, executionId, "", true);
         this.onStreamEvent?.({ taskId, conversationId, executionId, seq: 0, blockId: `${executionId}-done`, type: "done", content: "", metadata: null, parentBlockId: null, done: true, subagentId: null });
       }
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
       if (taskId != null) {
-        db.run("UPDATE tasks SET execution_state = 'failed' WHERE id = ?", [taskId]);
+        this.bestEffort("error: mark task failed", () => db.run("UPDATE tasks SET execution_state = 'failed' WHERE id = ?", [taskId]));
       } else {
-        db.run("UPDATE chat_sessions SET status = 'idle' WHERE conversation_id = ?", [conversationId]);
+        this.bestEffort("error: mark chat session idle", () => db.run("UPDATE chat_sessions SET status = 'idle' WHERE conversation_id = ?", [conversationId]));
       }
-      db.run(
+      this.bestEffort("error: mark execution failed", () => db.run(
         "UPDATE executions SET status = 'failed', finished_at = datetime('now'), details = ? WHERE id = ?",
         [errMsg, executionId],
-      );
+      ));
       this.abortControllers.get(executionId)?.abort();
       this.onError(taskId, conversationId, executionId, errMsg);
       this.onStreamEvent?.({ taskId, conversationId, executionId, seq: 0, blockId: `${executionId}-done`, type: "done", content: "", metadata: null, parentBlockId: null, done: true, subagentId: null });
     } finally {
       this.abortControllers.delete(executionId);
-      this.rawMessageSeq.delete(executionId);
       this.clearClaudeExecution(executionId);
 
       if (taskId != null) {
-        const finalTask = fetchTaskWithModel(db, taskId);
-        if (finalTask) {
-          this.onTaskUpdated(finalTask);
+        // Best-effort: a locked DB in cleanup must never crash consume() or
+        // mask the error that triggered the catch/abort path.
+        this.bestEffort("finally: task cleanup", () => {
+          const finalTask = fetchTaskWithModel(db, taskId);
+          if (finalTask) {
+            this.onTaskUpdated(finalTask);
 
-          const finalRow = db.query<{ needs_column_prompt: number; workflow_state: string }, [number]>(
-            "SELECT needs_column_prompt, workflow_state FROM tasks WHERE id = ?",
-          ).get(taskId);
-          if (finalRow?.needs_column_prompt === 1) {
-            db.run("UPDATE tasks SET needs_column_prompt = 0 WHERE id = ?", [taskId]);
-            void this.onDeferredTransition(taskId, finalRow.workflow_state);
-          } else {
-            const pending = db
-              .query<{ id: number; content: string }, [number]>(
-                "SELECT id, content FROM pending_messages WHERE task_id = ? ORDER BY id",
-              )
-              .all(taskId);
-            if (pending.length > 0) {
-              db.run("DELETE FROM pending_messages WHERE task_id = ?", [taskId]);
-              for (const row of pending) {
-                void this.onPendingMessage(taskId, row.content);
+            const finalRow = db.query<{ needs_column_prompt: number; workflow_state: string }, [number]>(
+              "SELECT needs_column_prompt, workflow_state FROM tasks WHERE id = ?",
+            ).get(taskId);
+            if (finalRow?.needs_column_prompt === 1) {
+              db.run("UPDATE tasks SET needs_column_prompt = 0 WHERE id = ?", [taskId]);
+              void this.onDeferredTransition(taskId, finalRow.workflow_state);
+            } else {
+              const pending = db
+                .query<{ id: number; content: string }, [number]>(
+                  "SELECT id, content FROM pending_messages WHERE task_id = ? ORDER BY id",
+                )
+                .all(taskId);
+              if (pending.length > 0) {
+                db.run("DELETE FROM pending_messages WHERE task_id = ?", [taskId]);
+                for (const row of pending) {
+                  void this.onPendingMessage(taskId, row.content);
+                }
               }
             }
           }
-        }
+        });
       }
     }
   }
 
   // ─── Private helpers ───────────────────────────────────────────────────────
+
+  /** Runs a best-effort DB side-effect in an error/cleanup path. Failures are
+   *  logged and swallowed so they can never mask the original error or crash
+   *  consume(). */
+  private bestEffort(label: string, fn: () => void): void {
+    try {
+      fn();
+    } catch (err) {
+      console.error(`[stream-processor] best-effort DB write failed (${label}):`, err);
+    }
+  }
 
   /** Flush accumulated tokens and reasoning to buffer before a cancel or done transition. */
   private _flushAccumulators(

@@ -3,7 +3,7 @@ import type { IBroadcastChannel } from "./broadcast-channel.ts";
 import { StreamEventEnricher } from "../pipeline/stream-event-enricher.ts";
 import { WriteBuffer } from "../pipeline/write-buffer.ts";
 import { appendStreamEventBatch, type PersistedStreamEvent } from "../db/stream-events.ts";
-import type { RawMessageItem } from "../engine/stream/raw-message-buffer.ts";
+import type { RawMessageItem } from "../engine/stream/types.ts";
 import type { StreamEvent, StreamEventType } from "../../shared/rpc-types.ts";
 
 export class StreamEventProcessor {

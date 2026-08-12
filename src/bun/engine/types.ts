@@ -87,7 +87,8 @@ export interface ExecutionParams {
   workspaceKey?: string;
   /**
    * Optional sink for raw model events/messages (provider-native payloads).
-   * Used for debugging and incident forensics.
+   * Used for live WS broadcast of chunk events (Claude/Copilot); raw messages
+   * are no longer persisted.
    */
   onRawModelMessage?: (message: RawModelMessage) => void;
 
