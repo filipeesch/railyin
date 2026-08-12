@@ -13,7 +13,7 @@ MCP servers declared in a project's `.railyn/mcp.json` never reach `running`. `M
 - **`src/bun/mcp/discovery-tools.ts`** — all three executor functions (`execListMcpServers`, `execListMcpTools`, `execInvokeMcpTool`) `await registry.ensureStarted()` before reading status / listing tools / invoking a tool. `execListMcpServers` and `execListMcpTools` become async (`Promise<string>`); the dispatcher already awaits executor results, so no caller changes.
 - **Tests** aligned to the existing test landscape:
   - **Unit** (`src/bun/test/*.test.ts`): registry `ensureStarted()` idempotency (concurrent single-start, terminal no-op, error no-retry); pool start-on-first-use + cached no-restart; discovery idle-race (executors await a pending `ensureStarted`); builder DI assertion (the registry handed to `ExecutionParams` is started).
-  - **Integration** (`e2e/api/*.test.ts`, in-memory DB via `support/backend-rpc-runtime.ts` + `helpers.ts`): a project-scoped server reaches `running` via `mcp.getStatus` and `invoke_mcp_tool` succeeds — the `grafana-mcpar` shape, using a local stdio MCP server fixture.
+  - **Integration** (backend-rpc-runtime harness, in-memory DB via `support/backend-rpc-runtime.ts` + `helpers.ts`): a task execution in a project with a `.railyn/mcp.json` drives the real `ExecutionParamsBuilder.build()` → `getForProject(projectPath)` → executor path; `list_mcp_servers` reports the project server `running` and `invoke_mcp_tool` succeeds — the `grafana-mcpar` shape. (The `mcp.getStatus` RPC is global-only, so the project scope is observed through the execution's MCP tools, not an RPC.)
   - **Playwright excluded** (non-goal): `e2e/ui/mcp-tools.spec.ts` mocks the RPC backend (`api.returns("mcp.getStatus", ...)`) and cannot exercise this backend-side bug.
 
 ## Impact
@@ -27,4 +27,4 @@ MCP servers declared in a project's `.railyn/mcp.json` never reach `running`. `M
 
 - `mcp-client-registry` — ADD `ensureStarted()` requirement; MODIFY the pool lookup requirement to state project registries are started on first use.
 - `mcp-registry-pool` — MODIFY the pool requirement to state project registries are started on first use.
-- `mcp-tool-discovery` — ADD a "discovery tools await registry readiness" requirement, including an integration scenario (`mcp.getStatus`/`invoke_mcp_tool` for a project-scoped server).
+- `mcp-tool-discovery` — ADD a "discovery tools await registry readiness" requirement, including an integration scenario (`list_mcp_servers`/`invoke_mcp_tool` for a project-scoped server).
