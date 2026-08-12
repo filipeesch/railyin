@@ -32,6 +32,7 @@ import { appendMessage } from "../../conversation/messages.ts";
 import { ProviderLimiterRegistry, PROVIDER_LIMITER_DEFAULTS } from "./provider-limiter.ts";
 import { formatPiError } from "./pi-error.ts";
 import { validatePiEngineConfig } from "./pi-config-validation.ts";
+import { buildDecisionRequestTerminalEvent } from "../decision-request-terminal-event.ts";
 import { LOOP_MAX_REPEAT, LOOP_WINDOW_SIZE } from "./harness/tool-loop-detector.ts";
 import { buildToolAllowlist } from "./constants.ts";
 import { join } from "path";
@@ -137,8 +138,8 @@ export class PiEngine implements ExecutionEngine {
     number,
     { resolve: (input: EngineResumeInput) => void; reject: (error: Error) => void }
   >();
-  /** Map<conversationId, SuspendRef> */
-  private readonly suspendRefs = new Map<number, { onSuspend?: (event: EngineEvent) => void }>();
+  /** Map<conversationId, PageRef> */
+  private readonly pageRefs = new Map<number, { onPage?: (event: EngineEvent) => void }>();
 
   // ─── Services ───────────────────────────────────────────────────────────────
 
@@ -272,7 +273,7 @@ export class PiEngine implements ExecutionEngine {
     const enrichedSystem = [taskBlock, instructionBlocks, systemInstructions].filter(Boolean).join("\n\n") || undefined;
 
     const skillResolver = this.dialectResolver.getSkillResolver(cwd, projectPath);
-    const suspendRef = this.getOrCreateSuspendRef(conversationId);
+    const pageRef = this.getOrCreatePageRef(conversationId);
 
     const tools = this.toolFactory.buildTools(
       conversationId,
@@ -285,7 +286,7 @@ export class PiEngine implements ExecutionEngine {
       onHumanTurn,
       workspaceKey,
       skillResolver,
-      suspendRef,
+      pageRef,
       signal,
       params.mcpRegistry,
       params.enabledMcpTools,
@@ -335,7 +336,7 @@ export class PiEngine implements ExecutionEngine {
       providerName,
       workingDirectory,
       signal,
-      suspendRef,
+      pageRef,
       onRawModelMessage,
       runDriver: this.runDriver,
       compactionCoordinator: this.compactionCoordinator,
@@ -351,26 +352,9 @@ export class PiEngine implements ExecutionEngine {
       this.executionToConversation.delete(executionId);
     }
 
-    const { suspendedForDecision, error } = state;
+    const { error } = state;
 
-    if (suspendedForDecision) {
-      const agent = this.sessionManager.get(conversationId)?.agent;
-      if (agent) {
-        const msgs = agent.state.messages as any[];
-        let end = msgs.length;
-        while (end > 0) {
-          const last = msgs[end - 1];
-          if (last.role === "assistant" && last.stopReason === "aborted") {
-            end--;
-          } else {
-            break;
-          }
-        }
-        agent.state.messages = msgs.slice(0, end) as any;
-      }
-    }
-
-    if (error && !suspendedForDecision) {
+    if (error) {
       const agent = this.sessionManager.get(conversationId)?.agent;
       if (agent) {
         const msgs = agent.state.messages as any[];
@@ -385,6 +369,18 @@ export class PiEngine implements ExecutionEngine {
 
       yield { type: "error", message: formatPiError(error), fatal: false };
       return;
+    }
+
+    // Turn-end flush: if the model appended decision_request questions but ended
+    // its turn without a terminal event, present the interview instead of done.
+    const commonCtx = this.toolFactory.commonCtxRefs.get(conversationId);
+    const buffer = commonCtx?.runtime.decisionBuffer;
+    if (buffer) {
+      const terminal = buildDecisionRequestTerminalEvent(buffer);
+      if (terminal !== null) {
+        yield terminal;
+        return;
+      }
     }
 
     yield { type: "done" };
@@ -549,7 +545,7 @@ export class PiEngine implements ExecutionEngine {
     this.sessionManager.disposeAll();
     await this.compactionCoordinator.waitForAll();
     this.toolFactory.clear();
-    this.suspendRefs.clear();
+    this.pageRefs.clear();
   }
 
   getPiProviderStatus(): import("./provider-limiter.ts").ProviderLimiterSnapshot[] {
@@ -558,11 +554,11 @@ export class PiEngine implements ExecutionEngine {
 
   // ─── Private helpers ────────────────────────────────────────────────────────
 
-  private getOrCreateSuspendRef(conversationId: number): { onSuspend?: (event: EngineEvent) => void } {
-    let ref = this.suspendRefs.get(conversationId);
+  private getOrCreatePageRef(conversationId: number): { onPage?: (event: EngineEvent) => void } {
+    let ref = this.pageRefs.get(conversationId);
     if (!ref) {
       ref = {};
-      this.suspendRefs.set(conversationId, ref);
+      this.pageRefs.set(conversationId, ref);
     }
     return ref;
   }

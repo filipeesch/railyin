@@ -3,9 +3,10 @@
  * Cursor SDKCustomTool entries (keyed by tool name).
  *
  * Converts COMMON_TOOL_DEFINITIONS from engine/common-tools.ts into the
- * @cursor/sdk SDKCustomTool format. Suspend-loop tools (e.g. decision_request)
- * report their payload via the onSuspend callback so the engine can abort the
- * run and yield a decision_request event upstream.
+ * @cursor/sdk SDKCustomTool format. Streaming decision_request calls report
+ * their page payload via the onPage callback so the engine can yield a
+ * decision_request_page event upstream; the terminal decision_request is
+ * emitted at turn end from the per-execution buffer.
  *
  * Cursor's built-in tools (Read/Edit/Shell/Grep) remain available alongside
  * these — the SDK does not expose a knob to disable them. The agent is steered
@@ -244,7 +245,7 @@ function buildSkillTool(resolver: SkillResolver): SDKCustomTool {
 export function buildCursorTools(
   context: CommonToolContext,
   skillResolver?: SkillResolver,
-  onSuspend?: (payload: string) => void,
+  onPage?: (payload: string) => void,
 ): Record<string, SDKCustomTool> {
   const tools: Record<string, SDKCustomTool> = {};
 
@@ -264,9 +265,8 @@ export function buildCursorTools(
             (args ?? {}) as Record<string, unknown>,
             context,
           );
-          if (result.type === "suspend") {
-            onSuspend?.(result.payload);
-            return "Interview suspended - awaiting user response.";
+          if (result.type === "page") {
+            onPage?.(result.payload);
           }
           return result.text;
         } catch (err) {

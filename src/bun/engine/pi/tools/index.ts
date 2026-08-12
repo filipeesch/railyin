@@ -10,7 +10,7 @@ import { buildWriteTools } from "./write.ts";
 import { buildUndoTool } from "./undo.ts";
 import { buildShellTools } from "./shell.ts";
 import { buildWebTools } from "./web.ts";
-import { buildCommonTools, type SuspendRef } from "./common.ts";
+import { buildCommonTools, type PageRef } from "./common.ts";
 import { buildSkillTool } from "./skill.ts";
 import type { SkillResolver } from "../skill-resolver.ts";
 
@@ -37,10 +37,10 @@ export interface AllToolsOptions {
   skillResolver: SkillResolver;
   /** Tool group names from the workflow column's `tools:` config. When omitted, uses DEFAULT_PI_TOOL_GROUPS. */
   columnGroups?: string[];
-  suspendRef?: SuspendRef;
+  pageRef?: PageRef;
 }
 
-export type { SuspendRef };
+export type { PageRef };
 
 /**
  * Build the tool set for a Pi agent session.
@@ -48,7 +48,7 @@ export type { SuspendRef };
  * Board and interaction tools (common-tools) are always included.
  */
 export function buildAllTools(opts: AllToolsOptions): AgentTool<any>[] {
-  const { harnessCtx, commonCtx, skillResolver, columnGroups, suspendRef } = opts;
+  const { harnessCtx, commonCtx, skillResolver, columnGroups, pageRef } = opts;
 
   const activeGroups = (columnGroups ?? DEFAULT_PI_TOOL_GROUPS).filter(
     (g): g is PiToolGroupName => g in PI_TOOL_GROUPS,
@@ -56,5 +56,5 @@ export function buildAllTools(opts: AllToolsOptions): AgentTool<any>[] {
 
   const harnessTools = activeGroups.flatMap((group) => PI_TOOL_GROUPS[group](harnessCtx));
 
-  return [...harnessTools, ...buildCommonTools(commonCtx, harnessCtx, suspendRef), buildSkillTool(skillResolver)];
+  return [...harnessTools, ...buildCommonTools(commonCtx, harnessCtx, pageRef), buildSkillTool(skillResolver)];
 }

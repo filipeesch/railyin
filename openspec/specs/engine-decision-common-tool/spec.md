@@ -4,16 +4,22 @@ Specification for the common decision-related tools registered in the engine too
 
 ## Requirements
 
-### Requirement: decision_request tool suspends engine execution
-The `decision_request` tool (renamed from `interview_me`) SHALL suspend execution and transition the task to `waiting_user`, identically to the old `interview_me` behavior.
+### Requirement: decision_request accepts a single flat question per call
+The `decision_request` tool SHALL accept ONE question per call with a FLAT, top-level shape (`{ context?, question: string, type, weight?, model_lean?, model_lean_reason?, answers_affect_followup?, options? }`) rather than an array of questions or a nested `question` object. The schema SHALL declare `required: ["question", "type"]`, with `type` as an enum (`exclusive` | `non_exclusive` | `freetext`), `options` as an array with `minItems: 2` for choice questions, and optional `weight`, `model_lean`, `model_lean_reason`, `answers_affect_followup`, and per-question `context`. The tool description SHALL instruct the model to call once per question with flat top-level fields, repeat to add more, and END ITS TURN to present the interview.
 
-#### Scenario: decision_request suspension via Copilot adapter
-- **WHEN** the Copilot engine calls `decision_request` during an execution
-- **THEN** the execution suspends, task state transitions to `waiting_user`, and the stream emits a `decision_request` event
+#### Scenario: decision_request schema is single flat question
+- **WHEN** the `DECISION_REQUEST_TOOL_DEFINITION` is inspected
+- **THEN** its `parameters.properties` contain a `question` STRING and sibling top-level `type`, `weight`, `model_lean`, `options`, etc.
+- **AND** no `questions` array property and no nested `question` object property exists
 
-#### Scenario: decision_request suspension via Claude adapter
-- **WHEN** the Claude engine calls `decision_request` during an execution
-- **THEN** the execution suspends and the task state transitions to `waiting_user`
+#### Scenario: Valid flat question appends and streams
+- **WHEN** `executeCommonTool("decision_request", { question: "Pick?", type: "freetext" }, ctx)` is called with a valid flat question
+- **THEN** the question is appended to the execution buffer and the result is `{ type: "page", text, payload }`
+
+#### Scenario: Invalid flat question returns error without buffer mutation
+- **WHEN** `executeCommonTool("decision_request", { question: "Pick?" }, ctx)` is called (missing `type`)
+- **THEN** the result is `{ type: "result", text }` where text names `type` and lists the valid enum values
+- **AND** the buffer is unchanged
 
 #### Scenario: decision_request stream event persists decision_request_prompt message
 - **WHEN** the stream processor processes a `decision_request` event

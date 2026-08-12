@@ -32,6 +32,22 @@ The test suite for this function SHALL be at `src/bun/test/validate-tool-args.te
 - **WHEN** `validateToolArgs` is called with args that satisfy all schema constraints
 - **THEN** it returns `null`
 
+### Requirement: Missing required enum fields report valid values
+When a `required` validation error fires for a missing property, the system SHALL look up that property in the schema node at the error path and, if the property declares an `enum`, append the valid values to the error message. This SHALL be generic — it applies to every required field whose schema declares an enum, not just `decision_request`.
+
+#### Scenario: Missing type lists valid values
+- **WHEN** `validateToolArgs(DECISION_REQUEST_TOOL_DEFINITION, { question: "Pick?" })` is called
+- **THEN** the returned error contains `'type' is required`
+- **AND** contains `"exclusive"`, `"non_exclusive"`, and `"freetext"`
+
+#### Scenario: Missing enum field on another tool lists its valid values
+- **WHEN** `validateToolArgs` is called for a tool whose required enum field is missing
+- **THEN** the returned error contains the missing field name and its enum values
+
+#### Scenario: Missing non-enum required field reports field name only
+- **WHEN** `validateToolArgs` is called with a missing required field that has no enum
+- **THEN** the returned error names the missing field without a values list
+
 ### Requirement: executeCommonTool validates args before dispatching to a handler
 The system SHALL call `validateToolArgs` at the top of `executeCommonTool` before any handler dispatch. When validation fails, `executeCommonTool` SHALL return `{ type: "result", text: "<error-message>" }` immediately without invoking any handler.
 
@@ -75,27 +91,27 @@ The `parameters` field on `AIToolDefinition` SHALL be typed as `JSONSchema7` fro
 ### Requirement: decision_request validates options count per question type
 The system SHALL validate that every `exclusive` or `non_exclusive` question in a `decision_request` call provides at least 2 distinct options. This validation SHALL occur at two layers:
 
-1. **Schema layer**: The `options` array in the `questions` items schema SHALL have `minItems: 2`, so AJV reports the violation via the existing `validateToolArgs` path.
-2. **Runtime layer**: `executeCommonTool` SHALL check, after schema validation passes, that each question where `type !== "freetext"` has `options.length >= 2`. If the check fails, it SHALL return a `{ type: "result", text: "<error>" }` — never the `suspend` path — with an error message that: names the offending question index, states the minimum required count, and instructs the model not to embed options in the question text.
+1. **Schema layer**: The `options` array in the flat question schema SHALL have `minItems: 2`, so AJV reports the violation via the existing `validateToolArgs` path.
+2. **Runtime layer**: `executeCommonTool` SHALL check, after schema validation passes, that a question where `type !== "freetext"` has `options.length >= 2`. If the check fails, it SHALL return a `{ type: "result", text: "<error>" }` — never the `page` path — with an error message that names the offending field, states the minimum required count, and instructs the model not to embed options in the question text.
 
 `freetext` questions SHALL NOT be subject to the options-count check.
 
 #### Scenario: exclusive question with fewer than 2 options is rejected
-- **WHEN** `decision_request` is called with a question of `type: "exclusive"` and `options` array of length 1
-- **THEN** `executeCommonTool` returns `{ type: "result", text: <error> }` (not suspend)
+- **WHEN** `decision_request` is called with a flat `exclusive` question and `options` array of length 1
+- **THEN** `executeCommonTool` returns `{ type: "result", text: <error> }` (not `page`)
 - **AND** the error text contains a message about the minimum required options count
 
 #### Scenario: non_exclusive question with fewer than 2 options is rejected
-- **WHEN** `decision_request` is called with a question of `type: "non_exclusive"` and `options` array of length 0
-- **THEN** `executeCommonTool` returns `{ type: "result", text: <error> }` (not suspend)
+- **WHEN** `decision_request` is called with a flat `non_exclusive` question and `options` array of length 0
+- **THEN** `executeCommonTool` returns `{ type: "result", text: <error> }` (not `page`)
 
 #### Scenario: freetext question with no options is accepted
-- **WHEN** `decision_request` is called with a question of `type: "freetext"` and no `options` field
-- **THEN** `executeCommonTool` proceeds to the suspend path (not rejected)
+- **WHEN** `decision_request` is called with a flat `freetext` question and no `options` field
+- **THEN** `executeCommonTool` proceeds to the `page` path (not rejected)
 
 #### Scenario: exclusive question with 2 or more options is accepted
-- **WHEN** `decision_request` is called with a question of `type: "exclusive"` and `options` array of length 2
-- **THEN** `executeCommonTool` proceeds to the suspend path
+- **WHEN** `decision_request` is called with a flat `exclusive` question and `options` array of length 2
+- **THEN** `executeCommonTool` proceeds to the `page` path
 
 ### Requirement: decision_request tool description is concise and non-redundant
 The `DECISION_REQUEST_TOOL_DEFINITION` description string SHALL NOT repeat information already present in field-level descriptions. The top-level description SHALL state: (a) when to use the tool, (b) that options MUST NOT be embedded in question text, and (c) the `exclusive`/`non_exclusive` minimum of 2 options. Field descriptions SHALL own the details of their own structure.

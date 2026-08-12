@@ -102,7 +102,7 @@ function makeOptions(overrides?: Partial<ExecutionControllerOptions>): Execution
     providerName: "lmstudio",
     workingDirectory: "/cwd",
     signal: undefined,
-    suspendRef: {},
+    pageRef: {},
     onRawModelMessage: undefined,
     runDriver,
     compactionCoordinator,

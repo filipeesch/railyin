@@ -9,6 +9,7 @@ import type {
   OnNewMessage,
 } from "../types.ts";
 import type { OpenCodeSdkAdapter } from "./types.ts";
+import { DecisionQuestionBuffer } from "../decision-buffer.ts";
 import { TodoRepository } from "../../db/todos.ts";
 import { DecisionRepository } from "../../db/repositories/decision-repository.ts";
 import { NoteRepository } from "../../db/repositories/note-repository.ts";
@@ -96,6 +97,7 @@ export class OpenCodeEngine implements ExecutionEngine {
         worktreePath: workingDirectory,
         mcpRegistry: params.mcpRegistry ?? undefined,
         mcpEnabledTools: params.enabledMcpTools ?? null,
+        decisionBuffer: new DecisionQuestionBuffer(),
       },
     };
 
@@ -149,11 +151,11 @@ export class OpenCodeEngine implements ExecutionEngine {
 
   async resume(executionId: number, input: EngineResumeInput): Promise<void> {
     if (input.type === "ask_user") {
-      // Route through the adapter: resolves the MCP long-poll HTTP response so OpenCode
-      // can continue the agent loop. Throws if no pending ask_user (e.g. after restart),
-      // which causes human-turn-executor to create a fresh execution.
-      await this.sdkAdapter.respondAskUser(executionId, input.content);
-      return;
+      // The streaming decision_request flow has no in-turn resume path — the
+      // interview is presented at turn end. Throwing here tells human-turn-executor
+      // to roll back the optimistic "running" state and start a fresh execution
+      // with the user's answers as the new prompt (matches Cursor's contract).
+      throw new Error(`Execution ${executionId} is not waiting for ask_user resume input`);
     }
     // shell_approval: unblock the in-engine waitForResume AND reply to OpenCode's permission request
     const pending = this.pendingResumes.get(executionId);

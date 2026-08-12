@@ -530,18 +530,71 @@ test.describe("CD-D — waiting_user states", () => {
         let sentBody: Record<string, unknown> | null = null;
         api.handle("chatSessions.submitDecisions", (body) => {
             sentBody = body as Record<string, unknown>;
-            return { messageId: 1, executionId: SESSION_EXEC_ID };
+            return { message: makeChatMessage(session.id, session.conversationId, "A: Use unified flow", "user"), executionId: SESSION_EXEC_ID };
         });
 
         await page.goto("/");
         await openSessionDrawer(page, session.id);
 
         await page.locator(".session-chat-view .interview__option-title", { hasText: "Use unified flow" }).click();
-        await page.locator(".session-chat-view .interview__submit").click();
+        await page.locator(".session-chat-view .interview__primary").click();
 
         await expect.poll(() => sentBody).toBeTruthy();
         const answers = (sentBody?.answers as Array<{ answer: string }>) ?? [];
         expect(answers[0].answer).toContain("Use unified flow");
+
+        // The panel must close after the user submits their answers.
+        await expect(page.locator(".decision-interview-panel")).not.toBeVisible({ timeout: 5_000 });
+    });
+
+    test("CD-D-7: dismissing the interview panel allows a new interview to appear later", async ({ page, api, ws }) => {
+        const session = makeChatSession({ id: 436, status: "running" });
+        api.returns("chatSessions.list", [session]);
+        stubSessionMessages(api, session.conversationId, []);
+
+        await page.goto("/");
+        await openSessionDrawer(page, session.id);
+
+        // First interview streams a page live.
+        ws.pushStreamEvent({
+            taskId: null,
+            conversationId: session.conversationId,
+            executionId: SESSION_EXEC_ID,
+            seq: 1,
+            blockId: `${SESSION_EXEC_ID}-page-1`,
+            type: "decision_request_page",
+            content: JSON.stringify({ question: "First question?", type: "freetext" }),
+            metadata: null,
+            parentBlockId: null,
+            subagentId: null,
+            done: false,
+        });
+        await expect(page.locator(".decision-interview-panel")).toBeVisible({ timeout: 5_000 });
+
+        // Dismiss closes the panel.
+        await page.locator(".decision-interview-panel__dismiss").click();
+        await expect(page.locator(".decision-interview-panel")).not.toBeVisible();
+
+        // A NEW interview episode (new execution streams a page) must reappear
+        // the panel. The store treats a different execution as a fresh episode,
+        // so only the new question is present.
+        ws.pushStreamEvent({
+            taskId: null,
+            conversationId: session.conversationId,
+            executionId: SESSION_EXEC_ID + 1,
+            seq: 1,
+            blockId: `${SESSION_EXEC_ID + 1}-page-1`,
+            type: "decision_request_page",
+            content: JSON.stringify({ question: "Second question?", type: "freetext" }),
+            metadata: null,
+            parentBlockId: null,
+            subagentId: null,
+            done: false,
+        });
+        await expect(page.locator(".decision-interview-panel")).toBeVisible({ timeout: 5_000 });
+        await expect(page.locator(".decision-interview-panel")).toContainText("Second question?");
+        // No counter (single question in the new episode).
+        await expect(page.locator(".interview__counter")).not.toBeVisible();
     });
 });
 

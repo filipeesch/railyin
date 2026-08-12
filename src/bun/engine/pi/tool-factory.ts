@@ -18,8 +18,9 @@ import { DecisionRepository } from "../../db/repositories/decision-repository.ts
 import { NoteRepository } from "../../db/repositories/note-repository.ts";
 import { taskLspRegistry } from "../../lsp/task-registry.ts";
 import { getConfig } from "../../config/index.ts";
+import { DecisionQuestionBuffer } from "../decision-buffer.ts";
 import type { SkillResolver } from "./skill-resolver.ts";
-import type { SuspendRef } from "./tools/index.ts";
+import type { PageRef } from "./tools/index.ts";
 
 export class PiToolFactory {
   /** Map<conversationId, HarnessContext> */
@@ -73,6 +74,9 @@ export class PiToolFactory {
         taskLspRegistry.getManager(taskId ?? 0, getConfig().workspace.lsp?.servers ?? [], workingDirectory ?? "") ?? undefined;
       existing.runtime.mcpRegistry = mcpRegistry ?? undefined;
       existing.runtime.mcpEnabledTools = enabledMcpTools ?? null;
+      // Fresh per-execution buffer: the context is cached across turns, but
+      // each execution must start with an empty decision buffer (D2).
+      existing.runtime.decisionBuffer = new DecisionQuestionBuffer();
       existing.workflow.onTransition = onTransition ?? (() => {});
       existing.workflow.onHumanTurn = onHumanTurn ?? (() => {});
       return existing;
@@ -98,6 +102,7 @@ export class PiToolFactory {
           taskLspRegistry.getManager(taskId ?? 0, getConfig().workspace.lsp?.servers ?? [], workingDirectory ?? "") ?? undefined,
         mcpRegistry: mcpRegistry ?? undefined,
         mcpEnabledTools: enabledMcpTools ?? null,
+        decisionBuffer: new DecisionQuestionBuffer(),
       },
     };
     this.commonCtxRefs.set(conversationId, ctx);
@@ -115,7 +120,7 @@ export class PiToolFactory {
     onHumanTurn: ExecutionParams["onHumanTurn"],
     workspaceKey: string | undefined,
     skillResolver: SkillResolver,
-    suspendRef: SuspendRef,
+    pageRef: PageRef,
     signal?: AbortSignal,
     mcpRegistry?: McpClientRegistry | null,
     enabledMcpTools?: string[] | null,
@@ -138,7 +143,7 @@ export class PiToolFactory {
       harnessCtx,
       commonCtx,
       skillResolver,
-      suspendRef,
+      pageRef,
     });
   }
 

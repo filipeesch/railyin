@@ -128,6 +128,13 @@
         @load-older="task && conversationStore.loadOlderMessages({ conversationId: task.conversationId })"
       />
 
+      <!-- Streaming interview panel (above todo/files lists, outside chat stream) -->
+      <DecisionInterviewPanel
+        v-if="task.conversationId != null"
+        :conversation-id="task.conversationId"
+        :task-id="task.id"
+      />
+
       <!-- Changed files panel -->
       <ChangedFilesPanel
         v-if="numstat"
@@ -232,6 +239,7 @@ import Select from "primevue/select";
 import Dialog from "primevue/dialog";
 import ConversationBody from "./ConversationBody.vue";
 import ConversationInput from "./ConversationInput.vue";
+import DecisionInterviewPanel from "./DecisionInterviewPanel.vue";
 import TaskInfoPanel from "./TaskInfoPanel.vue";
 import TaskGitPanel from "./TaskGitPanel.vue";
 import ChangedFilesPanel from "./ChangedFilesPanel.vue";

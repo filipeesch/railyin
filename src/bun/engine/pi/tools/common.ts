@@ -10,8 +10,8 @@ import type { HarnessContext } from "../harness/context.ts";
 import { COMMON_TOOL_DEFINITIONS, COMMON_TOOL_NAMES, TODO_TOOL_NAMES, executeCommonTool } from "../../common-tools.ts";
 import { normalizeToolArguments } from "../../normalize-args.ts";
 
-export interface SuspendRef {
-  onSuspend?: (event: EngineEvent) => void;
+export interface PageRef {
+  onPage?: (event: EngineEvent) => void;
 }
 
 export type CommonToolExecutor = (
@@ -34,7 +34,7 @@ export type CommonToolExecutor = (
 export function buildCommonTools(
   ctx: CommonToolContext,
   harnessCtx?: HarnessContext,
-  suspendRef?: SuspendRef,
+  pageRef?: PageRef,
   toolDefs: AIToolDefinition[] = COMMON_TOOL_DEFINITIONS,
   executor: CommonToolExecutor = executeCommonTool
 ): AgentTool<any>[] {
@@ -57,12 +57,8 @@ export function buildCommonTools(
       execute: async (_toolCallId, args, _signal) => {
         // Arguments already normalized via prepareArguments above.
         const result = await executor(def.name, args as Record<string, unknown>, ctx);
-        if (result.type === "suspend" && suspendRef?.onSuspend) {
-          suspendRef.onSuspend({ type: "decision_request", payload: result.payload });
-          return {
-            content: [{ type: "text", text: "Decision request submitted. Waiting for user response." }],
-            details: { toolName: def.name },
-          };
+        if (result.type === "page" && pageRef?.onPage) {
+          pageRef.onPage({ type: "decision_request_page", payload: result.payload });
         }
         let text = result.text ?? JSON.stringify(result);
 

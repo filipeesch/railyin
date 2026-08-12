@@ -111,40 +111,36 @@ describe("MockCursorSdkAdapter", () => {
     expect(collected).toEqual([{ type: "token", content: "a" }]);
   });
 
-  describe("§6.2.3 suspend-loop", () => {
-    it("invokes a custom tool via callTool; the tool's onSuspend side-effect aborts the run", async () => {
-      // Fake decision_request tool: it calls a captured `onSuspend(payload)`
-      // and aborts the externally-supplied combined abort signal, mirroring
-      // how buildCursorTools wires onSuspend into the real custom-tool execute.
-      const abort = new AbortController();
-      let suspendPayload: string | null = null;
+  describe("§6.2.3 streaming decision_request", () => {
+    it("invokes a custom tool via callTool; the loop continues (no abort)", async () => {
+      // Fake decision_request tool returns a plain text result — with the
+      // streaming design there is no suspend/abort side-effect. The mock emits
+      // the tool_start/tool_result pair and the turn continues.
       const decisionTool: SDKCustomTool = {
         description: "request a decision",
         inputSchema: { type: "object", properties: {} },
         execute: async (args: unknown) => {
-          suspendPayload = JSON.stringify(args);
-          abort.abort();
-          return "suspended";
+          return `buffered ${JSON.stringify(args)}`;
         },
       };
 
       const adapter = new MockCursorSdkAdapter().queueTurn({
         steps: [
           token("thinking..."),
-          callTool("decision_request", { questions: [{ question: "A or B?" }] }),
-          // Anything after the suspend should NOT be emitted — the next loop
-          // iteration sees the aborted signal and stops.
-          token("should-not-appear"),
+          callTool("decision_request", { question: "A or B?", type: "freetext" }),
+          token("after tool"),
         ],
       });
 
       const events = await collect(adapter, baseRunConfig({
-        signal: abort.signal,
         customTools: { decision_request: decisionTool },
       }));
 
-      expect(suspendPayload).toBe('{"questions":[{"question":"A or B?"}]}');
-      expect(events).toEqual([{ type: "token", content: "thinking..." }]);
+      const types = events.map((e) => e.type);
+      expect(types).toContain("tool_start");
+      expect(types).toContain("tool_result");
+      expect(types).toContain("token");
+      expect(events.some((e) => e.type === "token" && e.content === "after tool")).toBe(true);
     });
   });
 

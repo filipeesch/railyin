@@ -163,7 +163,7 @@ export function chatSessionHandlers(db: Database, onSessionUpdated: OnChatSessio
       answers: import("../../shared/rpc-types.ts").DecisionAnswer[];
       generalNotes?: string;
       recordAsDecisions?: boolean;
-    }): Promise<{ messageId: number; executionId: number }> => {
+    }): Promise<{ message: import("../../shared/rpc-types.ts").ConversationMessage; executionId: number }> => {
       const session = db.query<ChatSessionRow & { conversation_model: string | null; conversation_sampling_preset_override: string | null }, [number]>(
         `SELECT cs.*, c.model AS conversation_model, c.sampling_preset_override AS conversation_sampling_preset_override, c.model_params AS conversation_model_params FROM chat_sessions cs LEFT JOIN conversations c ON c.id = cs.conversation_id WHERE cs.id = ?`
       ).get(params.sessionId);
@@ -200,7 +200,7 @@ export function chatSessionHandlers(db: Database, onSessionUpdated: OnChatSessio
       const updatedSession = fetchChatSessionWithModel(db, params.sessionId);
       if (updatedSession) onSessionUpdated(updatedSession);
 
-      return { messageId: message.id, executionId };
+      return { message, executionId };
     },
 
     "chatSessions.getMessages": async (params: {

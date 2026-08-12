@@ -28,14 +28,13 @@ export interface ExecutionControllerOptions {
   providerName: string;
   workingDirectory: string | undefined;
   signal?: AbortSignal;
-  suspendRef: { onSuspend?: (event: EngineEvent) => void };
+  pageRef: { onPage?: (event: EngineEvent) => void };
   onRawModelMessage: ExecutionParams["onRawModelMessage"];
   runDriver: RunDriver;
   compactionCoordinator: PiCompactionCoordinator;
 }
 
 export interface ExecutionState {
-  suspendedForDecision: boolean;
   error: Error | undefined;
 }
 
@@ -47,7 +46,7 @@ export interface ExecutionState {
  * Callers must:
  * 1. Iterate the returned queue (for await ... of queue)
  * 2. Call cleanup() in a finally block
- * 3. After the iteration, read state.suspendedForDecision and state.error
+ * 3. After the iteration, read state.error
  */
 export function startExecution(opts: ExecutionControllerOptions): {
   queue: AsyncQueue<EngineEvent>;
@@ -62,20 +61,18 @@ export function startExecution(opts: ExecutionControllerOptions): {
     providerName,
     workingDirectory,
     signal,
-    suspendRef,
+    pageRef,
     onRawModelMessage,
     runDriver,
     compactionCoordinator,
   } = opts;
 
   const queue = new AsyncQueue<EngineEvent>();
-  const state: ExecutionState = { suspendedForDecision: false, error: undefined };
+  const state: ExecutionState = { error: undefined };
   const sdkWillRetryRef = { value: false };
 
-  suspendRef.onSuspend = (event: EngineEvent) => {
-    state.suspendedForDecision = true;
+  pageRef.onPage = (event: EngineEvent) => {
     queue.push(event);
-    session.abort().catch(() => {});
   };
 
   const onAbort = () => {

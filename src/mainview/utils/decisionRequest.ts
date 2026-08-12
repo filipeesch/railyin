@@ -39,6 +39,34 @@ export function canSubmitDecisionRequest(questions: DecisionRequestQuestion[], s
   });
 }
 
+/** Whether a single page's question is validly answered (used to gate Next). */
+export function canAdvancePage(
+  question: DecisionRequestQuestion,
+  qi: number,
+  state: DecisionRequestState,
+): boolean {
+  if (question.type === "freetext") return (state.freetextValues[qi] ?? "").trim().length > 0;
+  if (question.type === "exclusive") {
+    const sel = state.singleSelected[qi];
+    if (!sel) return false;
+    if (sel === "__other__") return (state.otherValues[qi] ?? "").trim().length > 0;
+    return true;
+  }
+  // non_exclusive
+  const sel = state.multiSelected[qi] ?? [];
+  if (sel.length === 0) return false;
+  if (sel.includes("__other__")) return (state.otherValues[qi] ?? "").trim().length > 0;
+  return true;
+}
+
+/** Normalize a raw page index into a valid 0..(len-1) index, or -1 when empty. */
+export function clampPageIndex(index: number, total: number): number {
+  if (total <= 0) return -1;
+  if (index < 0) return 0;
+  if (index >= total) return total - 1;
+  return index;
+}
+
 /** Whether a given option title is selected for a question. */
 export function isOptionSelected(q: DecisionRequestQuestion, title: string, state: DecisionRequestState, qi: number): boolean {
   if (q.type === "exclusive") return state.singleSelected[qi] === title;

@@ -269,7 +269,7 @@ export const DEFAULT_TOOL_NAMES = ["cards_read", "cards_write"];
 
 /** One-line natural-language description for each tool, used in the worktree context block. */
 const TOOL_DESCRIPTIONS: Map<string, string> = new Map([
-  ["decision_request", "decision_request(questions, context?): ALWAYS use instead of prose for architectural decisions, technology choices, or any high-stakes direction. Each option has a rich markdown description explaining tradeoffs. Supports exclusive, non_exclusive, and freetext question types."],
+  ["decision_request", "decision_request(question, context?): call ONCE PER QUESTION to build a streaming interview. ALWAYS use instead of prose for architectural decisions, technology choices, or any high-stakes direction. END YOUR TURN to present the interview. Supports exclusive, non_exclusive, and freetext question types."],
   ["spawn_agent", "spawn_agent(children): run parallel sub-agents. Each child needs self-contained instructions and tools array — no access to parent conversation. Returns JSON array of results."],
   ["fetch_url", "fetch_url(url): fetch a public URL and return its text content (HTML stripped to readable text). Use for documentation, API references, web pages."],
   ["search_internet", "search_internet(query): search the web for ranked results (title, URL, snippet). Requires search config in workspace.yaml. Follow up with fetch_url for full content."],

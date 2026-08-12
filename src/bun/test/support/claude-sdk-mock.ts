@@ -111,8 +111,12 @@ export class MockClaudeSdkAdapter implements ClaudeSdkAdapter {
             const callId = `call_${Date.now()}_${Math.random().toString(36).slice(2)}`;
             yield { type: "tool_start", name: step.toolName, arguments: JSON.stringify(step.args), callId };
             const result = await executeCommonTool(step.toolName, step.args as Record<string, unknown>, config.commonToolContext);
-            const resultText = result.type === "suspend" ? result.payload : result.text;
-            yield { type: "tool_result", name: step.toolName, result: resultText, callId, isError: false };
+            // Streaming decision_request: page results are forwarded as ephemeral
+            // events (the UI streams them) and the text is returned to the model.
+            if (result.type === "page") {
+              yield { type: "decision_request_page", payload: result.payload };
+            }
+            yield { type: "tool_result", name: step.toolName, result: result.text, callId, isError: false };
             break;
           }
 

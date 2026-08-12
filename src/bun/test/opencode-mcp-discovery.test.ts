@@ -82,7 +82,7 @@ describe("OpenCode MCP bridge — dynamic discovery tools", () => {
     };
 
     contextMap = new Map([
-      [42, { commonToolContext, executionId: 1, pendingQuestion: null, onAskUser: null }],
+      [42, { commonToolContext, executionId: 1, onPage: null }],
     ]);
 
     server = startOpenCodeMcpServer(contextMap);

@@ -30,10 +30,8 @@ Each common tool handler SHALL receive a `CommonToolContext` containing scoped s
 - **WHEN** the Claude engine executes a common tool call
 - **THEN** it passes a `CommonToolContext` with `repos.decisions` populated, `repos.notes` populated, and the interview suspension callback at `runtime.interview`
 
-### Requirement: executeCommonTool returns a typed result object
-The `executeCommonTool` function SHALL return `Promise<ToolExecutionResult>` where `ToolExecutionResult` is a discriminated union:
-- `{ type: "result"; text: string; writtenFiles?: FileDiffPayload[]; beforeFiles?: Record<string, string | null> }` for normal tool completions
-- `{ type: "suspend"; payload: string }` when the `decision_request` tool triggers execution suspension
+### Requirement: executeCommonTool returns a typed result object (page variant, suspend removed)
+The `executeCommonTool` function SHALL return `Promise<ToolExecutionResult>` where `ToolExecutionResult` is exactly the discriminated union `{ type: "result"; text: string; writtenFiles?: FileDiffPayload[]; beforeFiles?: Record<string, string | null> } | { type: "page"; text: string; payload: string }`. The `page` variant SHALL signal that a `decision_request` question was appended and the agent loop must continue. The former `suspend` variant SHALL NOT exist (user decision: "Remove suspend variant entirely") — engine-level `ask_user`/`shell_approval` suspension flows through EngineEvents, not through `ToolExecutionResult`.
 
 The `writtenFiles` field, when present, carries file diff payloads for UI visualization. The `beforeFiles` field, when present, carries the pre-mutation content of each changed file (keyed by absolute path; `null` means the file was newly created). Callers that only need text SHALL continue to use the `.text` field — the new fields are optional and backward-compatible.
 
@@ -41,9 +39,13 @@ The `writtenFiles` field, when present, carries file diff payloads for UI visual
 - **WHEN** a common tool (e.g. `create_todo`, `list_decisions`) completes successfully
 - **THEN** `executeCommonTool` resolves to `{ type: "result", text: "<json-string>" }`
 
-#### Scenario: decision_request triggers suspend type
-- **WHEN** `decision_request` is called with questions
-- **THEN** `executeCommonTool` resolves to `{ type: "suspend", payload: "<interview-payload>" }`
+#### Scenario: decision_request returns page variant
+- **WHEN** `executeCommonTool("decision_request", { question: "Pick?", type: "freetext" }, ctx)` succeeds (flat shape)
+- **THEN** the result is `{ type: "page", text, payload }` and the engine continues the loop
+
+#### Scenario: no common tool returns suspend
+- **WHEN** any common tool is executed via `executeCommonTool`
+- **THEN** the result is never `{ type: "suspend" }` (the variant does not exist in the type)
 
 #### Scenario: lsp_rename result carries writtenFiles and beforeFiles
 - **WHEN** `lsp_rename` succeeds and modifies N files
@@ -104,16 +106,17 @@ The test migration SHALL:
 - **WHEN** `executeCommonTool("reorganize_todos", { items: [{ id: 1, number: 10 }] }, commonCtx())` is called
 - **THEN** the handler processes the array without JSON.parse and returns the updated todo list
 
-### Requirement: interview_me questions array has minItems: 1 constraint
-The `interview_me` tool definition SHALL declare `minItems: 1` on the `questions` array property so that the AJV gate rejects empty arrays. The previous ad-hoc check (`questions.length === 0`) relied on runtime logic; the schema must encode this constraint so validation is schema-driven.
+### Requirement: executeCommonTool normalizes args at the choke-point
+The `executeCommonTool` function SHALL call `normalizeToolArguments(def.parameters, args)` at the top of its dispatch, before `validateToolArgs`, so string-encoded array/object arguments from models are reconciled to native values identically across all engines. The normalization SHALL be idempotent so engines that also normalize via `prepareArguments` (Pi) remain correct.
 
-#### Scenario: Empty questions array is rejected by validator
-- **WHEN** a model calls `interview_me` with `questions: []`
-- **THEN** `executeCommonTool` returns an error message indicating at least one question is required, and the interview callback is NOT invoked
+#### Scenario: String-encoded questions array reconciled before validation
+- **WHEN** `executeCommonTool` receives a `decision_request` call whose args were serialized as a JSON string by the model
+- **THEN** the args are parsed to native objects before AJV validation
+- **AND** validation passes for otherwise-valid questions
 
-#### Scenario: questions array with one item passes validation
-- **WHEN** a model calls `interview_me` with a well-formed single question
-- **THEN** `executeCommonTool` proceeds to the interview callback
+#### Scenario: All engines share the same normalization path
+- **WHEN** any engine (Pi, Cursor, Claude, Copilot, OpenCode) dispatches a common tool through `executeCommonTool`
+- **THEN** the same normalization runs for every engine before validation
 
 ### Requirement: reorganize_todos items field accepts a typed array without JSON.parse fallback
 The `reorganize_todos` handler SHALL accept `args.items` as a native array (`Array<{id: number; number: number}>`) without falling back to `JSON.parse`. After the `toToolArgs()` round-trip is removed, the SDK delivers the value as a real array; the handler SHALL cast directly to the expected type.
@@ -174,6 +177,33 @@ The `update_todo_status` tool definition's `status` property SHALL have an expli
 - **THEN** `workflow_state` and `position` are updated
 - **AND** `needs_column_prompt` is NOT modified
 - **AND** `ctx.onTransition` is NOT called
+
+### Requirement: CommonToolContext carries a per-execution decision buffer
+The `CommonToolContext.runtime` SHALL include a `decisionBuffer` field of type `DecisionQuestionBuffer`. Each engine SHALL create a fresh buffer per execution and assign it to the context before the run. The buffer SHALL expose `append(question)`, `all`, `count`, and `clear()`.
+
+#### Scenario: Context populated with fresh buffer per execution
+- **WHEN** an engine builds a `CommonToolContext` for a new execution
+- **THEN** `runtime.decisionBuffer` is a fresh empty `DecisionQuestionBuffer`
+
+#### Scenario: Pi resets buffer on cached contexts
+- **WHEN** the Pi engine reuses a cached `CommonToolContext` for a new execution
+- **THEN** it replaces/resets `runtime.decisionBuffer` before the run (mirroring the loop-detector reset)
+
+#### Scenario: Test contexts inject a fresh buffer via DI
+- **WHEN** a unit/integration test invokes `executeCommonTool("decision_request", ...)` 
+- **THEN** it SHALL inject a `CommonToolContext` whose `runtime.decisionBuffer` is a fresh `DecisionQuestionBuffer`, mirroring production engine construction — never a bare `{}` context
+
+### Requirement: Shared pure turn-end flush helper
+The system SHALL provide a pure, IO-free helper `buildDecisionRequestTerminalEvent(buffer: DecisionQuestionBuffer): EngineEvent | null` that returns the terminal `{ type: "decision_request", payload }` event when the buffer is non-empty and `null` when empty. Every engine SHALL call it immediately before emitting `done` and SHALL yield the returned terminal event instead of `done` when non-null.
+
+#### Scenario: Non-empty buffer yields terminal decision_request
+- **WHEN** `buildDecisionRequestTerminalEvent` is called with a buffer containing two questions
+- **THEN** it returns a `decision_request` event whose payload contains exactly those two questions
+- **AND** the buffer is drained/cleared as part of the engine's turn-end flush
+
+#### Scenario: Empty buffer yields null
+- **WHEN** `buildDecisionRequestTerminalEvent` is called with an empty buffer
+- **THEN** it returns `null` and the engine proceeds to emit `done` normally
 
 ### Requirement: CommonToolContext carries injected board tool executor
 `CommonToolContext` (in `src/bun/engine/types.ts`) SHALL include a `boardTools: IBoardToolExecutor` field. The `executeCommonToolText` function in `common-tools.ts` SHALL dispatch board/task tool calls via `ctx.boardTools.*` instead of directly calling the free functions from `board-tools.ts`.

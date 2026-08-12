@@ -7,6 +7,7 @@ import { DecisionRepository } from "../db/repositories/decision-repository.ts";
 import { NoteRepository } from "../db/repositories/note-repository.ts";
 import { WorkspaceRepository } from "../db/workspace-repository.ts";
 import { BoardToolExecutor } from "../workflow/tools/board-tool-executor.ts";
+import { DecisionQuestionBuffer } from "../engine/decision-buffer.ts";
 import { initDb } from "./helpers.ts";
 
 import type { CommonToolContext } from "../engine/types.ts";
@@ -31,7 +32,9 @@ beforeEach(() => {
             onCancel: () => { },
             onTaskUpdated: () => { },
         },
-        runtime: {},
+        runtime: {
+            decisionBuffer: new DecisionQuestionBuffer(),
+        },
     };
 });
 
@@ -81,31 +84,28 @@ describe("shared common tool registration", () => {
 });
 
 describe("executeCommonTool / decision_request", () => {
-    it("returns a suspend result with the structured payload", async () => {
+    it("returns a page result with the structured payload", async () => {
         const result = await executeCommonTool(
             "decision_request",
             {
                 context: "Need a decision",
-                questions: [
-                    {
-                        question: "Which option?",
-                        type: "exclusive",
-                        options: [{ title: "A", description: "Option A" }, { title: "B", description: "Option B" }],
-                    },
-                ],
+                question: "Which option?",
+                type: "exclusive",
+                options: [{ title: "A", description: "Option A" }, { title: "B", description: "Option B" }],
             },
             baseContext,
         );
 
-        expect(result.type).toBe("suspend");
-        if (result.type === "suspend") {
+        expect(result.type).toBe("page");
+        if (result.type === "page") {
             const parsed = JSON.parse(result.payload);
             expect(parsed.context).toBe("Need a decision");
-            expect(Array.isArray(parsed.questions)).toBe(true);
+            expect(parsed.question).toBe("Which option?");
+            expect(parsed.type).toBe("exclusive");
         }
     });
 
-    it("returns a result error when questions is missing", async () => {
+    it("returns a result error when question is missing", async () => {
         const result = await executeCommonTool(
             "decision_request",
             {},
@@ -114,7 +114,7 @@ describe("executeCommonTool / decision_request", () => {
 
         expect(result.type).toBe("result");
         if (result.type === "result") {
-            expect(result.text).toContain("Error: field 'questions' is required");
+            expect(result.text).toContain("Error: field 'question' is required");
         }
     });
 });

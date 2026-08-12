@@ -6,6 +6,8 @@ import type { ToolMetadata } from "./events.ts";
 import { DefaultFileStateCache } from "./file-state-cache.ts";
 import { taskLspRegistry } from "../../lsp/task-registry.ts";
 import { getConfig } from "../../config/index.ts";
+import { DecisionQuestionBuffer } from "../decision-buffer.ts";
+import { buildDecisionRequestTerminalEvent } from "../decision-request-terminal-event.ts";
 import { readdirSync, existsSync, readFileSync } from "fs";
 import { join, extname, basename } from "path";
 import { TodoRepository } from "../../db/todos.ts";
@@ -90,6 +92,7 @@ export class ClaudeEngine implements ExecutionEngine {
           worktreePath: workingDirectory,
           mcpRegistry: params.mcpRegistry ?? undefined,
           mcpEnabledTools: params.enabledMcpTools,
+          decisionBuffer: new DecisionQuestionBuffer(),
         },
       },
       waitForResume: (request) => this.waitForResume(executionId, request, signal),
