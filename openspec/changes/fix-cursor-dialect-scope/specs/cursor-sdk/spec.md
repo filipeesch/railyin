@@ -1,3 +1,24 @@
+## ADDED Requirements
+
+### Requirement: Cursor SDK pinned to the latest stable 1.0.x
+The system SHALL resolve `@cursor/sdk` to the latest stable version within the declared `^1.0.25` range (1.0.27 at proposal time) via a lockfile refresh, and SHALL remain compatible with the 1.0.x API surface the engine uses: `Agent.create`/`Agent.resume`, `Cursor.configure({ local: { useHttp1ForAgent } })`, `AgentBusyError`, and `SDKCustomTool`.
+
+#### Scenario: Lockfile resolves to the latest stable
+- **WHEN** dependencies are installed after this change
+- **THEN** `bun.lock` resolves `@cursor/sdk` to `1.0.27` (the latest stable at proposal time)
+- **AND** the SDK-touching modules (`options.ts`, `recovery.ts`, `resume.ts`, `inprocess-adapter.ts`, `translate-events.ts`, `model-context.ts`) typecheck against the updated package without changes
+
+#### Scenario: Used API surface is preserved
+- **WHEN** the engine runs after the upgrade
+- **THEN** `Agent.create`/`Agent.resume` accept the same `AgentOptions`/`LocalAgentOptions` shapes (including `local.settingSources` and `local.customTools`)
+- **AND** `AgentBusyError` remains importable and instanceof-checkable for the `force:true` recovery path
+- **AND** `Cursor.configure` still accepts `{ local: { useHttp1ForAgent: true } }`
+- **AND** `SDKCustomTool` still accepts the `{ description, inputSchema, execute }` shape used by `buildCursorTools`
+
+#### Scenario: Regression verification gate
+- **WHEN** the upgrade is applied
+- **THEN** the Cursor engine test suites (engine, adapter, recovery, options, RPC scenarios) pass against `1.0.27` before any other task in this change proceeds
+
 ## MODIFIED Requirements
 
 ### Requirement: Slash command resolution via the shared SlashCommandResolver

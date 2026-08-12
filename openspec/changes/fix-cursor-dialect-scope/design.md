@@ -57,6 +57,15 @@ Add an optional method to `FileSystemSkillResolver` (not the `SkillResolver` int
 - Remove `CursorSdkAdapter.listCommands()` + its no-op `InProcessCursorAdapter` stub — the engine lists commands via the dialect, never the adapter.
 - Verify `PiDialectResolver.resolvePrompt()` has no production callers (executor resolves upstream); remove if confirmed dead.
 
+### D7 — Upgrade `@cursor/sdk` to latest stable 1.0.27
+The lockfile currently pins `@cursor/sdk@1.0.25` while the declared range is `^1.0.25` and the latest stable is `1.0.27` (2026-08-06). This change refreshes the lockfile to `1.0.27` and verifies the engine against the updated SDK.
+
+**Why now**: the in-process adapter targets the 1.0.x API surface (`Agent.create`/`Agent.resume`, `Cursor.configure({ local: { useHttp1ForAgent } })`, `AgentBusyError`, `SDKCustomTool`) and a prior transport bug was fixed between 1.0.18–1.0.23; staying on the latest stable within the same minor line keeps those fixes and any subsequent patches without a breaking migration. The upgrade is also the moment to re-check whether the SDK gained native skills/commands support (relevant to D2's long-term simplification, though the lazy-tool implementation proceeds regardless).
+
+**Scope of the upgrade task**: `bun update @cursor/sdk` (or equivalent lockfile refresh), typecheck the SDK-touching modules (`options.ts`, `recovery.ts`, `resume.ts`, `inprocess-adapter.ts`, `translate-events.ts`, `model-context.ts`), and run the Cursor engine test suites. No code changes are expected unless the 1.0.26/1.0.27 delta altered a used API — the implementation task verifies this from the bundled types.
+
+**Alternative considered**: stay on 1.0.25. Rejected — the range already permits 1.0.27 and there is no reason to run an older patch when the rest of this change touches the same engine.
+
 ## Risks / Trade-offs
 
 **[Risk] Home-scope skills/commands surface in every Cursor task** → Accepted per D1; dedup keeps project/worktree precedence. Skills are lazy-loaded (D2), so only the bounded listing (~10–20 KB for 119 skills) enters the prompt.
@@ -67,15 +76,20 @@ Add an optional method to `FileSystemSkillResolver` (not the `SkillResolver` int
 
 **[Risk] `_run()` reordering (paths → resolver → tools → prefix) changes tool/prefix construction order** → Pure internal sequencing; no observable contract change. Covered by existing engine tests (SpyDialect pattern) and RPC scenarios; full test strategy deferred.
 
+**[Risk] SDK 1.0.26/1.0.27 delta is not publicly documented** → The 1.0.x API surface the engine uses is stable across 1.0.25–1.0.27; the upgrade task verifies the bundled types and runs the engine test suites before anything else. If a used API changed, the task surfaces it as a type error before any dialect work proceeds.
+
+**[Risk] SDK upgrade could theoretically alter native rules/skills behavior** → `settingSources: ["project"]` is a documented stable option; behavior changes would surface in engine tests. The lazy skill tool (D2) does not depend on SDK-native skills, so the two workstreams are independent.
+
 ## Migration Plan
 
 No data migration. No API changes. Changes are internal to the engine/dialect layer:
 
-1. Extend `CursorDialect` (home scope)
-2. Add fail-soft to `SlashCommandResolver`
-3. Extend `FileSystemSkillResolver` (`listWithDescriptions`)
-4. Add `skill` tool to `buildCursorTools`; reorder `_run()`; replace prepend with listing
-5. Cleanup dead adapter/listCommands and dead `PiDialectResolver.resolvePrompt`
+1. Refresh `@cursor/sdk` lockfile to `1.0.27` and verify the engine's API surface
+2. Extend `CursorDialect` (home scope)
+3. Add fail-soft to `SlashCommandResolver`
+4. Extend `FileSystemSkillResolver` (`listWithDescriptions`)
+5. Add `skill` tool to `buildCursorTools`; reorder `_run()`; replace prepend with listing
+6. Cleanup dead adapter/listCommands and dead `PiDialectResolver.resolvePrompt`
 
 Rollback: revert the touched files. No persisted state is affected.
 

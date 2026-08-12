@@ -14,6 +14,7 @@ The Cursor engine is wired to `CursorDialect` (constructor default, registry, ex
 - **CHANGE**: Cursor skill delivery switches from "prepend every `SKILL.md` into the prompt prefix" to the Pi pattern: a compact `<available_skills>` index (name + description) in the prefix plus a lazy `skill` `SDKCustomTool` that loads a `SKILL.md` on demand. This makes the 119 home skills usable without token blowup.
 - **FIX**: `CursorEngine._run()` uses the DB-derived `worktreePath` for `getSkillPaths()` (fallback `workingDirectory`), consistent with `listCommands()`; the duplicated task→path DB lookup is extracted into one helper used by both.
 - **CLEANUP**: remove the dead `CursorSdkAdapter.listCommands()` no-op stub; verify and remove unused `PiDialectResolver.resolvePrompt()` if confirmed dead.
+- **UPGRADE**: `@cursor/sdk` lockfile refreshed to the latest stable `1.0.27` (currently pinned at `1.0.25`). The declared `^1.0.25` range already permits `1.0.27`, so this is a lockfile refresh plus regression verification against the engine's existing 1.0.x API surface — not a breaking migration.
 
 ## Capabilities
 
@@ -27,4 +28,5 @@ The Cursor engine is wired to `CursorDialect` (constructor default, registry, ex
 - **Files changed**: `src/bun/engine/dialects/cursor-dialect.ts`, `src/bun/engine/execution/slash-command-resolver.ts`, `src/bun/engine/cursor/engine.ts`, `src/bun/engine/cursor/tools.ts`, `src/bun/engine/pi/skill-resolver.ts` (small extension), `src/bun/engine/cursor/adapter.ts` (interface cleanup)
 - **No API or schema changes** — purely engine-internal behavior
 - **No breaking changes** — additive behavior + one error-path relaxation (throw → pass-through)
+- **Dependencies**: `@cursor/sdk` `1.0.27` (bun.lock refresh; API surface unchanged — `Agent.create`/`Agent.resume`, `Cursor.configure`, `AgentBusyError`, `SDKCustomTool`)
 - **Documented follow-ups (not implemented here)**: Copilot engine `.github/skills/` injection parity; Pi engine default dialect; full `worktreePath` vs `workingDirectory` semantic cleanup across executors; OpenSpec spec refresh
