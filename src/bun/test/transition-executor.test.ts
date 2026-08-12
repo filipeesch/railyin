@@ -18,7 +18,6 @@ import { BoardToolExecutor } from "../workflow/tools/board-tool-executor.ts";
 import { ExecutionParamsBuilder } from "../engine/execution/execution-params-builder.ts";
 import { IWorkingDirectoryResolver } from "../engine/execution/working-directory-resolver.ts";
 import { StreamProcessor } from "../engine/stream/stream-processor.ts";
-import type { RawMessageItem } from "../engine/stream/types.ts";
 import type { ExecutionEngine, ExecutionParams, EngineEvent, EngineResumeInput, RawModelMessage } from "../engine/types.ts";
 import type { TaskRow } from "../db/row-types.ts";
 import { initDb, seedProjectAndTask, setupTestConfig, makeTestRegistry, makeTestRegistryWith } from "./helpers.ts";

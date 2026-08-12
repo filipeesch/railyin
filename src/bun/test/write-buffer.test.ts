@@ -22,7 +22,7 @@ describe("WriteBuffer — WB-1: wakeup loop on maxBatch (no sync flush)", () => 
 
   it("wakes the loop to flush soon when maxBatch is reached", async () => {
     const flushed: number[][] = [];
-    const { waitFn, tick } = createMockWait();
+    const { waitFn, tick: _tick } = createMockWait();
     const buf = new WriteBuffer<number>({
       maxBatch: 3,
       flushFn: (items) => flushed.push([...items]),
@@ -212,7 +212,7 @@ describe("WriteBuffer — WB-5: error handling", () => {
     let failNext = true;
     const buf = new WriteBuffer<number>({
       maxBatch: 100,
-      flushFn: (items) => {
+      flushFn: () => {
         if (failNext) {
           failNext = false;
           throw new Error("constraint violation");

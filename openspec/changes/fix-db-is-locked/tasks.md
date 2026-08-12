@@ -54,3 +54,9 @@
 - [x] 9.4 Strip `model_raw_messages` + `logs` from `test/helpers.ts`
 - [x] 9.5 Update `logger.test.ts` (console-based realLogger)
 - [x] 9.6 Extend `write-buffer.test.ts` (retry/drop/never-die scenarios)
+
+## 10. Verification pass (openspec-verify)
+- [x] 10.1 Wrap fatal-error switch-path status writes in best-effort (previously only catch/finally/abort were wrapped — a busy error there could mask the original engine error)
+- [x] 10.2 Add SP-5b test: SQLITE_BUSY during fatal-error handling does not mask the original error
+- [x] 10.3 Add retention test: one phase failing does not abort the job
+- [x] 10.4 Remove unused imports/symbols introduced by the change (RawMessageItem imports, `tick`, `items`)

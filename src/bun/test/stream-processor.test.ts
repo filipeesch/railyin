@@ -1,7 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { initDb, seedProjectAndTask, setupTestConfig } from "./helpers.ts";
 import { StreamProcessor } from "../engine/stream/stream-processor.ts";
-import type { RawMessageItem } from "../engine/stream/types.ts";
 import type { ExecutionEngine, ExecutionParams, EngineEvent, EngineResumeInput } from "../engine/types.ts";
 import type { ConversationMessage } from "../../shared/rpc-types.ts";
 import type { Database } from "bun:sqlite";
@@ -195,6 +194,56 @@ describe("StreamProcessor", () => {
       "SELECT execution_state FROM tasks WHERE id = ?",
     ).get(taskId);
     expect(taskRow!.execution_state).toBe("failed");
+  });
+
+  it("SP-5b: SQLITE_BUSY during fatal-error handling does not mask the original error", async () => {
+    class FatalErrorEngine implements ExecutionEngine {
+      readonly type = "scripted";
+      async *execute(_params: ExecutionParams): AsyncIterable<EngineEvent> {
+        yield { type: "error", message: "boom", fatal: true };
+      }
+      async resume(_executionId: number, _input: EngineResumeInput): Promise<void> {}
+      cancel(_executionId: number): void {}
+      async listModels() { return []; }
+      async listCommands() { return []; }
+    }
+
+    const reportedErrors: string[] = [];
+    let doneEvents = 0;
+    const sp = new StreamProcessor(
+      db,
+      fakeRawBuffer,
+      noop as never,
+      (_tid, _cid, _eid, message: string) => { reportedErrors.push(message); },
+      noop as never,
+      noop as never,
+      () => {},
+    );
+    sp.setOnStreamEvent((evt) => {
+      if (evt.type === "done") doneEvents++;
+    });
+
+    // Make every fatal-error status UPDATE throw SQLITE_BUSY so the best-effort
+    // path is exercised (writes are logged and swallowed, never rethrown).
+    const originalRun = db.run.bind(db);
+    db.run = (...args: Parameters<typeof db.run>) => {
+      const sql = args[0] as string;
+      if (sql.includes("execution_state = 'failed'") || sql.includes("SET status = 'failed'")) {
+        const err = new Error("database is locked") as Error & { code: string };
+        err.code = "SQLITE_BUSY";
+        throw err;
+      }
+      return originalRun(...args);
+    };
+    try {
+      await sp.consume(taskId, conversationId, executionId, new FatalErrorEngine().execute(makeParams(taskId, conversationId, executionId)));
+    } finally {
+      db.run = originalRun;
+    }
+
+    // The original engine error is delivered despite the busy failures
+    expect(reportedErrors).toEqual(["boom"]);
+    expect(doneEvents).toBe(1);
   });
 
   it("SP-6: onNewMessage called once with real DB id after assistant message flush", async () => {

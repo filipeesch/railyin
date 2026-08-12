@@ -420,14 +420,14 @@ export class StreamProcessor {
           case "error": {
             if (event.fatal) {
               if (taskId != null) {
-                db.run("UPDATE tasks SET execution_state = 'failed' WHERE id = ?", [taskId]);
+                this.bestEffort("error: mark task failed", () => db.run("UPDATE tasks SET execution_state = 'failed' WHERE id = ?", [taskId]));
               } else {
-                db.run("UPDATE chat_sessions SET status = 'idle' WHERE conversation_id = ?", [conversationId]);
+                this.bestEffort("error: mark chat session idle", () => db.run("UPDATE chat_sessions SET status = 'idle' WHERE conversation_id = ?", [conversationId]));
               }
-              db.run(
+              this.bestEffort("error: mark execution failed", () => db.run(
                 "UPDATE executions SET status = 'failed', finished_at = datetime('now'), details = ? WHERE id = ?",
                 [event.message, executionId],
-              );
+              ));
               this.onError(taskId, conversationId, executionId, event.message);
               this.abortControllers.get(executionId)?.abort();
               this.onStreamEvent?.({ taskId, conversationId, executionId, seq: 0, blockId: `${executionId}-done`, type: "done", content: "", metadata: null, parentBlockId: null, done: true, subagentId: null });

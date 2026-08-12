@@ -102,6 +102,38 @@ describe("RetentionJob — RJ-1: stream_events pruning", () => {
     db.run = originalRun;
     expect(referenced.some((sql) => sql.includes("model_raw_messages"))).toBe(false);
   });
+
+  it("one phase failing does not abort the job", () => {
+    const { sessionId } = seedChatSession(db);
+    db.run(
+      "UPDATE chat_sessions SET status = 'archived', archived_at = datetime('now', '-8 days') WHERE id = ?",
+      [sessionId],
+    );
+    expect(countChatSessions(db)).toBe(1);
+
+    // The first stream_events DELETE throws SQLITE_BUSY — that phase is
+    // aborted, but the archived-chat cleanup phase still runs.
+    const originalRun = db.run.bind(db);
+    let streamDeleteCalls = 0;
+    db.run = (...args: Parameters<typeof db.run>) => {
+      const sql = args[0] as string;
+      if (sql.includes("FROM stream_events")) {
+        streamDeleteCalls++;
+        if (streamDeleteCalls === 1) {
+          const err = new Error("database is locked") as Error & { code: string };
+          err.code = "SQLITE_BUSY";
+          throw err;
+        }
+      }
+      return originalRun(...args);
+    };
+
+    const job = new RetentionJob(db);
+    job.runNow();
+
+    db.run = originalRun;
+    expect(countChatSessions(db)).toBe(0); // second phase still executed
+  });
 });
 
 // ─── RJ-2: start() defers the first run; loop is tick-driven ─────────────────
