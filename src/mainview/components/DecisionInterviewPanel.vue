@@ -1,8 +1,11 @@
 <template>
   <div v-if="showPanel" class="decision-interview-panel">
     <div class="decision-interview-panel__header">
-      <span class="decision-interview-panel__title">Questions from the agent</span>
-      <button class="decision-interview-panel__dismiss" title="Dismiss" @click="dismiss">✕</button>
+      <div class="decision-interview-panel__heading">
+        <span class="decision-interview-panel__icon" aria-hidden="true">💬</span>
+        <span class="decision-interview-panel__title">Questions from the agent</span>
+      </div>
+      <button class="decision-interview-panel__dismiss" title="Dismiss" aria-label="Dismiss" @click="dismiss">✕</button>
     </div>
     <DecisionRequest
       :questions="questions"
@@ -170,15 +173,35 @@ async function onSubmit(payload: {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+  padding: 6px 10px;
   margin-bottom: 6px;
+  background: var(--p-surface-100, #f1f5f9);
+  border: 1px solid var(--p-surface-200, #e2e8f0);
+  border-radius: 6px;
+}
+
+.decision-interview-panel__heading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.decision-interview-panel__icon {
+  font-size: 0.85rem;
+  line-height: 1;
+  flex-shrink: 0;
 }
 
 .decision-interview-panel__title {
-  font-size: 0.72rem;
-  font-weight: 600;
+  font-size: 0.78rem;
+  font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  color: var(--p-surface-400, #94a3b8);
+  color: var(--p-surface-600, #475569);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .decision-interview-panel__dismiss {
@@ -195,5 +218,25 @@ async function onSubmit(payload: {
 .decision-interview-panel__dismiss:hover {
   background: var(--p-surface-200, #e2e8f0);
   color: var(--p-surface-700, #334155);
+}
+</style>
+
+<style>
+html.dark-mode .decision-interview-panel__header {
+  background: var(--p-surface-800, #1e293b);
+  border-color: var(--p-surface-600, #475569);
+}
+
+html.dark-mode .decision-interview-panel__title {
+  color: var(--p-surface-300, #cbd5e1);
+}
+
+html.dark-mode .decision-interview-panel__dismiss {
+  color: var(--p-surface-400, #94a3b8);
+}
+
+html.dark-mode .decision-interview-panel__dismiss:hover {
+  background: var(--p-surface-700, #334155);
+  color: var(--p-surface-200, #e2e8f0);
 }
 </style>
