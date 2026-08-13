@@ -1,4 +1,7 @@
-## ADDED Requirements
+## Purpose
+Defines how the migration runner discovers, validates, and applies `src/bun/db/migrations/*.ts` files, including checksum verification and the schema migrations introduced by the db-lock resilience change. Pre-migration backups are owned by `StartupMaintenance` (see `db-startup-maintenance`), not the runner.
+
+## Requirements
 
 ### Requirement: File-based migration discovery
 The runner SHALL discover all migration files by globbing `src/bun/db/migrations/*.ts`, excluding `runner.ts` itself. Files SHALL be sorted alphabetically by filename to determine application order.
@@ -10,8 +13,6 @@ The runner SHALL discover all migration files by globbing `src/bun/db/migrations
 #### Scenario: Excludes runner.ts from migrations
 - **WHEN** `runner.ts` is present in the migrations directory
 - **THEN** it is not treated as a migration and is not imported as one
-
----
 
 ### Requirement: Migration file contract
 Each migration file SHALL export:
@@ -27,16 +28,12 @@ Each migration file SHALL export:
 - **WHEN** a migration file exports `managesTransaction = true`
 - **THEN** the runner calls `up(db)` directly without wrapping in `db.transaction()`, and the migration file itself is responsible for committing and recording in `schema_migrations`
 
----
-
 ### Requirement: Startup duplicate-ID validation
 The runner SHALL validate that no two migration files export the same `id`. If duplicates are detected, the runner SHALL throw before applying any migration.
 
 #### Scenario: Duplicate IDs cause hard failure
 - **WHEN** two migration files export the same `id` value
 - **THEN** `runMigrations()` throws an error identifying the duplicate ID and neither file is applied
-
----
 
 ### Requirement: Startup sort-order validation
 The runner SHALL validate that the alphabetical sort order of filenames corresponds to a valid migration sequence — specifically, that the sorted filename list matches the sorted ID list. If a file would apply before a migration with a lexicographically smaller ID, the runner SHALL throw.
@@ -48,8 +45,6 @@ The runner SHALL validate that the alphabetical sort order of filenames correspo
 #### Scenario: Mismatched filename and ID order causes failure
 - **WHEN** a file named `020_foo.ts` exports `id = '015_foo'` (the ID would sort before its position)
 - **THEN** `runMigrations()` throws identifying the offending file
-
----
 
 ### Requirement: Checksum storage and validation
 The `schema_migrations` table SHALL have a `checksum TEXT` column (nullable). When the runner first applies a migration, it SHALL compute `sha1(up.toString())` and store it in `checksum`. On subsequent boots, for rows where `checksum IS NOT NULL`, the runner SHALL recompute the hash and throw if it differs from the stored value.
@@ -74,25 +69,6 @@ The `schema_migrations` table SHALL have a `checksum TEXT` column (nullable). Wh
 - **WHEN** the runner has processed all pending migrations and some already-applied rows still have `checksum IS NULL`
 - **THEN** the runner backfills the checksum for each such row that has a corresponding migration file
 
----
-
-### Requirement: Automatic DB backup before migration
-Before applying any pending migrations, the runner SHALL copy the database file to `<dbPath>.backup`. The backup SHALL be skipped when `RAILYN_DB` is `:memory:`.
-
-#### Scenario: Backup created when pending migrations exist
-- **WHEN** there are unapplied migrations and the DB is a file
-- **THEN** the runner creates `<dbPath>.backup` before applying the first migration
-
-#### Scenario: Backup skipped for in-memory DB
-- **WHEN** `RAILYN_DB` is `:memory:`
-- **THEN** no backup file is created
-
-#### Scenario: Backup skipped when no pending migrations
-- **WHEN** all migrations are already applied
-- **THEN** no backup file is created or overwritten
-
----
-
 ### Requirement: Bootstrap checksum column
 The runner SHALL add the `checksum TEXT` column to `schema_migrations` if it does not already exist, as part of its bootstrap step (before any migration logic runs).
 
@@ -103,3 +79,19 @@ The runner SHALL add the `checksum TEXT` column to `schema_migrations` if it doe
 #### Scenario: checksum column presence is idempotent
 - **WHEN** `schema_migrations` already has a `checksum` column
 - **THEN** the bootstrap step completes without error
+
+### Requirement: Migrations drop model_raw_messages and logs, index stream_events
+New migrations SHALL:
+- `055_drop_model_raw_messages`: `DROP TABLE IF EXISTS model_raw_messages` (indexes dropped with the table).
+- `056_drop_logs_table`: `DROP TABLE IF EXISTS logs`.
+- `057_stream_events_created_at_index`: `CREATE INDEX IF NOT EXISTS idx_stream_events_created_at ON stream_events(created_at)`.
+
+Each SHALL follow the standard migration contract (exported `id` + `up(db)`), be wrapped by the runner in a transaction, and record its own `schema_migrations` row.
+
+#### Scenario: Fresh DB applies drops in order
+- **WHEN** a fresh database runs all migrations
+- **THEN** `021_model_raw_messages` creates the table, `027_nullable_executions` may rebuild it, and `055` drops it; `003_logs` creates the logs table and `056` drops it; `057` creates the stream_events index — with no dangling references
+
+#### Scenario: Existing DB with the tables applies cleanly
+- **WHEN** an existing database with `model_raw_messages` and `logs` runs the new migrations
+- **THEN** both tables are dropped and the stream_events index is created without error

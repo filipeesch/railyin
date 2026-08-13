@@ -288,6 +288,66 @@ test.describe("T-D — multi-question batch (paginated)", () => {
         await page.locator(".decision-interview-panel__dismiss").click();
         await expect(page.locator(".decision-interview-panel")).not.toBeVisible();
     });
+
+    test("T-D5: resize handle adjusts panel height; double-click resets it", async ({ page, api, task }) => {
+        const msg = makeInterviewPrompt(task.id, { questions: [exclusiveQuestion] });
+        api.handle("conversations.getMessages", () => messagePage([msg]));
+
+        await page.goto("/");
+        await openTaskDrawer(page, task.id);
+
+        const panel = page.locator(".decision-interview-panel");
+        const body = page.locator(".decision-interview-panel__body");
+        await expect(panel).toBeVisible();
+
+        const initialHeight = await body.evaluate((el) => el.getBoundingClientRect().height);
+
+        // Drag the resize handle down to enlarge the panel. The drawer may extend
+        // past the right viewport edge, so clamp the click X into the visible area.
+        const handle = page.locator(".decision-interview-panel__resize");
+        const handleBox = await handle.boundingBox();
+        const startX = Math.min(handleBox!.x + handleBox!.width / 2, 1270);
+        const startY = handleBox!.y + handleBox!.height / 2;
+        await page.mouse.move(startX, startY);
+        await page.mouse.down();
+        await page.mouse.move(startX, startY + 120, { steps: 5 });
+        await page.mouse.up();
+
+        const resizedHeight = await body.evaluate((el) => el.getBoundingClientRect().height);
+        expect(resizedHeight).toBeGreaterThan(initialHeight);
+
+        // Double-click resets to the default height.
+        await handle.dblclick({ position: { x: Math.min(handleBox!.width / 2, 1270 - handleBox!.x), y: handleBox!.height / 2 } });
+        const resetHeight = await body.evaluate((el) => el.getBoundingClientRect().height);
+        expect(resetHeight).toBeLessThan(resizedHeight);
+    });
+
+    test("T-D6: oversized interview body scrolls so the footer stays reachable", async ({ page, api, task }) => {
+        // A single tall question (long context + notes textarea) overflows the
+        // fixed panel body height, so the body must scroll.
+        const tallQuestion = {
+            question: "Describe your complete architecture in detail?",
+            type: "freetext" as const,
+            context: Array.from({ length: 30 }, (_, i) => `Context paragraph ${i + 1} with some explanatory detail.`).join(" "),
+        };
+        const msg = makeInterviewPrompt(task.id, { questions: [tallQuestion] });
+        api.handle("conversations.getMessages", () => messagePage([msg]));
+
+        await page.goto("/");
+        await openTaskDrawer(page, task.id);
+
+        const body = page.locator(".decision-interview-panel__body");
+        await expect(body).toBeVisible();
+
+        // The body is scrollable (scrollHeight > clientHeight).
+        await expect
+            .poll(async () => body.evaluate((el) => el.scrollHeight > el.clientHeight))
+            .toBe(true);
+
+        // Scroll to the bottom reveals the Submit button.
+        await body.evaluate((el) => { el.scrollTop = el.scrollHeight; });
+        await expect(page.locator(".interview__primary")).toBeVisible();
+    });
 });
 
 // ─── T-E: Submit sends message to the task ───────────────────────────────────

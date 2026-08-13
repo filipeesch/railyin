@@ -39,8 +39,7 @@ import { HumanTurnExecutor } from "./execution/human-turn-executor.ts";
 import { RetryExecutor } from "./execution/retry-executor.ts";
 import { CodeReviewExecutor } from "./execution/code-review-executor.ts";
 import { ChatExecutor } from "./execution/chat-executor.ts";
-import { createRawMessageBuffer } from "./stream/raw-message-buffer.ts";
-import type { RawMessageItem } from "./stream/raw-message-buffer.ts";
+import type { RawMessageItem } from "./stream/types.ts";
 import { CrossEngineContextInjector } from "../conversation/cross-engine-context.ts";
 import { DecisionContextInjector } from "../conversation/decision-context-injector.ts";
 import { StageInstructionsInjector } from "../conversation/stage-instructions-injector.ts";
@@ -89,13 +88,10 @@ export class Orchestrator implements ExecutionCoordinator {
     this.onNewMessage = onNewMessage;
     this.wsRepo = wsRepo;
 
-    const rawBuffer = createRawMessageBuffer(db, { onEnqueue: onRawMessageEnqueued });
-    rawBuffer.start();
-
     const boardTools = new BoardToolExecutor(db, wsRepo, worktreeManager);
 
     this.streamProcessor = new StreamProcessor(
-      db, rawBuffer, () => {}, onError, onTaskUpdated, onNewMessage,
+      db, onRawMessageEnqueued ?? (() => {}), () => {}, onError, onTaskUpdated, onNewMessage,
       (tid, state) => void this.transitionExecutor.execute(tid, state),
       (tid, msg) => void this.humanTurnExecutor.execute(tid, msg),
     );

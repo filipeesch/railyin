@@ -1,7 +1,8 @@
 import { runMigrations } from "./db/migrations/runner.ts";
 import { seedDefaultWorkspace } from "./db/seed.ts";
-import { getDb } from "./db/index.ts";
-import { loadConfig, getDataDir, getWorkspaceRegistry, markWorkflowDirSeeded, type EngineConfig, type EngineEntry } from "./config/index.ts";
+import { getDb, getDbPath } from "./db/index.ts";
+import { StartupMaintenance } from "./db/startup-maintenance.ts";
+import { loadConfig, getWorkspaceRegistry, markWorkflowDirSeeded, type EngineConfig, type EngineEntry } from "./config/index.ts";
 import { seedWorkflows } from "./config/workflows.ts";
 import { getTmpDir } from "./utils/platform.ts";
 import * as path from "path";
@@ -60,6 +61,15 @@ import type { OnTaskUpdated, OnNewMessage } from "./engine/types.ts";
 // ─── File logging (canary/production: no terminal to read) ───────────────────
 setupFileLogging();
 
+// ─── Boot phase timing ────────────────────────────────────────────────────────
+// Marks each startup phase so boot latency is attributable from the log
+// (module graph load, shell env, migrations, config, engines, retention, bind).
+const _bootStart = Date.now();
+function markBoot(label: string): void {
+  console.log(`[boot] ${label} ${Date.now() - _bootStart}ms`);
+}
+markBoot("bootstrap start");
+
 // ─── Global error handlers ────────────────────────────────────────────────────
 process.on("unhandledRejection", (reason) => {
   console.error("[railyin] Unhandled rejection:", reason instanceof Error ? reason.stack ?? reason.message : reason);
@@ -81,12 +91,25 @@ if (argv.includes("--memory-db")) process.env.RAILYN_DB = ":memory:";
 
 // 0. Resolve shell environment at startup (captures user PATH from login shell)
 await getResolvedShellEnv();
+markBoot("shell env resolved");
 
-// 1. Run DB migrations, sync config-backed rows, then seed any test-only defaults.
+// 1. Startup DB maintenance: a consistent `VACUUM INTO` backup BEFORE
+//    migrations (true pre-change rollback point), then migrations, then
+//    compaction AFTER migrations so free pages left by deleted conversations
+//    AND by the migrations themselves are reclaimed. Best-effort — a locked
+//    DB (another instance) logs a warning and boot continues.
+const db = getDb();
+const startupMaintenance = new StartupMaintenance(db, getDbPath());
+startupMaintenance.backup();
+markBoot("db backup done");
+
+// 1a. Run DB migrations, sync config-backed rows, then seed any test-only defaults.
 await runMigrations();
 seedDefaultWorkspace();
+markBoot("migrations done");
 
-const db = getDb();
+startupMaintenance.compact();
+markBoot("db compact done");
 const modelSettingsRepo = new SqliteModelSettingsRepository(db);
 const wsRepo = new WorkspaceRepository(db);
 
@@ -107,6 +130,7 @@ for (const entry of getWorkspaceRegistry()) {
   seedWorkflows(workflowsDir);
   markWorkflowDirSeeded(workflowsDir);
 }
+markBoot("config loaded");
 
 // 2b. Start global MCP registry (non-blocking)
 // The redirect URI's port is only known once the HTTP server below finishes
@@ -223,6 +247,7 @@ if (injectedEngine) {
   );
   engineRegistry = new EngineRegistry(instanceMap, getWorkspaceConfig);
 }
+markBoot("engines built");
 
 const orchestrator: Orchestrator | null = !configError
   ? new Orchestrator(db, engineRegistry, notifier.onError.bind(notifier), notifier.notifyTaskUpdated.bind(notifier), notifier.notifyNewMessage.bind(notifier), wsRepo, streamProc.onRawMessageEnqueued.bind(streamProc), worktreeManager, modelSettingsRepo, registryPool)
@@ -239,7 +264,9 @@ streamProc.start();
 // ─── Start retention job ──────────────────────────────────────────────────────
 const { RetentionJob } = await import("./jobs/retention-job.ts");
 const retentionJob = new RetentionJob(db);
+// First cleanup is deferred (default 5 min) so boot never blocks on it.
 retentionJob.start();
+markBoot("retention scheduled");
 
 // ─── Bun HTTP + WebSocket server ──────────────────────────────────────────────
 
@@ -345,6 +372,7 @@ const server = Bun.serve({
 
 await Bun.write(path.join(getTmpDir(), "railyn.port"), String(server.port)).catch(() => { });
 boundPort = server.port ?? serverPort;
+markBoot("server listening");
 console.log(`Railyn server listening on http://127.0.0.1:${server.port}`);
 
 // ─── Graceful shutdown ────────────────────────────────────────────────────────

@@ -73,7 +73,7 @@ export class StubStreamProcessor extends StreamProcessor {
 
   constructor() {
     const _db = initDb();
-    const _rawBuf = { enqueue() {}, flush: async () => {} } as unknown as import("../pipeline/write-buffer.ts").WriteBuffer<import("../engine/stream/raw-message-buffer.ts").RawMessageItem>;
+    const _rawBuf = () => {};
     super(_db, _rawBuf, () => {}, () => {}, () => {}, () => {});
   }
 
@@ -81,7 +81,7 @@ export class StubStreamProcessor extends StreamProcessor {
     return new AbortController().signal;
   }
 
-  override makePersistCallback(_taskId: number | null, _conversationId: number, _executionId: number): (raw: RawModelMessage) => void {
+  override makeRawMessageCallback(_taskId: number | null, _conversationId: number, _executionId: number): (raw: RawModelMessage) => void {
     return (_raw) => {};
   }
 

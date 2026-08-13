@@ -7,23 +7,19 @@ Manages the lifecycle of AI engine stream consumption, write buffer coordination
 The `StreamProcessor` class SHALL accept a `Database` instance as a constructor argument. It SHALL NOT call `getDb()` internally.
 
 #### Scenario: Database injected at construction
-- **WHEN** `new StreamProcessor(db, convBuffer, rawBuffer, ...)` is called
+- **WHEN** `new StreamProcessor(db, onRawMessage, ...)` is called
 - **THEN** the instance uses the provided `Database` for all queries and does not import or call `getDb()`
 
-### Requirement: StreamProcessor flushes all write buffers at tool boundaries
-The `StreamProcessor.consume()` loop SHALL call `flush()` on `ConvMessageBuffer`, `RawMessageBuffer`, and `WriteBuffer<PersistedStreamEvent>` at tool boundaries and on execution end.
+### Requirement: Raw message persistence removed, broadcast preserved
+The `StreamProcessor` SHALL NOT persist raw model messages to `model_raw_messages` (table dropped). The WS broadcast side-effect previously driven through the raw-message `WriteBuffer.onEnqueue` (i.e. `StreamEventProcessor.onRawMessageEnqueued` for Claude/Copilot chunk events) SHALL be preserved by calling the broadcast callback directly for every raw message. The `WriteBuffer<RawMessageItem>` constructor parameter SHALL be replaced by a plain `onRawMessage(item)` callback.
 
-#### Scenario: Flush at tool_call boundary
-- **WHEN** a `tool_call` event is received from the engine
-- **THEN** all three write buffers are flushed before the event processing continues
+#### Scenario: Claude/Copilot chunks still broadcast live
+- **WHEN** a Claude `content_block_delta` or Copilot `assistant.message_delta` event is produced during streaming
+- **THEN** the corresponding `text_chunk`/`reasoning_chunk` stream event is still broadcast over the channel
 
-#### Scenario: Flush at tool_result boundary
-- **WHEN** a `tool_result` event is received from the engine
-- **THEN** all three write buffers are flushed after the result is enqueued
-
-#### Scenario: Flush on execution done/error/cancel
-- **WHEN** the engine emits `done`, or an error or cancellation occurs
-- **THEN** all three write buffers are stopped (timer cleared + final flush) inside the `finally` block of `consume()`
+#### Scenario: No writes to model_raw_messages
+- **WHEN** any raw message event is produced during streaming
+- **THEN** no INSERT or DELETE query references the `model_raw_messages` table
 
 ### Requirement: All executor classes receive Database via constructor injection
 All executor classes (`TransitionExecutor`, `HumanTurnExecutor`, `RetryExecutor`, `ChatExecutor`, `CodeReviewExecutor`) SHALL accept a `Database` instance as a constructor argument and SHALL NOT call `getDb()` internally.
@@ -96,13 +92,6 @@ The `StreamProcessor` class SHALL expose a `runNonNative(taskId, conversationId,
 - **WHEN** the stream emits `{ type: "error", fatal: true }`
 - **THEN** the execution status is set to `failed` and task execution_state is set to `failed`
 
-### Requirement: rawMessageSeq is owned by StreamProcessor
-The `StreamProcessor` class SHALL own the `rawMessageSeq` map used for ordering raw model message inserts, and SHALL clean it up in the `finally` block of `consume()`.
-
-#### Scenario: Sequence is cleaned up after execution
-- **WHEN** `consume()` completes (success, error, or cancel)
-- **THEN** the `rawMessageSeq` entry for that executionId is deleted from the map
-
 ### Requirement: ESP-1 `tasks.list` returns correct execution count
 After the correlated subquery → `LEFT JOIN + GROUP BY` fix, `tasks.list` must return an accurate `executionCount` for each task.
 
@@ -120,9 +109,9 @@ After the correlated subquery → `LEFT JOIN + GROUP BY` fix, `tasks.list` must 
 After the transaction wrap, deleting a task must remove all 6 related tables' rows in one atomic operation.
 
 #### Scenario: All related rows removed
-- **GIVEN** a task with executions, messages, stream events, and raw messages
+- **GIVEN** a task with executions, messages, and stream events
 - **WHEN** `tasks.delete` is called
-- **THEN** all related rows across all 6 tables are removed
+- **THEN** all related rows are removed
 
 #### Scenario: Partial failure rolls back entire delete
 - **GIVEN** a delete operation that would violate a constraint mid-way
@@ -192,3 +181,14 @@ When the stream processor flushes accumulated `reasoning` content as a committed
 #### Scenario: Non-Cursor engines are unaffected
 - **WHEN** Claude, Copilot, or Pi executions emit stream events
 - **THEN** their committed reasoning/assistant blockId emission is unchanged by this alignment
+
+### Requirement: StreamProcessor state writes in error paths are best-effort
+All DB state writes in `consume()`'s `catch`, `finally`, abort paths, and the fatal-error switch path SHALL be wrapped so that a DB error (including SQLITE_BUSY) is logged and never masks the original error or escapes `consume()`.
+
+#### Scenario: Busy error in catch block does not mask the original error
+- **WHEN** `consume()` catches an engine failure and the follow-up `UPDATE tasks SET execution_state = 'failed'` throws SQLITE_BUSY
+- **THEN** the original failure is still delivered via `onError` and the done stream event, and the DB failure is logged with a label
+
+#### Scenario: finally block DB work is non-fatal
+- **WHEN** `consume()`'s `finally` block performs task lookups/updates (e.g. `fetchTaskWithModel`, `needs_column_prompt`, `pending_messages`) and the DB is locked
+- **THEN** the failure is logged and `consume()` completes without throwing

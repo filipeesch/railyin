@@ -1,8 +1,8 @@
 import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
-import { copyFileSync, readdirSync, readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { getDb, getDbPath } from "../index.ts";
+import { getDb } from "../index.ts";
 
 export interface Migration {
   readonly id: string;
@@ -88,17 +88,6 @@ function loadApplied(db: Database): Map<string, string | null> {
   return new Map(rows.map((r) => [r.id, r.checksum]));
 }
 
-function backupDb(): void {
-  const dbPath = getDbPath();
-  if (dbPath === ":memory:") return;
-  try {
-    copyFileSync(dbPath, `${dbPath}.backup`);
-    console.log("[db] Backup created:", `${dbPath}.backup`);
-  } catch (err) {
-    console.warn("[db] Backup failed (non-fatal):", err);
-  }
-}
-
 function backfillChecksums(
   db: Database,
   byId: Map<string, { checksum: string }>,
@@ -155,8 +144,8 @@ export async function runMigrations(): Promise<void> {
     return;
   }
 
-  backupDb();
-
+  // Pre-migration backups are owned by StartupMaintenance (src/bun/db/startup-maintenance.ts),
+  // which runs before runMigrations() at boot — the runner only applies migrations.
   for (const { migration, checksum } of pending) {
     try {
       if (migration.managesTransaction) {
