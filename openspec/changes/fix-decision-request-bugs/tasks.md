@@ -10,7 +10,7 @@
 - [x] 2.1 `DecisionInterviewPanel.vue` — add `executionState: string | null` prop; compute `readyToSubmit = executionState === "waiting_user"`
 - [x] 2.2 `TaskChatView.vue` — pass `:execution-state="task.executionState"`; `SessionChatView.vue` — pass `:execution-state="session.status"`
 - [x] 2.3 `DecisionRequest.vue` — add `readyToSubmit` prop (default `true`); `canSubmit = readyToSubmit && canSubmitDecisionRequest(...)`; `Next` stays ungated
-- [ ] 2.4 `e2e/ui/interview-me.spec.ts` T-J — assert Submit disabled while running **even with all answers filled**; enabled at `waiting_user`
+- [x] 2.4 `e2e/ui/interview-me.spec.ts` T-J — assert Submit disabled while running **even with all answers filled**; enabled at `waiting_user` (done via the T-J rework in 10.6.3)
 
 ## 3. Robust answered/stale detection (D3)
 
