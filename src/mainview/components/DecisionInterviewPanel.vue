@@ -1,5 +1,14 @@
 <template>
-  <div v-if="showPanel" class="decision-interview-panel">
+  <div v-if="showPanel" class="decision-interview-panel" :class="{ 'decision-interview-panel--resizing': resizing }" :style="{ '--panel-height': panelHeight + 'px' }">
+    <!-- Resize handle: drag to adjust the panel height (see chat above / enlarge) -->
+    <div
+      class="decision-interview-panel__resize"
+      title="Drag to resize"
+      @mousedown="onResizeStart"
+      @dblclick="resetHeight"
+    >
+      <span class="decision-interview-panel__resize-grip" aria-hidden="true">⠿</span>
+    </div>
     <div class="decision-interview-panel__header">
       <div class="decision-interview-panel__heading">
         <span class="decision-interview-panel__icon" aria-hidden="true">💬</span>
@@ -7,12 +16,14 @@
       </div>
       <button class="decision-interview-panel__dismiss" title="Dismiss" aria-label="Dismiss" @click="dismiss">✕</button>
     </div>
-    <DecisionRequest
-      :questions="questions"
-      :context="context"
-      :answered-text="answeredText"
-      @submit="onSubmit"
-    />
+    <div class="decision-interview-panel__body">
+      <DecisionRequest
+        :questions="questions"
+        :context="context"
+        :answered-text="answeredText"
+        @submit="onSubmit"
+      />
+    </div>
   </div>
 </template>
 
@@ -158,14 +169,97 @@ async function onSubmit(payload: {
     await chatStore.submitDecisions(props.chatSessionId, answers, generalNotes, recordAsDecisions);
   }
 }
+
+/**
+ * Panel height in px, adjustable via the resize handle on top of the panel.
+ * Defaults to a comfortable expanded height; capped by the viewport so the
+ * chat above stays visible. Resetting (double-click) restores the default.
+ */
+const DEFAULT_PANEL_HEIGHT = 320;
+const MIN_PANEL_HEIGHT = 120;
+const MAX_PANEL_HEIGHT_RATIO = 0.7; // never exceed 70% of the viewport
+
+const panelHeight = ref(DEFAULT_PANEL_HEIGHT);
+const resizing = ref(false);
+
+function onResizeStart(event: MouseEvent) {
+  event.preventDefault();
+  resizing.value = true;
+  const startY = event.clientY;
+  const startHeight = panelHeight.value;
+
+  const onMove = (moveEvent: MouseEvent) => {
+    const delta = moveEvent.clientY - startY;
+    // Dragging DOWN increases height (grip is at the top; chat sits above).
+    const next = Math.min(
+      Math.max(startHeight + delta, MIN_PANEL_HEIGHT),
+      Math.floor(window.innerHeight * MAX_PANEL_HEIGHT_RATIO),
+    );
+    panelHeight.value = next;
+  };
+
+  const onUp = () => {
+    resizing.value = false;
+    window.removeEventListener("mousemove", onMove);
+    window.removeEventListener("mouseup", onUp);
+    document.body.style.cursor = "";
+    document.body.style.userSelect = "";
+  };
+
+  window.addEventListener("mousemove", onMove);
+  window.addEventListener("mouseup", onUp);
+  document.body.style.cursor = "row-resize";
+  document.body.style.userSelect = "none";
+}
+
+function resetHeight() {
+  panelHeight.value = DEFAULT_PANEL_HEIGHT;
+}
 </script>
 
 <style scoped>
 .decision-interview-panel {
   margin: 5px;
-  padding: 4px 0 8px;
+  padding: 0 0 8px;
   border-bottom: 1px solid var(--p-surface-200, #e2e8f0);
   margin-bottom: 8px;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Resize handle — drag to enlarge/shrink the panel (grip on top edge) */
+.decision-interview-panel__resize {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 12px;
+  cursor: row-resize;
+  user-select: none;
+  border-radius: 4px 4px 0 0;
+}
+
+.decision-interview-panel__resize:hover {
+  background: var(--p-surface-200, #e2e8f0);
+}
+
+.decision-interview-panel__resize-grip {
+  font-size: 0.8rem;
+  color: var(--p-surface-400, #94a3b8);
+  line-height: 1;
+  pointer-events: none;
+}
+
+/* Scrollable body: keeps the footer buttons reachable when the interview is
+   taller than the panel / viewport. */
+.decision-interview-panel__body {
+  height: var(--panel-height);
+  min-height: 120px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.decision-interview-panel--resizing {
+  cursor: row-resize;
 }
 
 .decision-interview-panel__header {
@@ -238,5 +332,13 @@ html.dark-mode .decision-interview-panel__dismiss {
 html.dark-mode .decision-interview-panel__dismiss:hover {
   background: var(--p-surface-700, #334155);
   color: var(--p-surface-200, #e2e8f0);
+}
+
+html.dark-mode .decision-interview-panel__resize:hover {
+  background: var(--p-surface-800, #1e293b);
+}
+
+html.dark-mode .decision-interview-panel__resize-grip {
+  color: var(--p-surface-500, #64748b);
 }
 </style>
