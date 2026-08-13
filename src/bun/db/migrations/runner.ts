@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
-import { copyFileSync, readdirSync, readFileSync } from "node:fs";
+import { copyFileSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { getDb, getDbPath } from "../index.ts";
 
@@ -88,10 +88,24 @@ function loadApplied(db: Database): Map<string, string | null> {
   return new Map(rows.map((r) => [r.id, r.checksum]));
 }
 
+/** Automatic pre-migration copies are skipped above this size (1 GiB): a
+ *  multi-GB copy at startup is worse than the risk it mitigates (migrations
+ *  are additionally checksum-guarded). Operators get a manual-backup hint. */
+const BACKUP_SKIP_THRESHOLD_BYTES = 1_073_741_824;
+
 function backupDb(): void {
   const dbPath = getDbPath();
   if (dbPath === ":memory:") return;
   try {
+    const size = statSync(dbPath).size;
+    if (size > BACKUP_SKIP_THRESHOLD_BYTES) {
+      console.warn(
+        `[db] Backup skipped: ${dbPath} is ${(size / 1_073_741_824).toFixed(1)} GiB (above ` +
+          `${BACKUP_SKIP_THRESHOLD_BYTES / 1_073_741_824} GiB threshold). For a manual consistent ` +
+          `backup run: bun -e 'const {Database}=require("bun:sqlite");const d=new Database("${dbPath}");d.exec("VACUUM INTO \\"${dbPath}.manual-backup\\"");'`,
+      );
+      return;
+    }
     copyFileSync(dbPath, `${dbPath}.backup`);
     console.log("[db] Backup created:", `${dbPath}.backup`);
   } catch (err) {

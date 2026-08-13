@@ -1,5 +1,3 @@
-import { getDb } from "./db/index.ts";
-
 export type LogLevel = "debug" | "info" | "warn" | "error";
 
 export interface LogOptions {
@@ -17,24 +15,28 @@ export const noopLogger: Logger = {
 };
 
 /**
- * Write a structured log entry to the `logs` table.
- * Query examples:
- *   SELECT * FROM logs WHERE task_id = 16 ORDER BY id DESC;
- *   SELECT * FROM logs WHERE level = 'error';
- *   SELECT * FROM logs WHERE execution_id = 103;
+ * Write a structured log entry as a single JSON line via console.
+ * In production, setupFileLogging() captures console output into
+ * `~/.railyn/logs/bun.log`; in dev it prints to the terminal.
+ * The legacy `logs` DB table was dropped — logging no longer touches the DB.
  */
 export function log(level: LogLevel, message: string, opts?: LogOptions): void {
-  const db = getDb();
-  db.run(
-    "INSERT INTO logs (level, task_id, execution_id, message, data) VALUES (?, ?, ?, ?, ?)",
-    [
-      level,
-      opts?.taskId ?? null,
-      opts?.executionId ?? null,
-      message,
-      opts?.data !== undefined ? JSON.stringify(opts.data) : null,
-    ],
-  );
+  const entry = {
+    ts: new Date().toISOString(),
+    level,
+    message,
+    taskId: opts?.taskId ?? null,
+    executionId: opts?.executionId ?? null,
+    data: opts?.data !== undefined ? opts.data : null,
+  };
+  const line = JSON.stringify(entry);
+  if (level === "error") {
+    console.error(line);
+  } else if (level === "warn") {
+    console.warn(line);
+  } else {
+    console.log(line);
+  }
 }
 
 export const realLogger: Logger = {

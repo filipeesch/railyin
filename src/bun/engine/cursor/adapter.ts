@@ -59,8 +59,8 @@ export interface CursorRunConfig {
    */
   customTools?: Record<string, SDKCustomTool>;
   /**
-   * Optional raw-message hook so the engine can persist SDK messages to
-   * model_raw_messages for later inspection.
+   * Optional raw-message hook forwarded to the WS broadcast sink
+   * (raw messages are no longer persisted).
    */
   onRawMessage?: (message: unknown) => void;
   /**
