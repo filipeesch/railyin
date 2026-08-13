@@ -1,5 +1,5 @@
 ## Purpose
-Defines how the migration runner discovers, validates, and applies `src/bun/db/migrations/*.ts` files, including checksum verification, automatic pre-migration backups (size-aware), and the schema migrations introduced by the db-lock resilience change.
+Defines how the migration runner discovers, validates, and applies `src/bun/db/migrations/*.ts` files, including checksum verification and the schema migrations introduced by the db-lock resilience change. Pre-migration backups are owned by `StartupMaintenance` (see `db-startup-maintenance`), not the runner.
 
 ## Requirements
 
@@ -68,25 +68,6 @@ The `schema_migrations` table SHALL have a `checksum TEXT` column (nullable). Wh
 #### Scenario: NULL checksums are backfilled after pending migrations
 - **WHEN** the runner has processed all pending migrations and some already-applied rows still have `checksum IS NULL`
 - **THEN** the runner backfills the checksum for each such row that has a corresponding migration file
-
-### Requirement: backupDb() is size-aware
-The migration runner's `backupDb()` SHALL skip the automatic `copyFileSync` backup when the database file exceeds a size threshold (default 1 GB), logging a warning with operator guidance (e.g. use `VACUUM INTO` for a manual consistent backup). Small databases SHALL keep the existing copy behavior, and the backup SHALL always be skipped when `RAILYN_DB` is `:memory:`.
-
-#### Scenario: Large DB skips the automatic copy
-- **WHEN** a pending migration exists and the DB file is larger than 1 GB
-- **THEN** `backupDb()` logs a warning that the automatic backup was skipped and does not copy the file
-
-#### Scenario: Small DB keeps the automatic copy
-- **WHEN** a pending migration exists and the DB file is at or below the threshold
-- **THEN** `backupDb()` copies the file to `<db>.backup` and logs `[db] Backup created:` as today
-
-#### Scenario: Backup skipped for in-memory DB
-- **WHEN** `RAILYN_DB` is `:memory:`
-- **THEN** no backup file is created
-
-#### Scenario: Backup skipped when no pending migrations
-- **WHEN** all migrations are already applied
-- **THEN** no backup file is created or overwritten
 
 ### Requirement: Bootstrap checksum column
 The runner SHALL add the `checksum TEXT` column to `schema_migrations` if it does not already exist, as part of its bootstrap step (before any migration logic runs).
