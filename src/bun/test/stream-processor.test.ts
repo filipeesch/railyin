@@ -553,6 +553,7 @@ describe("SP-DR: terminal decision_request flush + superseded guard", () => {
 
   it("SP-DR-3: session execution superseded by a newer execution discards the flush", async () => {
     const sessionConversationId = (db.run("INSERT INTO conversations (task_id) VALUES (NULL)").lastInsertRowid) as number;
+    db.run("INSERT INTO chat_sessions (workspace_key, title, status, conversation_id) VALUES ('default', 'S', 'running', ?)", [sessionConversationId]);
     const execA = insertSessionExecution(db, sessionConversationId);
     insertSessionExecution(db, sessionConversationId); // newer execution
 
@@ -569,11 +570,16 @@ describe("SP-DR: terminal decision_request flush + superseded guard", () => {
     const execRow = db.query<{ status: string }, [number]>("SELECT status FROM executions WHERE id = ?").get(execA);
     expect(execRow!.status).toBe("running");
 
+    // Superseded: the session status must NOT be flipped to waiting_user.
+    const sessionRow = db.query<{ status: string }, [number]>("SELECT status FROM chat_sessions WHERE conversation_id = ?").get(sessionConversationId);
+    expect(sessionRow!.status).toBe("running");
+
     expect(doneEmitted).toBe(true);
   });
 
-  it("SP-DR-4: current session execution persists the prompt and marks the execution waiting_user", async () => {
+  it("SP-DR-4: current session execution persists the prompt and marks the session/execution waiting_user", async () => {
     const sessionConversationId = (db.run("INSERT INTO conversations (task_id) VALUES (NULL)").lastInsertRowid) as number;
+    db.run("INSERT INTO chat_sessions (workspace_key, title, status, conversation_id) VALUES ('default', 'S', 'running', ?)", [sessionConversationId]);
     const execA = insertSessionExecution(db, sessionConversationId);
 
     let doneEmitted = false;
@@ -588,6 +594,11 @@ describe("SP-DR: terminal decision_request flush + superseded guard", () => {
 
     const execRow = db.query<{ status: string }, [number]>("SELECT status FROM executions WHERE id = ?").get(execA);
     expect(execRow!.status).toBe("waiting_user");
+
+    // The chat session itself transitions to waiting_user (fix for the reported
+    // "Submit never enables after a multi-question session round" bug).
+    const sessionRow = db.query<{ status: string }, [number]>("SELECT status FROM chat_sessions WHERE conversation_id = ?").get(sessionConversationId);
+    expect(sessionRow!.status).toBe("waiting_user");
 
     expect(doneEmitted).toBe(true);
   });

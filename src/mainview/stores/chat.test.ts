@@ -492,3 +492,31 @@ describe("chatStore — submitDecisions recordAsDecisions", () => {
     expect(userMsg!.content).toBe("A: SQLite");
   });
 });
+
+// ─── C-17: turn-end done must not clobber a waiting_user session ─────────────
+
+describe("chatStore — done handler preserves waiting_user", () => {
+  beforeEach(() => {
+    setActivePinia(createPinia());
+  });
+
+  it("C-17: done does NOT flip a waiting_user session back to idle (decision_request turn)", () => {
+    const store = useChatStore();
+    const session = makeChatSession({ id: 1, conversationId: 10, status: "waiting_user" });
+    store.sessions.push(session);
+
+    store.onChatStreamEvent(makeStreamEvent(10, "done", { done: true }));
+
+    expect(store.sessions.find((s) => s.id === 1)?.status).toBe("waiting_user");
+  });
+
+  it("C-18: done still marks a running session idle on natural completion", () => {
+    const store = useChatStore();
+    const session = makeChatSession({ id: 1, conversationId: 10, status: "running" });
+    store.sessions.push(session);
+
+    store.onChatStreamEvent(makeStreamEvent(10, "done", { done: true }));
+
+    expect(store.sessions.find((s) => s.id === 1)?.status).toBe("idle");
+  });
+});

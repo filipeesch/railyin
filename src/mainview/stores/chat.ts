@@ -76,9 +76,13 @@ export const useChatStore = defineStore("chat", () => {
 
     if (event.type === "done") {
       // Route through onChatSessionUpdated so the drain guard fires (backend
-      // never broadcasts chatSession.updated on natural completion).
+      // never broadcasts chatSession.updated on natural completion). Do NOT
+      // flip back to idle when the turn ended with a terminal decision_request:
+      // onChatNewMessage already marked the session waiting_user (and the
+      // terminal `done` arrives right after the prompt push), so clobbering it
+      // would hide the panel and keep Submit disabled.
       const session = sessions.value.find(s => s.id === sessionId);
-      if (session) {
+      if (session && session.status !== "waiting_user") {
         onChatSessionUpdated({ ...session, status: "idle" });
       }
     }
