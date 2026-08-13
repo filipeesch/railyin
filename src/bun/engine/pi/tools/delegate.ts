@@ -18,6 +18,7 @@ import type { ChildSessionFactory } from "../child-session.ts";
 import type { ProviderLimiterRegistry } from "../provider-limiter.ts";
 import type { PiEngineConfig } from "../../../config/index.ts";
 import type { Model } from "@earendil-works/pi-ai";
+import type { PiApiMode } from "../api-mode.ts";
 import { defaultChildSessionFactory } from "../child-session.ts";
 import { runWithLimiter } from "../provider-transport.ts";
 import { translateEvent } from "../event-translator.ts";
@@ -27,7 +28,7 @@ export interface DelegateToolOptions {
   delegateEmitRef?: { emit?: (event: EngineEvent) => void };
   childSessionFactory?: ChildSessionFactory;
   limiterRegistry?: ProviderLimiterRegistry;
-  parentModel?: Model<"openai-completions">;
+  parentModel?: Model<PiApiMode>;
   parentSystemPrompt?: string;
   parentCwd?: string;
   parentConversationId?: number;

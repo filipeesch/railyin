@@ -16,101 +16,19 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import {
-  createAgentSession,
-  AuthStorage,
-  SessionManager,
-  DefaultResourceLoader,
-  getAgentDir,
-} from "@earendil-works/pi-coding-agent";
 import { registerFauxProvider } from "@earendil-works/pi-ai/compat";
 import type { FauxProviderRegistration } from "@earendil-works/pi-ai/compat";
 import { fauxAssistantMessage, fauxToolCall, fauxText } from "@earendil-works/pi-ai/providers/faux";
-import type { AgentSession } from "@earendil-works/pi-coding-agent";
-import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { buildCommonTools } from "../engine/pi/tools/common.ts";
 import { COMMON_TOOL_DEFINITIONS } from "../engine/common-tools.ts";
 import { McpClientRegistry } from "../mcp/registry.ts";
 import { FakeMcpClient } from "./support/fake-mcp-client.ts";
 import type { CommonToolContext } from "../engine/types.ts";
-import { SDK_BUILTIN_TOOL_NAMES } from "../engine/pi/constants.ts";
+import { createFauxAgentSession, runTurn } from "./support/pi-faux-session.ts";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-/**
- * Create a minimal real AgentSession using a faux provider (no HTTP calls),
- * wired with the given customTools/toolNames instead of the "noop" tool used
- * by pi-session-tools-integration.test.ts's createTestSession.
- */
-async function createDiscoveryTestSession(
-  faux: FauxProviderRegistration,
-  cwd: string,
-  customTools: AgentTool<any>[],
-  toolNames: string[],
-) {
-  const sessionManager = SessionManager.open(join(cwd, "session.jsonl"));
-  const agentDir = getAgentDir();
-  const resourceLoader = new DefaultResourceLoader({ cwd, agentDir });
-  await resourceLoader.reload();
 
-  const authStorage = AuthStorage.inMemory();
-  authStorage.setRuntimeApiKey(faux.getModel().provider, "faux-key");
-
-  const { session } = await createAgentSession({
-    cwd,
-    agentDir,
-    model: faux.getModel() as any,
-    tools: [...SDK_BUILTIN_TOOL_NAMES, ...toolNames],
-    customTools,
-    sessionManager,
-    resourceLoader,
-    authStorage,
-  });
-
-  session.agent.state.thinkingLevel = "off";
-  return session;
-}
-
-/**
- * Run one faux turn and wait for the agent loop to finish.
- * The faux provider must already have `setResponses` called before this.
- */
-function runTurn(session: AgentSession, promptText: string): Promise<void> {
-  return new Promise<void>((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      reject(new Error("runTurn timed out"));
-    }, 5000);
-    let promptResolved = false;
-    let agentEnded = false;
-
-    const unsubscribe = session.subscribe((event) => {
-      if (event.type === "agent_end") {
-        agentEnded = true;
-        maybeResolve();
-      }
-    });
-
-    const promptPromise = session.prompt(promptText);
-    promptPromise
-      .then(() => {
-        promptResolved = true;
-        maybeResolve();
-      })
-      .catch((err) => {
-        clearTimeout(timeout);
-        unsubscribe();
-        reject(err);
-      });
-
-    function maybeResolve() {
-      if (agentEnded && promptResolved) {
-        clearTimeout(timeout);
-        unsubscribe();
-        resolve();
-      }
-    }
-  });
-}
 
 function makeCtx(overrides: Partial<CommonToolContext["runtime"]> = {}): CommonToolContext {
   return {
@@ -164,7 +82,7 @@ describe("Pi engine — MCP discovery tools via real SDK tool-call loop (faux pr
     expect(toolNames).toContain("list_mcp_tools");
     expect(toolNames).toContain("invoke_mcp_tool");
 
-    const session = await createDiscoveryTestSession(faux, cwd, tools, toolNames);
+    const session = await createFauxAgentSession({ faux, cwd, tools });
 
     faux.setResponses([
       fauxAssistantMessage(fauxToolCall("list_mcp_servers", {}), { stopReason: "toolUse" }),

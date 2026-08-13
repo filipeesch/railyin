@@ -3,7 +3,7 @@ import { PiModelBuilder, DEFAULT_MAX_TOKENS } from "../../engine/pi/model-builde
 import type { PiEngineConfig } from "../../config/index.ts";
 
 describe("PiModelBuilder", () => {
-  test("MB-1: builds model with provider and base_url from config", () => {
+  test("MB-1: builds model with provider and base_url from config; default api is openai-responses", () => {
     const config: PiEngineConfig = {
       type: "pi",
       model: "pi/lmstudio/my-model",
@@ -20,7 +20,7 @@ describe("PiModelBuilder", () => {
     expect(model.baseUrl).toBe("http://localhost:1234/v1");
     expect(model.contextWindow).toBe(128_000);
     expect(model.maxTokens).toBe(DEFAULT_MAX_TOKENS);
-    expect(model.api).toBe("openai-completions");
+    expect(model.api).toBe("openai-responses");
   });
 
   test("MB-2: falls back to config.model when modelOverride is undefined", () => {
@@ -133,6 +133,7 @@ describe("PiModelBuilder", () => {
   test("MB-10: thinkingFormat deepseek maps to compat.thinkingFormat + requiresReasoningContentOnAssistantMessages", () => {
     const config: PiEngineConfig = {
       type: "pi",
+      api: "openai-completions",
       providers: { deepseek: { base_url: "https://openrouter.ai/api/v1" } },
       models: { "deepseek/deepseek-chat": { thinkingFormat: "deepseek" } },
     };
@@ -160,6 +161,7 @@ describe("PiModelBuilder", () => {
   test("MB-14: openrouter + deepseek model sets requiresReasoningContentOnAssistantMessages", () => {
     const config: PiEngineConfig = {
       type: "pi",
+      api: "openai-completions",
       providers: { openrouter: { base_url: "https://openrouter.ai/api/v1" } },
       models: {
         "deepseek/deepseek-v4-flash": {
@@ -178,6 +180,7 @@ describe("PiModelBuilder", () => {
   test("MB-15: openrouter + non-deepseek model does NOT set requiresReasoningContentOnAssistantMessages", () => {
     const config: PiEngineConfig = {
       type: "pi",
+      api: "openai-completions",
       providers: { openrouter: { base_url: "https://openrouter.ai/api/v1" } },
       models: {
         "z-ai/glm-5": {
@@ -190,6 +193,85 @@ describe("PiModelBuilder", () => {
       compat?: { thinkingFormat?: string; requiresReasoningContentOnAssistantMessages?: boolean };
     };
     expect(model.compat?.thinkingFormat).toBe("openrouter");
+    expect(model.compat?.requiresReasoningContentOnAssistantMessages).toBeUndefined();
+  });
+
+  test("MB-16: engine-level api openai-completions maps to model.api", () => {
+    const config: PiEngineConfig = {
+      type: "pi",
+      api: "openai-completions",
+      providers: { lmstudio: { base_url: "http://localhost:1234/v1" } },
+    };
+    const builder = new PiModelBuilder(config);
+    const model = builder.build("pi/lmstudio/qwen", 128_000);
+    expect(model.api).toBe("openai-completions");
+  });
+
+  test("MB-17: provider api override wins over engine-level api", () => {
+    const config: PiEngineConfig = {
+      type: "pi",
+      api: "openai-responses",
+      providers: { lmstudio: { base_url: "http://localhost:1234/v1", api: "openai-completions" } },
+    };
+    const builder = new PiModelBuilder(config);
+    expect(builder.build("pi/lmstudio/qwen", 128_000).api).toBe("openai-completions");
+    expect(builder.build("pi/other/qwen", 128_000).api).toBe("openai-responses");
+  });
+
+  test("MB-18: supportsDeveloperRole is false under both api modes", () => {
+    const config: PiEngineConfig = {
+      type: "pi",
+      providers: { lmstudio: { base_url: "http://localhost:1234/v1" } },
+    };
+    const builder = new PiModelBuilder(config);
+    const completions = builder.build("pi/lmstudio/a", 128_000) as unknown as { compat: Record<string, unknown> };
+    const responses = builder.build("pi/lmstudio/b", 128_000) as unknown as { compat: Record<string, unknown> };
+    expect(completions.compat.supportsDeveloperRole).toBe(false);
+    expect(responses.compat.supportsDeveloperRole).toBe(false);
+  });
+
+  test("MB-19: thinkingFormat kept under completions, dropped under responses", () => {
+    const base = {
+      type: "pi" as const,
+      providers: {
+        deepseek: { base_url: "https://openrouter.ai/api/v1", api: "openai-completions" as const },
+      },
+      models: { "deepseek/deepseek-chat": { thinkingFormat: "deepseek" as const } },
+    };
+    const completionsBuilder = new PiModelBuilder(base);
+    const completions = completionsBuilder.build("pi/deepseek/deepseek-chat", 128_000) as unknown as {
+      compat?: Record<string, unknown>;
+    };
+    expect(completions.compat?.thinkingFormat).toBe("deepseek");
+    expect(completions.compat?.requiresReasoningContentOnAssistantMessages).toBe(true);
+
+    const responsesConfig: PiEngineConfig = {
+      type: "pi",
+      providers: { deepseek: { base_url: "https://openrouter.ai/api/v1", api: "openai-responses" } },
+      models: { "deepseek/deepseek-chat": { thinkingFormat: "deepseek" } },
+    };
+    const responsesBuilder = new PiModelBuilder(responsesConfig);
+    const responses = responsesBuilder.build("pi/deepseek/deepseek-chat", 128_000) as unknown as {
+      compat?: Record<string, unknown>;
+    };
+    expect(responses.compat?.thinkingFormat).toBeUndefined();
+    expect(responses.compat?.requiresReasoningContentOnAssistantMessages).toBeUndefined();
+    expect(responses.compat?.supportsDeveloperRole).toBe(false);
+  });
+
+  test("MB-20: openrouter + deepseek reasoning flag dropped under responses", () => {
+    const config: PiEngineConfig = {
+      type: "pi",
+      providers: { openrouter: { base_url: "https://openrouter.ai/api/v1", api: "openai-responses" } },
+      models: { "deepseek/deepseek-v4-flash": { thinkingFormat: "openrouter" } },
+    };
+    const builder = new PiModelBuilder(config);
+    const model = builder.build("pi/openrouter/deepseek/deepseek-v4-flash", 128_000) as unknown as {
+      api?: string;
+      compat?: { thinkingFormat?: string; requiresReasoningContentOnAssistantMessages?: boolean };
+    };
+    expect(model.api).toBe("openai-responses");
+    expect(model.compat?.thinkingFormat).toBeUndefined();
     expect(model.compat?.requiresReasoningContentOnAssistantMessages).toBeUndefined();
   });
 

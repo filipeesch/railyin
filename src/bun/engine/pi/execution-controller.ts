@@ -19,12 +19,13 @@ import { isContextOverflow } from "@earendil-works/pi-ai";
 import type { RunDriver } from "./run-driver.ts";
 import type { PiCompactionCoordinator } from "./compaction-coordinator.ts";
 import type { Model } from "@earendil-works/pi-ai";
+import type { PiApiMode } from "./api-mode.ts";
 
 export interface ExecutionControllerOptions {
   session: AgentSession;
   resolvedPrompt: string;
   conversationId: number;
-  piModel: Model<"openai-completions">;
+  piModel: Model<PiApiMode>;
   providerName: string;
   workingDirectory: string | undefined;
   signal?: AbortSignal;

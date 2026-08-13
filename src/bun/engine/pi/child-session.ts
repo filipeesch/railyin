@@ -7,11 +7,6 @@
  */
 
 import {
-  AuthStorage,
-  createAgentSession,
-  defineTool,
-  DefaultResourceLoader,
-  getAgentDir,
   SessionManager,
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
@@ -19,7 +14,8 @@ import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { Model } from "@earendil-works/pi-ai";
 import type { PiEngineConfig } from "../../config/index.ts";
-import { buildToolAllowlist } from "./constants.ts";
+import type { PiApiMode } from "./api-mode.ts";
+import { createPiAgentSession } from "./pi-session-factory.ts";
 
 /**
  * Short instruction appended to the parent system prompt for child sessions.
@@ -41,7 +37,7 @@ export interface ChildSessionOptions {
   /** Tools pre-built for this child session. */
   tools: AgentTool<any>[];
   /** Parent model — child reuses the same provider/model. */
-  model: Model<"openai-completions">;
+  model: Model<PiApiMode>;
   /** Engine config — used to set up auth and compaction settings. */
   config: PiEngineConfig;
   /** Parent system prompt. The subagent suffix is appended automatically. */
@@ -77,51 +73,21 @@ export const defaultChildSessionFactory: ChildSessionFactory = async (opts) => {
     : SUBAGENT_SYSTEM_SUFFIX.trim();
 
   const sessionManager = SessionManager.inMemory(cwd);
-  const agentDir = getAgentDir();
-
-  const resourceLoader = new DefaultResourceLoader({
-    cwd,
-    agentDir,
-    systemPromptOverride: () => systemPrompt,
-  });
-  await resourceLoader.reload();
-
-  const piTools = tools.map((t) =>
-    defineTool({
-      name: t.name,
-      label: t.label ?? t.name,
-      description: t.description,
-      parameters: t.parameters as any,
-      prepareArguments: t.prepareArguments,
-      execute: t.execute as any,
-    }),
-  );
-
-  const authStorage = AuthStorage.inMemory();
-  for (const [provider, cfg] of Object.entries(config.providers ?? {})) {
-    authStorage.setRuntimeApiKey(provider, cfg.api_key ?? "no-key");
-  }
-  authStorage.setRuntimeApiKey(model.provider, config.providers?.[model.provider]?.api_key ?? "no-key");
-
   // Disable auto-compaction for child sessions — they're short-lived.
   const settingsManager = SettingsManager.inMemory({ compaction: { enabled: false } });
 
-  const { session } = await createAgentSession({
+  const session = await createPiAgentSession({
+    config,
+    model,
+    tools,
     cwd,
-    agentDir,
-    model: model as any,
-    customTools: piTools,
-    // Include SDK built-in tools in the allowlist so the child model can call
-    // read/grep/find/ls. Without these names, the SDK silently drops built-in
-    // tool calls and the model loops or stalls trying to read files.
-    tools: buildToolAllowlist(tools),
+    systemPrompt,
     sessionManager,
-    resourceLoader,
-    authStorage,
     settingsManager,
+    // Preserve the legacy behavior: child sessions default to "off" when the
+    // parent has no resolved thinking level.
+    thinkingLevel: thinkingLevel ?? "off",
   });
-
-  session.agent.state.thinkingLevel = (thinkingLevel ?? "off") as never;
 
   return {
     session,

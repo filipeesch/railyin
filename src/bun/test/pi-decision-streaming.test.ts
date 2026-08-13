@@ -13,15 +13,6 @@ import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import {
-  createAgentSession,
-  AuthStorage,
-  SessionManager,
-  DefaultResourceLoader,
-  SettingsManager,
-  getAgentDir,
-  defineTool,
-} from "@earendil-works/pi-coding-agent";
 import { registerFauxProvider } from "@earendil-works/pi-ai/compat";
 import type { FauxProviderRegistration } from "@earendil-works/pi-ai/compat";
 import { fauxAssistantMessage, fauxText, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
@@ -29,7 +20,7 @@ import { PiEngine } from "../engine/pi/engine.ts";
 import type { PiEngineConfig } from "../config/index.ts";
 import { NullModelSettingsRepository } from "../db/repositories/model-settings-repository.ts";
 import type { ExecutionParams, EngineEvent } from "../engine/types.ts";
-import { SDK_BUILTIN_TOOL_NAMES } from "../engine/pi/constants.ts";
+import { createFauxSessionFactory } from "./support/pi-faux-session.ts";
 
 let faux: FauxProviderRegistration;
 let cwd: string;
@@ -44,60 +35,7 @@ afterEach(() => {
   rmSync(cwd, { recursive: true, force: true });
 });
 
-async function createFauxSessionFactory(options: {
-  tools: any[];
-  systemPrompt: string | undefined;
-  conversationId: number;
-  model: any;
-  cwd: string;
-  config: PiEngineConfig;
-}) {
-  const { tools, systemPrompt, conversationId, cwd, config } = options;
-  const model = faux.getModel();
-
-  const sessionManager = SessionManager.open(join(cwd, `session-${conversationId}.jsonl`));
-  const agentDir = getAgentDir();
-  const resourceLoader = new DefaultResourceLoader({
-    cwd,
-    agentDir,
-    ...(systemPrompt ? { systemPromptOverride: () => systemPrompt } : {}),
-  });
-  await resourceLoader.reload();
-
-  const authStorage = AuthStorage.inMemory();
-  for (const [provider, cfg] of Object.entries(config.providers ?? {})) {
-    authStorage.setRuntimeApiKey(provider, cfg.api_key ?? "no-key");
-  }
-  authStorage.setRuntimeApiKey(model.provider, config.providers?.[model.provider]?.api_key ?? "no-key");
-
-  const piTools = tools.map((t) =>
-    defineTool({
-      name: t.name,
-      label: t.label ?? t.name,
-      description: t.description,
-      parameters: t.parameters as any,
-      prepareArguments: t.prepareArguments,
-      execute: t.execute as any,
-    }),
-  );
-
-  const { session } = await createAgentSession({
-    cwd,
-    agentDir,
-    model: model as any,
-    customTools: piTools,
-    tools: [...SDK_BUILTIN_TOOL_NAMES, ...piTools.map((t) => t.name)],
-    sessionManager,
-    resourceLoader,
-    authStorage,
-    settingsManager: SettingsManager.inMemory({
-      compaction: { enabled: false, reserveTokens: 16_384, keepRecentTokens: 20_000 },
-    }),
-  });
-
-  session.agent.state.thinkingLevel = "off";
-  return session;
-}
+const makeSessionFactory = () => createFauxSessionFactory(faux);
 
 async function drainEvents(gen: AsyncIterable<EngineEvent>): Promise<EngineEvent[]> {
   const events: EngineEvent[] = [];
@@ -124,7 +62,7 @@ describe("Pi engine — streaming decision_request via faux provider", () => {
       () => {},
       undefined,
       new NullModelSettingsRepository(),
-      createFauxSessionFactory as any,
+      makeSessionFactory() as any,
     );
 
     faux.setResponses([

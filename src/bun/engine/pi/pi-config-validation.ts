@@ -1,10 +1,26 @@
-import type { PiEngineConfig } from "../../config/index.ts";
+import type { PiEngineConfig, PiApiMode } from "../../config/index.ts";
+
+const VALID_API_MODES = new Set<PiApiMode>(["openai-completions", "openai-responses"]);
 
 /**
  * Validates a PiEngineConfig at construction time.
  * Throws a descriptive Error for any constraint violation.
  */
 export function validatePiEngineConfig(config: PiEngineConfig): void {
+  if (config.api !== undefined && !VALID_API_MODES.has(config.api)) {
+    throw new Error(
+      `Pi engine config: api must be one of: openai-completions, openai-responses — got: ${config.api}`,
+    );
+  }
+
+  for (const [providerName, providerCfg] of Object.entries(config.providers ?? {})) {
+    if (providerCfg.api !== undefined && !VALID_API_MODES.has(providerCfg.api)) {
+      throw new Error(
+        `Pi engine config: providers.${providerName}.api must be one of: openai-completions, openai-responses — got: ${providerCfg.api}`,
+      );
+    }
+  }
+
   const maxPerCall = config.harness?.delegate?.max_per_call;
   if (maxPerCall != null && (maxPerCall < 1 || maxPerCall > 10)) {
     throw new Error(

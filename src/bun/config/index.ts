@@ -104,10 +104,18 @@ export interface SamplingPreset {
 }
 
 
+/** OpenAI-compatible API mode for the Pi engine — `/v1/chat/completions` vs `/v1/responses`. */
+export type PiApiMode = "openai-completions" | "openai-responses";
+
 /** Per-provider concurrency and connection settings for the Pi engine. */
 export interface PiProviderConfig {
   base_url: string;
   api_key?: string;
+  /**
+   * OpenAI-compatible API mode for this provider endpoint.
+   * Overrides the engine-level `api` when set. Valid: "openai-completions" | "openai-responses".
+   */
+  api?: PiApiMode;
   /**
    * Maximum concurrent in-flight LLM requests to this provider across all
    * Pi sessions (parent, children, background compaction). Default: 8 (vLLM-shaped).
@@ -216,6 +224,12 @@ export interface PiModelConfig {
 /** Pi engine config — uses the Pi agent SDK for local LLMs (LM Studio, Ollama, OpenAI-compatible). */
 export interface PiEngineConfig {
   type: "pi";
+  /**
+   * OpenAI-compatible API mode for this engine: "openai-completions" (/v1/chat/completions)
+   * or "openai-responses" (/v1/responses). Per-provider `api` overrides this.
+   * When omitted, defaults to "openai-responses".
+   */
+  api?: PiApiMode;
   /** Default model in "provider/model" format, e.g. "lmstudio/qwen3-8b". */
   model?: string;
   /**

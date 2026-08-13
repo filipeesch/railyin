@@ -17,15 +17,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import {
-  createAgentSession,
-  AuthStorage,
-  SessionManager,
-  DefaultResourceLoader,
-  SettingsManager,
-  getAgentDir,
-  defineTool,
-} from "@earendil-works/pi-coding-agent";
+import { SettingsManager, defineTool } from "@earendil-works/pi-coding-agent";
 import { registerFauxProvider } from "@earendil-works/pi-ai/compat";
 import type { FauxProviderRegistration } from "@earendil-works/pi-ai/compat";
 import { fauxAssistantMessage, fauxText } from "@earendil-works/pi-ai/providers/faux";
@@ -33,10 +25,22 @@ import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import { z } from "zod";
 import { defaultChildSessionFactory } from "../engine/pi/child-session.ts";
 import { SDK_BUILTIN_TOOL_NAMES } from "../engine/pi/constants.ts";
+import { createFauxAgentSession } from "./support/pi-faux-session.ts";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 // SDK_BUILTIN_TOOL_NAMES imported from constants — see import at top of file.
+
+/** A no-op custom tool registered on every session built by `createTestSession`. */
+function makeNoopTool() {
+  return {
+    name: "noop",
+    label: "noop",
+    description: "Does nothing.",
+    parameters: { type: "object", properties: {} },
+    execute: async () => ({ content: [{ type: "text" as const, text: "ok" }], details: undefined }),
+  };
+}
 
 /** Create a minimal real AgentSession using a faux provider. No HTTP calls. */
 async function createTestSession(
@@ -45,57 +49,27 @@ async function createTestSession(
   systemPromptOverride?: string,
   compactionOptions?: { contextWindow?: number; reserveTokens?: number; keepRecentTokens?: number },
 ) {
-  const sessionManager = SessionManager.open(join(cwd, "session.jsonl"));
-  const agentDir = getAgentDir();
-  const resourceLoader = new DefaultResourceLoader({
-    cwd,
-    agentDir,
-    ...(systemPromptOverride !== undefined && { systemPromptOverride: () => systemPromptOverride }),
-  });
-  await resourceLoader.reload();
-
-  const authStorage = AuthStorage.inMemory();
-  authStorage.setRuntimeApiKey(faux.getModel().provider, "faux-key");
-
   const settingsManager = compactionOptions
     ? SettingsManager.inMemory({
         compaction: {
           enabled: true,
           reserveTokens: compactionOptions.reserveTokens ?? 0,
-          keepRecentTokens: 1,
+          keepRecentTokens: compactionOptions.keepRecentTokens ?? 1,
         },
       })
     : undefined;
 
-  const model = {
-    ...faux.getModel(),
-    ...(compactionOptions?.contextWindow !== undefined && {
-      contextWindow: compactionOptions.contextWindow,
-    }),
-  };
-
-  const { session } = await createAgentSession({
+  return createFauxAgentSession({
+    faux,
     cwd,
-    agentDir,
-    model: model as any,
-    tools: [...SDK_BUILTIN_TOOL_NAMES, "noop"],
-    customTools: [
-      defineTool({
-        name: "noop",
-        label: "noop",
-        description: "Does nothing.",
-        parameters: z.object({}),
-        execute: async () => ({ content: [{ type: "text" as const, text: "ok" }], details: undefined }),
-      }),
-    ],
-    sessionManager,
-    resourceLoader,
-    authStorage,
-    ...(settingsManager && { settingsManager }),
+    tools: [makeNoopTool()],
+    systemPrompt: systemPromptOverride,
+    settingsManager,
+    modelOverrides:
+      compactionOptions?.contextWindow !== undefined
+        ? { contextWindow: compactionOptions.contextWindow }
+        : undefined,
   });
-
-  session.agent.state.thinkingLevel = "off";
-  return session;
 }
 
 /**
@@ -582,24 +556,12 @@ describe("Pi SDK session — note tool allowlist", () => {
       }),
     );
 
-    const sessionManager = SessionManager.open(join(cwd, "session-note-1.jsonl"));
-    const agentDir = getAgentDir();
-    const resourceLoader = new DefaultResourceLoader({ cwd, agentDir });
-    await resourceLoader.reload();
-    const authStorage = AuthStorage.inMemory();
-    authStorage.setRuntimeApiKey(faux.getModel().provider, "faux-key");
-
-    const { session } = await createAgentSession({
+    const session = await createFauxAgentSession({
+      faux,
       cwd,
-      agentDir,
-      model: faux.getModel() as any,
-      tools: buildToolAllowlist(customTools as any),
-      customTools,
-      sessionManager,
-      resourceLoader,
-      authStorage,
+      sessionFile: "session-note-1.jsonl",
+      tools: customTools as any,
     });
-    session.agent.state.thinkingLevel = "off";
 
     const activeTools = session.getActiveToolNames();
     for (const name of noteToolNames) {
@@ -620,24 +582,12 @@ describe("Pi SDK session — note tool allowlist", () => {
       }),
     );
 
-    const sessionManager = SessionManager.open(join(cwd, "session-note-2.jsonl"));
-    const agentDir = getAgentDir();
-    const resourceLoader = new DefaultResourceLoader({ cwd, agentDir });
-    await resourceLoader.reload();
-    const authStorage = AuthStorage.inMemory();
-    authStorage.setRuntimeApiKey(faux.getModel().provider, "faux-key");
-
-    const { session } = await createAgentSession({
+    const session = await createFauxAgentSession({
+      faux,
       cwd,
-      agentDir,
-      model: faux.getModel() as any,
-      tools: buildToolAllowlist(customTools as any),
-      customTools,
-      sessionManager,
-      resourceLoader,
-      authStorage,
+      sessionFile: "session-note-2.jsonl",
+      tools: customTools as any,
     });
-    session.agent.state.thinkingLevel = "off";
 
     // Simulate session reuse path: re-set the allowlist with buildToolAllowlist
     session.setActiveToolsByName(buildToolAllowlist(customTools as any));

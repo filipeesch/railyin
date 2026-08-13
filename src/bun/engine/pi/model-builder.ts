@@ -10,6 +10,7 @@ import type { PiEngineConfig } from "../../config/index.ts";
 import type { Model } from "@earendil-works/pi-ai";
 import { PROVIDER_LIMITER_DEFAULTS } from "./provider-limiter.ts";
 import { nativeModelIdFor, resolvePiModelConfig } from "./model-config.ts";
+import { resolvePiApiMode, type PiApiMode } from "./api-mode.ts";
 
 /** Default max tokens per response. */
 export const DEFAULT_MAX_TOKENS = 8_192;
@@ -32,7 +33,7 @@ export class PiModelBuilder {
    * Throws if contextWindowOverride is null — every Pi session requires a known
    * context window to compute compaction thresholds.
    */
-  build(modelOverride: string | undefined, contextWindowOverride: number | undefined): Model<"openai-completions"> {
+  build(modelOverride: string | undefined, contextWindowOverride: number | undefined): Model<PiApiMode> {
     const modelStr = modelOverride ?? this.config.model ?? "default";
 
     const nativeId = nativeModelIdFor(modelStr);
@@ -53,9 +54,13 @@ export class PiModelBuilder {
     const modelCfg = resolvePiModelConfig(this.config, nativeId);
     const reasoning = modelCfg?.reasoning ?? true;
     const thinkingFormat = modelCfg?.thinkingFormat;
+    const apiMode = resolvePiApiMode(this.config, providerName);
 
     const compat: Record<string, unknown> = { supportsDeveloperRole: false };
-    if (thinkingFormat !== undefined) {
+    // `thinkingFormat` is a completions-only compat knob (OpenAICompletionsCompat);
+    // under `openai-responses` the compat shape differs and the SDK ignores unknown
+    // keys, so it is silently dropped to keep the object type-legal.
+    if (apiMode === "openai-completions" && thinkingFormat !== undefined) {
       compat.thinkingFormat = thinkingFormat;
       // DeepSeek streams reasoning in a separate `reasoning_content` field on assistant
       // messages; the SDK must replay/send that field to keep the conversation coherent.
@@ -67,7 +72,7 @@ export class PiModelBuilder {
     return {
       id: modelId,
       name: nativeId,
-      api: "openai-completions",
+      api: apiMode,
       provider: providerName ?? "default",
       baseUrl,
       reasoning,
@@ -76,7 +81,7 @@ export class PiModelBuilder {
       contextWindow: contextWindowOverride,
       maxTokens: DEFAULT_MAX_TOKENS,
       compat,
-    } as unknown as Model<"openai-completions">;
+    } as unknown as Model<PiApiMode>;
   }
 
   /** Log a warning when LM Studio is configured with high concurrency. */
