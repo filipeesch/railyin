@@ -39,6 +39,22 @@ export function canSubmitDecisionRequest(questions: DecisionRequestQuestion[], s
   });
 }
 
+/**
+ * Whether the full form may be SUBMITTED: the form must be validly answered AND
+ * the conversation must be ready to receive the answers (the task/session is in
+ * `waiting_user` — the terminal prompt has been persisted). The `waiting_user`
+ * gate prevents the early-submit race where the answer message lands before the
+ * terminal `decision_request_prompt` (D2).
+ */
+export function canSubmitInterview(
+  questions: DecisionRequestQuestion[],
+  state: DecisionRequestState,
+  readyToSubmit: boolean,
+): boolean {
+  if (!readyToSubmit) return false;
+  return canSubmitDecisionRequest(questions, state);
+}
+
 /** Whether a single page's question is validly answered (used to gate Next). */
 export function canAdvancePage(
   question: DecisionRequestQuestion,

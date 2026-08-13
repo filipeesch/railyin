@@ -18,9 +18,18 @@
  * with type: "decision_request_prompt" and JSON-stringified payload as content.
  */
 
-import { test, expect } from "./fixtures";
-import { makeUserMessage } from "./fixtures/mock-data";
-import type { ConversationMessage } from "@shared/rpc-types";
+import { test as base, expect, openSessionDrawer } from "./fixtures";
+import { makeChatSession, makeTask, makeUserMessage } from "./fixtures/mock-data";
+import type { ConversationMessage, Task } from "@shared/rpc-types";
+
+// Interview specs model a task AWAITING the interview by default — the
+// corrected gating + stale rule hide the panel unless the task/session is
+// `waiting_user`. Tests that need other states override `tasks.list` explicitly.
+const test = base.extend<{ task: Task }>({
+    task: async ({}, use) => {
+        await use(waitingTask(100));
+    },
+});
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -46,6 +55,13 @@ function makeInterviewPrompt(
         createdAt: new Date().toISOString(),
         ...overrides,
     };
+}
+
+/** A task in the awaiting-input state — required for pending-interview specs
+ * (the corrected gating + stale rule hide the panel unless the task/session is
+ * waiting on the interview). */
+function waitingTask(id: number): Task {
+    return makeTask({ id, executionState: "waiting_user" });
 }
 
 async function openTaskDrawer(page: import("@playwright/test").Page, taskId: number) {
@@ -291,6 +307,7 @@ test.describe("T-D — multi-question batch (paginated)", () => {
 
     test("T-D5: resize handle adjusts panel height; double-click resets it", async ({ page, api, task }) => {
         const msg = makeInterviewPrompt(task.id, { questions: [exclusiveQuestion] });
+        api.handle("tasks.list", () => [waitingTask(task.id)]);
         api.handle("conversations.getMessages", () => messagePage([msg]));
 
         await page.goto("/");
@@ -302,50 +319,64 @@ test.describe("T-D — multi-question batch (paginated)", () => {
 
         const initialHeight = await body.evaluate((el) => el.getBoundingClientRect().height);
 
-        // Drag the resize handle down to enlarge the panel. The drawer may extend
-        // past the right viewport edge, so clamp the click X into the visible area.
+        // The grip sits on the panel's TOP edge; the bottom is fixed in the
+        // drawer flow. Drag UP → panel grows. The drawer may extend past the
+        // right viewport edge, so clamp the click X into the visible area.
         const handle = page.locator(".decision-interview-panel__resize");
         const handleBox = await handle.boundingBox();
         const startX = Math.min(handleBox!.x + handleBox!.width / 2, 1270);
         const startY = handleBox!.y + handleBox!.height / 2;
         await page.mouse.move(startX, startY);
         await page.mouse.down();
-        await page.mouse.move(startX, startY + 120, { steps: 5 });
+        await page.mouse.move(startX, startY - 120, { steps: 5 });
         await page.mouse.up();
 
-        const resizedHeight = await body.evaluate((el) => el.getBoundingClientRect().height);
-        expect(resizedHeight).toBeGreaterThan(initialHeight);
+        const grownHeight = await body.evaluate((el) => el.getBoundingClientRect().height);
+        expect(grownHeight).toBeGreaterThan(initialHeight);
+
+        // Drag DOWN from the grown position → panel shrinks back.
+        await page.mouse.move(startX, startY - 120);
+        await page.mouse.down();
+        await page.mouse.move(startX, startY, { steps: 5 });
+        await page.mouse.up();
+
+        const shrunkHeight = await body.evaluate((el) => el.getBoundingClientRect().height);
+        expect(shrunkHeight).toBeLessThan(grownHeight);
 
         // Double-click resets to the default height.
         await handle.dblclick({ position: { x: Math.min(handleBox!.width / 2, 1270 - handleBox!.x), y: handleBox!.height / 2 } });
         const resetHeight = await body.evaluate((el) => el.getBoundingClientRect().height);
-        expect(resetHeight).toBeLessThan(resizedHeight);
+        expect(resetHeight).toBeLessThan(grownHeight);
     });
 
-    test("T-D6: oversized interview body scrolls so the footer stays reachable", async ({ page, api, task }) => {
+    test("T-D6: oversized question content scrolls while the footer stays fixed", async ({ page, api, task }) => {
         // A single tall question (long context + notes textarea) overflows the
-        // fixed panel body height, so the body must scroll.
+        // fixed panel body height, so only the question content must scroll.
         const tallQuestion = {
             question: "Describe your complete architecture in detail?",
             type: "freetext" as const,
             context: Array.from({ length: 30 }, (_, i) => `Context paragraph ${i + 1} with some explanatory detail.`).join(" "),
         };
         const msg = makeInterviewPrompt(task.id, { questions: [tallQuestion] });
+        api.handle("tasks.list", () => [waitingTask(task.id)]);
         api.handle("conversations.getMessages", () => messagePage([msg]));
 
         await page.goto("/");
         await openTaskDrawer(page, task.id);
 
-        const body = page.locator(".decision-interview-panel__body");
-        await expect(body).toBeVisible();
+        const content = page.locator(".interview__content");
+        const footer = page.locator(".interview__footer");
+        await expect(content).toBeVisible();
+        await expect(footer).toBeVisible();
 
-        // The body is scrollable (scrollHeight > clientHeight).
+        // Only the question content area is scrollable (scrollHeight > clientHeight).
         await expect
-            .poll(async () => body.evaluate((el) => el.scrollHeight > el.clientHeight))
+            .poll(async () => content.evaluate((el) => el.scrollHeight > el.clientHeight))
             .toBe(true);
 
-        // Scroll to the bottom reveals the Submit button.
-        await body.evaluate((el) => { el.scrollTop = el.scrollHeight; });
+        // Scroll the content to the bottom — the footer stays fixed/visible.
+        await content.evaluate((el) => { el.scrollTop = el.scrollHeight; });
+        await expect(footer).toBeVisible();
         await expect(page.locator(".interview__primary")).toBeVisible();
     });
 });
@@ -518,6 +549,9 @@ test.describe("T-J — streaming flow renders pages live + persisted prompt", ()
     test("T-J: decision_request_page events stream pages into the panel before done", async ({ page, api, ws, task }) => {
         const promptMsg = makeInterviewPrompt(task.id, { questions: [exclusiveQuestion] });
 
+        // Task starts RUNNING (model streaming the interview).
+        api.handle("tasks.list", () => [makeTask({ id: task.id, executionState: "running" })]);
+
         // Initially empty — no prompt seeded
         let servePrompt = false;
         api.handle("conversations.getMessages", () =>
@@ -535,16 +569,18 @@ test.describe("T-J — streaming flow renders pages live + persisted prompt", ()
 
         // The page streams live into the fixed panel BEFORE done.
         await expect(page.locator(".decision-interview-panel .interview__question-text")).toContainText("Which database do you prefer?", { timeout: 5000 });
-        // Submit is disabled while streaming (waiting_user not reached).
+
+        // Submit stays disabled while running EVEN with all answers filled (D2 gate).
+        await page.locator(".interview__option").filter({ hasText: "PostgreSQL" }).click();
         await expect(page.locator(".interview__primary")).toBeDisabled();
 
-        // Now update the API to include the persisted prompt (backend wrote at turn end)
+        // Turn ends: backend persists the prompt AND the task transitions to waiting_user.
         servePrompt = true;
         ws.pushDone(task.id, 7001);
+        ws.push({ type: "task.updated", payload: makeTask({ id: task.id, executionState: "waiting_user" }) });
 
-        // Panel reconciles to the persisted payload; form still present.
-        await expect(page.locator(".interview__primary")).toBeVisible({ timeout: 5000 });
-        await expect(page.locator(".interview__primary")).toBeDisabled();
+        // Panel reconciles to the persisted payload; Submit becomes enabled.
+        await expect(page.locator(".interview__primary")).toBeEnabled({ timeout: 5000 });
     });
 
     test("T-J2: persisted decision_request_prompt is interactive — select option and submit", async ({ page, api, ws, task }) => {
@@ -579,6 +615,44 @@ test.describe("T-J — streaming flow renders pages live + persisted prompt", ()
         // After submit + user message arrives, the whole panel should close
         // (answered state → showPanel returns false).
         await expect(page.locator(".decision-interview-panel")).not.toBeVisible({ timeout: 5000 });
+    });
+});
+
+// ─── T-W: a SECOND interview wave must replace the first after answering ──────
+
+test.describe("T-W — second interview wave replaces the first", () => {
+    test("T-W: after answering wave 1, the panel shows wave 2's questions (never wave 1 again)", async ({ page, api, ws, task }) => {
+        const wave1Prompt = makeInterviewPrompt(task.id, { questions: [exclusiveQuestion] }, { id: 6100 });
+        const wave2Prompt = makeInterviewPrompt(
+            task.id,
+            { questions: [{ question: "Second wave question?", type: "freetext", weight: "easy" }] },
+            { id: 6200 },
+        );
+        const replyMsg = makeUserMessage(task.id, "A: PostgreSQL", { id: 6101 });
+
+        let serveMessages: ConversationMessage[] = [wave1Prompt];
+        api.handle("conversations.getMessages", () => messagePage(serveMessages));
+        api.handle("tasks.submitDecisions", () => ({ message: replyMsg, executionId: 9999 }));
+
+        await page.goto("/");
+        await openTaskDrawer(page, task.id);
+
+        // Wave 1 is showing.
+        await expect(page.locator(".decision-interview-panel .interview__question-text")).toContainText("Which database do you prefer?", { timeout: 5000 });
+
+        // Answer wave 1 and submit → panel closes.
+        await page.locator(".interview__option").filter({ hasText: "PostgreSQL" }).click();
+        await page.locator(".interview__primary").click();
+        ws.pushNewMessage(replyMsg);
+        await expect(page.locator(".decision-interview-panel")).not.toBeVisible({ timeout: 5000 });
+
+        // The model sends a SECOND wave: new terminal prompt persisted server-side.
+        serveMessages = [wave1Prompt, replyMsg, wave2Prompt];
+        ws.pushNewMessage(wave2Prompt);
+
+        // The panel must show WAVE 2 — never wave 1 again.
+        await expect(page.locator(".decision-interview-panel .interview__question-text")).toContainText("Second wave question?", { timeout: 5000 });
+        await expect(page.locator(".decision-interview-panel")).not.toContainText("Which database do you prefer?");
     });
 });
 
@@ -822,5 +896,159 @@ test.describe("T-Q — multiselect Other textarea", () => {
 
         // Empty text — submit stays disabled
         await expect(submit).toBeDisabled();
+    });
+});
+
+// ─── T-K2: message.new prompt while the stream is still ACTIVE ───────────────
+
+test.describe("T-K2 — message.new prompt mid-stream", () => {
+    test("T-K2: decision_request_prompt pushed before done still renders (drop-guard exemption)", async ({ page, api, ws, task }) => {
+        const promptMsg = makeInterviewPrompt(task.id, { questions: [freetextQuestion] }, { id: 6500 });
+
+        // Task is running; no persisted prompt yet.
+        api.handle("tasks.list", () => [makeTask({ id: task.id, executionState: "running" })]);
+        api.handle("conversations.getMessages", () => messagePage([]));
+
+        await page.goto("/");
+        await openTaskDrawer(page, task.id);
+
+        await expect(page.locator(".interview__primary")).not.toBeVisible();
+
+        // Stream a live page (creates an active, not-done stream state)…
+        ws.pushDecisionRequestPage(task.id, 7101, freetextQuestion);
+
+        // …then push the persisted terminal prompt BEFORE the done event: it
+        // must be appended (drop-guard exemption) and the panel must render it.
+        ws.pushNewMessage(promptMsg);
+
+        await expect(page.locator(".decision-interview-panel .interview__primary")).toBeVisible({ timeout: 5000 });
+    });
+});
+
+// ─── T-R: stale interview hides the panel ────────────────────────────────────
+
+test.describe("T-R — stale interview hidden", () => {
+    test("T-R: persisted prompt + completed task + no live pages → panel absent", async ({ page, api, task }) => {
+        const msg = makeInterviewPrompt(task.id, { questions: [exclusiveQuestion] });
+        api.handle("tasks.list", () => [makeTask({ id: task.id, executionState: "completed" })]);
+        api.handle("conversations.getMessages", () => messagePage([msg]));
+
+        await page.goto("/");
+        await openTaskDrawer(page, task.id);
+
+        await expect(page.locator(".decision-interview-panel")).not.toBeVisible();
+    });
+});
+
+// ─── T-T: raced data (answer before prompt) hides the panel ──────────────────
+
+test.describe("T-T — raced data hidden", () => {
+    test("T-T: prompt persisted after the answer + task not waiting → panel absent", async ({ page, api, task }) => {
+        const promptId = 6600;
+        const promptMsg = makeInterviewPrompt(task.id, { questions: [exclusiveQuestion] }, { id: promptId });
+        // The answer message predates the terminal prompt (early-submit race).
+        const userMsg = makeUserMessage(task.id, "A: SQLite", { id: promptId - 1 });
+        api.handle("tasks.list", () => [makeTask({ id: task.id, executionState: "completed" })]);
+        api.handle("conversations.getMessages", () => messagePage([userMsg, promptMsg]));
+
+        await page.goto("/");
+        await openTaskDrawer(page, task.id);
+
+        await expect(page.locator(".decision-interview-panel")).not.toBeVisible();
+    });
+});
+
+// ─── T-S: dismissal persists per episode across drawer reopen ────────────────
+
+test.describe("T-S — dismissal persists per episode", () => {
+    test("T-S: dismissed interview stays hidden after drawer reopen; new episode shows again", async ({ page, api, ws, task }) => {
+        const promptId = 6700;
+        const promptMsg = makeInterviewPrompt(task.id, { questions: [exclusiveQuestion] }, { id: promptId });
+
+        let messages: ConversationMessage[] = [promptMsg];
+        api.handle("conversations.getMessages", () => messagePage(messages));
+
+        await page.goto("/");
+        await openTaskDrawer(page, task.id);
+
+        await expect(page.locator(".decision-interview-panel")).toBeVisible();
+        await page.locator(".decision-interview-panel__dismiss").click();
+        await expect(page.locator(".decision-interview-panel")).not.toBeVisible();
+
+        // Close the drawer (header ✕) and reopen — dismissal persists per episode.
+        await page.locator(".tcv-header .pi-times").click();
+        await expect(page.locator(".task-detail")).not.toBeVisible();
+        await openTaskDrawer(page, task.id);
+
+        await expect(page.locator(".decision-interview-panel")).not.toBeVisible();
+
+        // A NEW episode (new prompt id) clears the dismissal effect.
+        messages = [promptMsg, makeInterviewPrompt(task.id, { questions: [exclusiveQuestion] }, { id: promptId + 1 })];
+        ws.pushNewMessage(messages[1]!);
+
+        await expect(page.locator(".decision-interview-panel")).toBeVisible({ timeout: 5000 });
+    });
+});
+
+// ─── T-U: no in-chat balloon ─────────────────────────────────────────────────
+
+test.describe("T-U — no in-chat decision-request balloon", () => {
+    test("T-U: answered interview renders no chat balloon", async ({ page, api, task }) => {
+        const promptId = 6800;
+        const promptMsg = makeInterviewPrompt(task.id, { questions: [exclusiveQuestion] }, { id: promptId });
+        const replyMsg = makeUserMessage(task.id, "A: PostgreSQL", { id: promptId + 1 });
+        api.handle("tasks.list", () => [makeTask({ id: task.id, executionState: "completed" })]);
+        api.handle("conversations.getMessages", () => messagePage([promptMsg, replyMsg]));
+
+        await page.goto("/");
+        await openTaskDrawer(page, task.id);
+
+        await expect(page.locator(".msg--interview-prompt")).toHaveCount(0);
+    });
+
+    test("T-U2: unanswered interview shows the panel but no chat balloon", async ({ page, api, task }) => {
+        const msg = makeInterviewPrompt(task.id, { questions: [exclusiveQuestion] });
+        api.handle("conversations.getMessages", () => messagePage([msg]));
+
+        await page.goto("/");
+        await openTaskDrawer(page, task.id);
+
+        await expect(page.locator(".decision-interview-panel")).toBeVisible();
+        await expect(page.locator(".msg--interview-prompt")).toHaveCount(0);
+    });
+});
+
+// ─── T-V: session interview panel gating ─────────────────────────────────────
+
+test.describe("T-V — session interview panel", () => {
+    test("T-V: waiting_user session shows the panel; Submit enabled when answered", async ({ page, api }) => {
+        const session = makeChatSession({ id: 700, title: "Interview Session", status: "waiting_user" });
+        const promptMsg = makeInterviewPrompt(session.conversationId, { questions: [exclusiveQuestion] }, { id: 6900 });
+
+        api.returns("chatSessions.list", [session]);
+        api.returns("chatSessions.get", session);
+        api.handle("conversations.getMessages", () => messagePage([promptMsg]));
+
+        await page.goto("/");
+        await openSessionDrawer(page, session.id);
+
+        await expect(page.locator(".decision-interview-panel")).toBeVisible({ timeout: 5000 });
+
+        await page.locator(".interview__option").filter({ hasText: "SQLite" }).click();
+        await expect(page.locator(".interview__primary")).toBeEnabled();
+    });
+
+    test("T-V2: idle session hides the panel (stale interview)", async ({ page, api }) => {
+        const session = makeChatSession({ id: 701, title: "Done Session", status: "idle" });
+        const promptMsg = makeInterviewPrompt(session.conversationId, { questions: [exclusiveQuestion] }, { id: 6950 });
+
+        api.returns("chatSessions.list", [session]);
+        api.returns("chatSessions.get", session);
+        api.handle("conversations.getMessages", () => messagePage([promptMsg]));
+
+        await page.goto("/");
+        await openSessionDrawer(page, session.id);
+
+        await expect(page.locator(".decision-interview-panel")).not.toBeVisible();
     });
 });

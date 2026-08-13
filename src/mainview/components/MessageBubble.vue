@@ -35,19 +35,6 @@
     />
   </div>
 
-  <div v-else-if="chunk.type === 'decision_request_prompt'" class="msg msg--interview-prompt">
-    <!-- Legacy/read-only rendering: new interactive interviews live in the fixed
-         DecisionInterviewPanel above the prompt input. Persisted prompts from
-         before the streaming change remain renderable here (answered/read-only). -->
-    <div v-if="interviewAnsweredText" class="interview__answered">
-      <div class="interview__answered-header">Interview answered</div>
-      <div class="interview__answered-body prose" v-html="renderMd(interviewAnsweredText)" />
-    </div>
-    <div v-else class="interview__legacy-hint">
-      An interview is waiting for your input above the message box.
-    </div>
-  </div>
-
   <!-- Persisted reasoning messages from DB (collapsed, non-streaming) -->
   <ReasoningBubble
     v-else-if="chunk.type === 'reasoning'"
@@ -193,15 +180,6 @@ async function onShellApprovalRespond(decision: "approve_once" | "approve_all" |
   await api("executions.respondShellApproval", { executionId, decision });
 }
 
-// ─── decision_request_prompt support (legacy rendering only) ─────────────────
-
-const interviewAnsweredText = computed(() => {
-  if (props.chunk.type !== "decision_request_prompt" || props.index === undefined) return undefined;
-  const messages = messageList.value;
-  const later = messages.slice(props.index + 1);
-  const reply = later.find((m) => m.type === "user");
-  return reply?.content;
-});
 </script>
 
 <style scoped>
@@ -347,36 +325,6 @@ const interviewAnsweredText = computed(() => {
 .msg--ask-prompt {
   align-items: flex-start;
   max-width: 100%;
-}
-
-.msg--interview-prompt {
-  align-items: flex-start;
-  max-width: 100%;
-}
-
-.interview__answered {
-  background: var(--p-surface-50, #f8fafc);
-  border: 1px solid var(--p-surface-200, #e2e8f0);
-  border-radius: 8px;
-  padding: 10px 14px;
-  font-size: 0.85rem;
-  color: var(--p-surface-700, #334155);
-}
-
-.interview__answered-header {
-  font-weight: 600;
-  font-size: 0.75rem;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--p-surface-500, #64748b);
-  margin-bottom: 4px;
-}
-
-.interview__legacy-hint {
-  font-size: 0.85rem;
-  color: var(--p-surface-500, #64748b);
-  font-style: italic;
-  padding: 6px 0;
 }
 
 .msg--prompt {

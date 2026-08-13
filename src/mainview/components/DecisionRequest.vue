@@ -1,10 +1,12 @@
 <template>
   <!-- Interactive -->
-  <div v-if="!answered" ref="interviewEl" class="interview">
-    <!-- Legacy top-level context preamble (rendered above page 1) -->
-    <div v-if="currentIndex === 0 && context" class="interview__context prose" v-html="renderMd(context)" />
+  <div ref="interviewEl" class="interview">
+    <!-- Scrollable question content (footer stays fixed below) -->
+    <div class="interview__content">
+      <!-- Legacy top-level context preamble (rendered above page 1) -->
+      <div v-if="currentIndex === 0 && context" class="interview__context prose" v-html="renderMd(context)" />
 
-    <div class="interview__section">
+      <div class="interview__section">
       <template v-if="currentQuestion">
         <!-- Per-question context preamble -->
         <div v-if="currentQuestion.context" class="interview__context prose" v-html="renderMd(currentQuestion.context)" />
@@ -119,6 +121,7 @@
         placeholder="Anything else the AI should know when recording these decisions…"
       />
     </div>
+    </div><!-- /interview__content -->
 
     <!-- Footer: Back / counter / Record toggle / primary action (Next or Submit) -->
     <div class="interview__footer">
@@ -149,7 +152,7 @@ import { Marked } from "marked";
 import mermaid from "mermaid";
 import type { DecisionRequestQuestion } from "@shared/rpc-types";
 import {
-  canSubmitDecisionRequest,
+  canSubmitInterview,
   canAdvancePage,
   clampPageIndex,
   buildDecisionAnswers,
@@ -177,17 +180,19 @@ function renderMd(content: string): string {
   return mermaidMarked.parse(content, { async: false }) as string;
 }
 
-const props = defineProps<{
-  questions: DecisionRequestQuestion[];
-  context?: string;
-  answeredText?: string;
-}>();
+const props = withDefaults(
+  defineProps<{
+    questions: DecisionRequestQuestion[];
+    context?: string;
+    /** Whether the conversation is ready to receive the answers (`waiting_user`). */
+    readyToSubmit?: boolean;
+  }>(),
+  { readyToSubmit: true },
+);
 
 const emit = defineEmits<{
   submit: [payload: { text: string; decisions: Array<{ question: string; answer: string; weight: string; notes?: string }>; generalNotes?: string; recordAsDecisions?: boolean }];
 }>();
-
-const answered = computed(() => props.answeredText !== undefined);
 
 const interviewEl = ref<HTMLElement>();
 const currentIndex = ref(0);
@@ -236,7 +241,7 @@ const canAdvanceCurrent = computed(() => {
   return canAdvancePage(q, currentIndex.value, formState());
 });
 
-const canSubmit = computed(() => canSubmitDecisionRequest(props.questions, formState()));
+const canSubmit = computed(() => canSubmitInterview(props.questions, formState(), props.readyToSubmit));
 
 function goNext() {
   if (!canAdvanceCurrent.value || isLastPage.value) return;
@@ -309,9 +314,23 @@ function submit() {
   border-radius: 10px;
   padding: 16px 18px;
   width: 100%;
+  height: 100%;
+  box-sizing: border-box;
   display: flex;
   flex-direction: column;
   gap: 20px;
+  overflow: hidden;
+}
+
+/* Scrollable question content — the footer below stays fixed (D6). */
+.interview__content {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .interview__context {  font-size: 0.88rem;
@@ -527,7 +546,7 @@ function submit() {
   border-top: 1px solid var(--p-surface-200, #e2e8f0);
 }
 
-/* ── Footer / toggle ──────────────────────────────── */
+/* ── Footer / toggle — fixed below the scrollable content ─────────── */
 .interview__footer {
   display: flex;
   align-items: center;
@@ -535,6 +554,7 @@ function submit() {
   gap: 12px;
   padding-top: 8px;
   border-top: 1px solid var(--p-surface-200, #e2e8f0);
+  flex-shrink: 0;
 }
 
 .interview__footer-left,

@@ -1,6 +1,7 @@
 import { computed, ref } from "vue";
 import { defineStore } from "pinia";
 import { api } from "../rpc";
+import { migrateDismissalKey } from "../utils/decisionInterview";
 import type { ConversationMessage, DecisionRequestQuestion, StreamError, StreamEvent, StreamEventType } from "@shared/rpc-types";
 
 function tryParseJson(s: string): Record<string, unknown> | null {
@@ -102,6 +103,18 @@ export const useConversationStore = defineStore("conversation", () => {
   const liveInterviews = ref(new Map<number, DecisionRequestQuestion[]>());
   /** ExecutionId that produced the current live interview pages per conversation. */
   const liveInterviewExecutions = ref(new Map<number, number>());
+  /** Dismissed interview episode keys per conversation (survives panel remount — D4). */
+  const dismissedInterviews = ref(new Map<number, string>());
+
+  /** Mark the current interview episode as dismissed for a conversation. */
+  function dismissInterview(conversationId: number, episodeKey: string): void {
+    dismissedInterviews.value.set(conversationId, episodeKey);
+  }
+
+  /** Clear a conversation's dismissed-episode marker. */
+  function clearDismissedInterview(conversationId: number): void {
+    dismissedInterviews.value.delete(conversationId);
+  }
 
   const activeStreamState = computed(() =>
     activeConversationId.value != null
@@ -130,6 +143,12 @@ export const useConversationStore = defineStore("conversation", () => {
       messagesLoading.value = false;
       hasMoreBefore.value = false;
       isLoadingOlder.value = false;
+      // Closing the drawer/conversation: drop ephemeral live interview state so
+      // stale pages cannot resurface on reopen (D8).
+      if (previousId != null) {
+        liveInterviews.value.delete(previousId);
+        liveInterviewExecutions.value.delete(previousId);
+      }
     }
   }
 
@@ -436,10 +455,13 @@ export const useConversationStore = defineStore("conversation", () => {
 
   function onNewMessage(message: ConversationMessage) {
     if (message.conversationId !== activeConversationId.value) return;
-    // Only skip appending if there's an active stream and this is NOT a user message
-    // User messages should always be appended immediately, even while assistant is streaming
+    // Only skip appending if there's an active stream and this is NOT a user
+    // message or a terminal decision_request_prompt. User messages always append
+    // immediately; `decision_request_prompt` is exempt so the live→persisted
+    // reconcile (clearing live pages) always runs even if the push lands before
+    // the stream's done event (D8).
     const streamState = streamStates.value.get(message.conversationId);
-    if (streamState && !streamState.isDone && message.type !== "user") {
+    if (streamState && !streamState.isDone && message.type !== "user" && message.type !== "decision_request_prompt") {
       console.debug("[conversation] onNewMessage DROPPED (stream not done)", message.type, message.id);
       return;
     }
@@ -452,6 +474,14 @@ export const useConversationStore = defineStore("conversation", () => {
     }
     // Terminal interview prompt replaces the live streaming pages (reconcile).
     if (message.type === "decision_request_prompt") {
+      // A mid-stream dismissal keyed by execution survives into the persisted
+      // episode (keyed by prompt id) so the panel stays dismissed on reopen.
+      const liveExec = liveInterviewExecutions.value.get(message.conversationId) ?? null;
+      const storedDismissal = dismissedInterviews.value.get(message.conversationId) ?? null;
+      const migrated = migrateDismissalKey(storedDismissal, liveExec, message.id);
+      if (migrated !== storedDismissal) {
+        dismissedInterviews.value.set(message.conversationId, migrated!);
+      }
       liveInterviews.value.delete(message.conversationId);
       liveInterviewExecutions.value.delete(message.conversationId);
     }
@@ -476,7 +506,10 @@ export const useConversationStore = defineStore("conversation", () => {
     contextUsageByConversation,
     liveInterviews,
     liveInterviewExecutions,
+    dismissedInterviews,
     activeLiveInterview,
+    dismissInterview,
+    clearDismissedInterview,
     setActiveConversation,
     appendMessage,
     loadMessages,

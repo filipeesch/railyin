@@ -44,6 +44,7 @@ import { ClaudeEngine } from "../engine/claude/engine.ts";
 import type { ClaudeSdkAdapter, ClaudeRunConfig, ClaudeSdkModelInfo } from "../engine/claude/adapter.ts";
 import type { EngineEvent } from "../engine/types.ts";
 import type { StreamEvent } from "../../shared/rpc-types.ts";
+import { runDecisionRequestEarlySubmitScenario } from "./support/shared-rpc-scenarios.ts";
 
 // Helpers
 
@@ -998,5 +999,35 @@ describe("S-16 [decision-interview-streaming]: page events ephemeral, terminal p
         // Persisted prompt message
         const messages = runtime.getMessages(taskId);
         expect(messages.some((m) => m.type === "decision_request_prompt")).toBe(true);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// S-17: [decision-interview-streaming] early submit — superseded flush discarded
+// Spec: "When an engine run's turn-end flush would emit the terminal
+//        decision_request event, the stream processor SHALL discard it — no
+//        decision_request_prompt persistence, no execution/task state change,
+//        no waiting_user transition — if the execution has been superseded."
+// Pipeline assertion: the user's early answer (new execution) is never followed
+// by a stray prompt, and the task is never flipped back to waiting_user.
+// ---------------------------------------------------------------------------
+
+describe("S-17 [decision-interview-streaming]: early submit — superseded flush discarded", () => {
+    it("no decision_request_prompt after the answer; task not flipped to waiting_user", async () => {
+        const engine = new ScriptedEngine();
+        engine.queueTurn([
+            { type: "decision_request_page", payload: JSON.stringify({ question: "Q1", type: "freetext" }) },
+            { type: "decision_request_page", payload: JSON.stringify({ question: "Q2", type: "freetext" }) },
+            scriptCheckpoint("old-turn-still-streaming"),
+            { type: "decision_request", payload: JSON.stringify({ questions: [{ question: "Q1", type: "freetext" }, { question: "Q2", type: "freetext" }] }) },
+        ]);
+        engine.queueTurn([
+            scriptToken("Processing your answers."),
+            scriptDone(),
+        ]);
+
+        runtime = makeRuntime(engine);
+
+        await runDecisionRequestEarlySubmitScenario(runtime, engine);
     });
 });
