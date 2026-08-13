@@ -525,6 +525,11 @@ test.describe("CD-D — waiting_user states", () => {
             ],
         }));
         api.returns("chatSessions.list", [session]);
+        // selectSession merges chatSessions.get over the cached session (status
+        // included) — the fixture default returns status "idle", which would make
+        // the interview panel stale/hidden. Seed the get with the waiting_user
+        // session so the panel renders and Submit is enabled.
+        api.returns("chatSessions.get", session);
         stubSessionMessages(api, session.conversationId, [prompt]);
 
         let sentBody: Record<string, unknown> | null = null;

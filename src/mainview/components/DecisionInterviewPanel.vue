@@ -20,7 +20,7 @@
       <DecisionRequest
         :questions="questions"
         :context="context"
-        :answered-text="answeredText"
+        :ready-to-submit="readyToSubmit"
         @submit="onSubmit"
       />
     </div>
@@ -28,9 +28,17 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, ref } from "vue";
 import type { DecisionRequestPayload, DecisionRequestQuestion } from "@shared/rpc-types";
 import DecisionRequest from "./DecisionRequest.vue";
+import {
+  computeResizeHeight,
+  episodeKey,
+  hasUserMessageAfterPrompt,
+  isDismissedEpisode,
+  isInterviewStale,
+  latestPromptId,
+} from "../utils/decisionInterview";
 import { useConversationStore } from "../stores/conversation";
 import { useChatStore } from "../stores/chat";
 import { useTaskStore } from "../stores/task";
@@ -39,6 +47,8 @@ const props = defineProps<{
   conversationId: number;
   taskId?: number | null;
   chatSessionId?: number | null;
+  /** Task/session execution state — gates Submit on `waiting_user` (D2). */
+  executionState?: string | null;
 }>();
 
 const conversationStore = useConversationStore();
@@ -56,27 +66,23 @@ const liveQuestions = computed<DecisionRequestQuestion[]>(() => {
 });
 
 /**
- * The latest persisted `decision_request_prompt` message for this conversation
- * (if any). Used to render the terminal interview after the model ends its
- * turn, and to detect whether the interview has already been answered.
+ * The latest persisted `decision_request_prompt` message id for this
+ * conversation (if any). Used to render the terminal interview after the model
+ * ends its turn, and to detect whether the interview has already been answered.
  */
-const latestPromptIndex = computed<number>(() => {
-  const messages = conversationStore.messages;
-  let found = -1;
-  for (let i = 0; i < messages.length; i++) {
-    const m = messages[i];
-    if (m.conversationId !== props.conversationId) continue;
-    if (m.type === "decision_request_prompt") found = i;
-  }
-  return found;
-});
+const latestPromptIdValue = computed<number | null>(() =>
+  latestPromptId(conversationStore.messages, props.conversationId),
+);
 
 const persistedPayload = computed<DecisionRequestPayload | null>(() => {
-  const idx = latestPromptIndex.value;
-  if (idx < 0) return null;
-  const raw = conversationStore.messages[idx].content;
+  const promptId = latestPromptIdValue.value;
+  if (promptId == null) return null;
+  const promptMessage = conversationStore.messages.find(
+    (m) => m.id === promptId && m.conversationId === props.conversationId,
+  );
+  if (!promptMessage) return null;
   try {
-    const parsed = JSON.parse(raw) as DecisionRequestPayload;
+    const parsed = JSON.parse(promptMessage.content) as DecisionRequestPayload;
     return Array.isArray(parsed.questions) ? parsed : { questions: [] };
   } catch {
     return { questions: [] };
@@ -91,32 +97,30 @@ const questions = computed<DecisionRequestQuestion[]>(() => {
 
 const context = computed<string | undefined>(() => persistedPayload.value?.context ?? undefined);
 
+const hasLivePages = computed(() => liveQuestions.value.length > 0);
+
 /**
- * Answered state: a user message appears AFTER the latest terminal prompt.
- * When set, the panel closes (the interview has been answered or dismissed by
- * submitting).
+ * Robust answered detection (D3): the interview is answered when a user message
+ * exists with an id AFTER the latest terminal prompt (id-based), OR when the
+ * conversation has clearly moved past a persisted interview (stale — execution
+ * no longer awaiting input and no live pages streaming). The stale rule covers
+ * the early-submit race where the answer message predates the terminal prompt,
+ * plus reloads and dropped websocket pushes.
  */
-const answeredText = computed<string | undefined>(() => {
-  const idx = latestPromptIndex.value;
-  if (idx < 0) return undefined;
-  const messages = conversationStore.messages;
-  for (let i = idx + 1; i < messages.length; i++) {
-    const m = messages[i];
-    if (m.conversationId !== props.conversationId) continue;
-    if (m.type === "user") return m.content;
+const answered = computed<boolean>(() => {
+  const promptId = latestPromptIdValue.value;
+  if (promptId != null && hasUserMessageAfterPrompt(conversationStore.messages, props.conversationId, promptId)) {
+    return true;
   }
-  return undefined;
+  return isInterviewStale(props.executionState ?? null, hasLivePages.value, latestPromptIdValue.value != null);
 });
 
 /**
- * Dismissal is scoped to the CURRENT interview episode, not the conversation:
- * `dismissed` resets automatically when a NEW interview episode begins (a new
- * `decision_request_page` event arrives from a different execution after
- * dismissal), so the panel can spawn again for later questions.
+ * Submit is only allowed once the conversation is awaiting the answers — the
+ * terminal `decision_request_prompt` has been persisted and the task/session is
+ * `waiting_user`. This closes the early-submit ordering race (D2).
  */
-const dismissed = ref(false);
-const dismissedForExecution = ref<number | null>(null);
-const activeConversationId = computed(() => conversationStore.activeConversationId);
+const readyToSubmit = computed(() => props.executionState === "waiting_user");
 
 const liveExecutionId = computed<number | null>(() =>
   props.conversationId === conversationStore.activeConversationId
@@ -124,33 +128,36 @@ const liveExecutionId = computed<number | null>(() =>
     : null,
 );
 
-// Reset the dismissed flag when switching conversations.
-watch(activeConversationId, () => {
-  dismissed.value = false;
-  dismissedForExecution.value = null;
-});
+/** Stable key identifying the current interview episode (live execution wins). */
+const currentEpisodeKey = computed<string | null>(() =>
+  episodeKey(liveExecutionId.value, latestPromptIdValue.value),
+);
 
-// A new execution streaming pages after dismissal = a new interview episode:
-// reset the dismissed flag so the panel can spawn again.
-watch(liveExecutionId, (executionId) => {
-  if (dismissed.value && executionId !== null && executionId !== dismissedForExecution.value) {
-    dismissed.value = false;
-    dismissedForExecution.value = null;
-  }
-});
+/**
+ * True when the current interview episode has been dismissed. Backed by the
+ * conversation store (D4) so dismissal persists across drawer reopen/remount; a
+ * NEW episode (different execution or prompt id) naturally mismatches the stored
+ * key and lets the panel spawn again.
+ */
+const dismissed = computed<boolean>(() =>
+  isDismissedEpisode(
+    conversationStore.dismissedInterviews.get(props.conversationId) ?? null,
+    currentEpisodeKey.value,
+  ),
+);
 
 const showPanel = computed(() => {
   if (props.conversationId !== conversationStore.activeConversationId) return false;
   if (dismissed.value) return false;
-  // Hide once the interview has been answered (a user message follows the
-  // latest terminal prompt) so the panel closes after submission.
-  if (answeredText.value !== undefined) return false;
+  // Hide once the interview has been answered or the conversation has moved
+  // past it (robust detection — D3).
+  if (answered.value) return false;
   return questions.value.length > 0;
 });
 
 function dismiss() {
-  dismissed.value = true;
-  dismissedForExecution.value = liveExecutionId.value;
+  const key = currentEpisodeKey.value;
+  if (key != null) conversationStore.dismissInterview(props.conversationId, key);
 }
 
 async function onSubmit(payload: {
@@ -190,12 +197,14 @@ function onResizeStart(event: MouseEvent) {
 
   const onMove = (moveEvent: MouseEvent) => {
     const delta = moveEvent.clientY - startY;
-    // Dragging DOWN increases height (grip is at the top; chat sits above).
-    const next = Math.min(
-      Math.max(startHeight + delta, MIN_PANEL_HEIGHT),
+    // The grip sits on the panel's TOP edge and the bottom is fixed in the
+    // drawer flow: dragging UP grows the panel, dragging DOWN shrinks it.
+    panelHeight.value = computeResizeHeight(
+      startHeight,
+      delta,
+      MIN_PANEL_HEIGHT,
       Math.floor(window.innerHeight * MAX_PANEL_HEIGHT_RATIO),
     );
-    panelHeight.value = next;
   };
 
   const onUp = () => {
@@ -249,13 +258,13 @@ function resetHeight() {
   pointer-events: none;
 }
 
-/* Scrollable body: keeps the footer buttons reachable when the interview is
-   taller than the panel / viewport. */
+/* Body hosts the DecisionRequest card, which owns the scroll (D6): the
+   question content scrolls inside `.interview__content`, the footer stays
+   fixed. The body itself must not scroll. */
 .decision-interview-panel__body {
   height: var(--panel-height);
   min-height: 120px;
-  overflow-y: auto;
-  overscroll-behavior: contain;
+  overflow: hidden;
 }
 
 .decision-interview-panel--resizing {

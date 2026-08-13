@@ -102,6 +102,7 @@
       v-if="session && !conversationStore.messagesLoading && activeTab === 'chat' && session.conversationId != null"
       :conversation-id="session.conversationId"
       :chat-session-id="session.id"
+      :execution-state="session.status"
     />
 
     <!-- Input bar -->

@@ -133,6 +133,7 @@
         v-if="task.conversationId != null"
         :conversation-id="task.conversationId"
         :task-id="task.id"
+        :execution-state="task.executionState"
       />
 
       <!-- Changed files panel -->

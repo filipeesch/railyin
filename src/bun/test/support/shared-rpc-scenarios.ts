@@ -1,5 +1,6 @@
 import { expect } from "vitest";
 import type { BackendRpcRuntime } from "./backend-rpc-runtime.ts";
+import type { ScriptedEngine } from "./scripted-engine.ts";
 
 export async function runSingleTurnChatScenario(runtime: BackendRpcRuntime): Promise<void> {
     const { taskId } = await runtime.createTask();
@@ -272,4 +273,55 @@ export async function runDecisionStreamingScenario(runtime: BackendRpcRuntime): 
 
     const dbEvents = runtime.getDbStreamEvents(result.executionId);
     expect(dbEvents.some((e) => e.type === "decision_request_page")).toBe(false);
+}
+
+/**
+ * Validates the D7 superseded-flush guard end-to-end: the model streams
+ * interview pages, the user submits answers BEFORE the turn ends (a NEW
+ * execution starts), and the old execution's turn-end flush is discarded — no
+ * stray `decision_request_prompt` lands after the answer and the task is never
+ * flipped back to `waiting_user`.
+ *
+ * The caller MUST queue two turns on the `ScriptedEngine` before invoking:
+ *   turn 1 (interview): `decision_request_page` ×2 → `scriptCheckpoint("old-turn-still-streaming")`
+ *                       → `{ type: "decision_request", payload }` (the stale flush)
+ *   turn 2 (answer):    `scriptToken(...)` + `scriptDone()`
+ * and create the runtime with that engine.
+ */
+export async function runDecisionRequestEarlySubmitScenario(
+    runtime: BackendRpcRuntime,
+    engine: ScriptedEngine,
+): Promise<void> {
+    const { taskId } = await runtime.createTask();
+    const first = await runtime.handlers["tasks.sendMessage"]({ taskId, content: "Ask me questions" });
+
+    // The old execution is streaming pages — wait until it pauses at the checkpoint.
+    await engine.waitForCheckpoint("old-turn-still-streaming");
+
+    // User submits answers while the model is still streaming → a NEW execution
+    // starts (the task is not waiting_user yet).
+    const second = await runtime.handlers["tasks.submitDecisions"]({
+        taskId,
+        answers: [{ question: "Q1", answer: "A1", weight: "medium" }],
+        generalNotes: undefined,
+        recordAsDecisions: false,
+    });
+    expect(second.executionId).not.toBe(first.executionId);
+
+    // Let the old execution finish — its turn-end flush fires the terminal
+    // `decision_request`, which the guard must discard as superseded.
+    engine.proceed("old-turn-still-streaming");
+
+    await runtime.recorder.waitForStreamDone(first.executionId);
+    await runtime.recorder.waitForStreamDone(second.executionId);
+    await runtime.waitForExecutionStatus(second.executionId, "completed");
+
+    const messages = runtime.getMessages(taskId);
+    expect(messages.some((m) => m.type === "decision_request_prompt")).toBe(false);
+    // Two user messages: the original prompt + the answer submission.
+    expect(messages.filter((m) => m.type === "user")).toHaveLength(2);
+
+    // The task finished normally — it was never flipped back to waiting_user.
+    await runtime.waitForTaskState(taskId, "completed");
+    expect(runtime.getExecutionStatus(first.executionId)).toBe("running");
 }

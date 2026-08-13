@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import type { DecisionRequestQuestion } from "../../shared/rpc-types";
 import {
   canSubmitDecisionRequest,
+  canSubmitInterview,
   canAdvancePage,
   clampPageIndex,
   buildDecisionAnswerParts,
@@ -244,5 +245,19 @@ describe("clampPageIndex", () => {
     expect(clampPageIndex(-1, 3)).toBe(0);
     expect(clampPageIndex(99, 3)).toBe(2);
     expect(clampPageIndex(0, 0)).toBe(-1);
+  });
+});
+
+describe("canSubmitInterview", () => {
+  it("DRU-18: disabled while not ready even when the form is fully answered", () => {
+    const answered = makeState({ singleSelected: ["PostgreSQL"] });
+    expect(canSubmitInterview([exclusiveQuestion], answered, false)).toBe(false);
+  });
+
+  it("DRU-19: delegates to canSubmitDecisionRequest when ready", () => {
+    const answered = makeState({ singleSelected: ["PostgreSQL"] });
+    const unanswered = makeState({ singleSelected: [""] });
+    expect(canSubmitInterview([exclusiveQuestion], answered, true)).toBe(true);
+    expect(canSubmitInterview([exclusiveQuestion], unanswered, true)).toBe(false);
   });
 });

@@ -461,3 +461,134 @@ describe("SP-COMPACT: compaction_done content persistence", () => {
     expect(rows[1]!.content).toBe("S");
   });
 });
+
+// ─── SP-DR: terminal decision_request flush + superseded-execution guard (D7) ─
+
+const DECISION_REQUEST_PAYLOAD = JSON.stringify({
+  questions: [{ question: "Q1", type: "freetext" }],
+});
+
+function makeDecisionRequestEngine(payload: string): ExecutionEngine {
+  return {
+    type: "scripted" as const,
+    async *execute(_params: ExecutionParams): AsyncIterable<EngineEvent> {
+      yield { type: "decision_request", payload };
+    },
+    async resume(_executionId: number, _input: EngineResumeInput): Promise<void> {},
+    cancel(_executionId: number): void {},
+    async listModels() { return []; },
+    async listCommands() { return []; },
+  };
+}
+
+/** Insert a chat-session execution (task_id NULL) for a conversation. */
+function insertSessionExecution(db: Database, cid: number): number {
+  db.run(
+    "INSERT INTO executions (task_id, conversation_id, from_state, to_state, prompt_id, status, attempt) VALUES (NULL, ?, 'chat', 'chat', 'chat-turn', 'running', 1)",
+    [cid],
+  );
+  return (db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!).id;
+}
+
+describe("SP-DR: terminal decision_request flush + superseded guard", () => {
+  function makeProcessor(onDone: () => void, onMsg: (m: ConversationMessage) => void = noop) {
+    const sp = new StreamProcessor(db, fakeRawBuffer, noop as never, noop as never, noop as never, onMsg, () => {});
+    sp.setOnStreamEvent((evt) => {
+      if (evt.type === "done") onDone();
+    });
+    return sp;
+  }
+
+  it("SP-DR-1: current task execution persists the prompt and transitions to waiting_user", async () => {
+    db.run("UPDATE tasks SET current_execution_id = ?, execution_state = 'running' WHERE id = ?", [executionId, taskId]);
+
+    let doneEmitted = false;
+    const newMessages: ConversationMessage[] = [];
+    const sp = makeProcessor(
+      () => { doneEmitted = true; },
+      (m) => newMessages.push(m),
+    );
+
+    await sp.consume(taskId, conversationId, executionId, makeDecisionRequestEngine(DECISION_REQUEST_PAYLOAD).execute(makeParams(taskId, conversationId, executionId)));
+
+    const prompt = db.query<{ type: string; content: string }, [number]>(
+      "SELECT type, content FROM conversation_messages WHERE conversation_id = ? AND type = 'decision_request_prompt'",
+    ).get(conversationId);
+    expect(prompt).toBeDefined();
+    expect(prompt!.content).toBe(DECISION_REQUEST_PAYLOAD);
+    expect(newMessages.some((m) => m.type === "decision_request_prompt")).toBe(true);
+
+    const taskRow = db.query<{ execution_state: string }, [number]>("SELECT execution_state FROM tasks WHERE id = ?").get(taskId);
+    expect(taskRow!.execution_state).toBe("waiting_user");
+
+    const execRow = db.query<{ status: string }, [number]>("SELECT status FROM executions WHERE id = ?").get(executionId);
+    expect(execRow!.status).toBe("waiting_user");
+
+    expect(doneEmitted).toBe(true);
+  });
+
+  it("SP-DR-2: superseded task execution discards the flush (no prompt, no state flip)", async () => {
+    // A newer execution supersedes the flushing one.
+    const newerId = insertExecution(db, taskId, conversationId);
+    db.run("UPDATE tasks SET current_execution_id = ?, execution_state = 'running' WHERE id = ?", [newerId, taskId]);
+
+    let doneEmitted = false;
+    const sp = makeProcessor(() => { doneEmitted = true; });
+
+    await sp.consume(taskId, conversationId, executionId, makeDecisionRequestEngine(DECISION_REQUEST_PAYLOAD).execute(makeParams(taskId, conversationId, executionId)));
+
+    const prompt = db.query<{ type: string }, [number]>(
+      "SELECT type FROM conversation_messages WHERE conversation_id = ? AND type = 'decision_request_prompt'",
+    ).get(conversationId);
+    expect(prompt).toBeNull();
+
+    const taskRow = db.query<{ execution_state: string }, [number]>("SELECT execution_state FROM tasks WHERE id = ?").get(taskId);
+    expect(taskRow!.execution_state).toBe("running");
+
+    const execRow = db.query<{ status: string }, [number]>("SELECT status FROM executions WHERE id = ?").get(executionId);
+    expect(execRow!.status).toBe("running");
+
+    expect(doneEmitted).toBe(true); // stream still terminates
+  });
+
+  it("SP-DR-3: session execution superseded by a newer execution discards the flush", async () => {
+    const sessionConversationId = (db.run("INSERT INTO conversations (task_id) VALUES (NULL)").lastInsertRowid) as number;
+    const execA = insertSessionExecution(db, sessionConversationId);
+    insertSessionExecution(db, sessionConversationId); // newer execution
+
+    let doneEmitted = false;
+    const sp = makeProcessor(() => { doneEmitted = true; });
+
+    await sp.consume(null, sessionConversationId, execA, makeDecisionRequestEngine(DECISION_REQUEST_PAYLOAD).execute(makeParams(null, sessionConversationId, execA)));
+
+    const prompt = db.query<{ type: string }, [number]>(
+      "SELECT type FROM conversation_messages WHERE conversation_id = ? AND type = 'decision_request_prompt'",
+    ).get(sessionConversationId);
+    expect(prompt).toBeNull();
+
+    const execRow = db.query<{ status: string }, [number]>("SELECT status FROM executions WHERE id = ?").get(execA);
+    expect(execRow!.status).toBe("running");
+
+    expect(doneEmitted).toBe(true);
+  });
+
+  it("SP-DR-4: current session execution persists the prompt and marks the execution waiting_user", async () => {
+    const sessionConversationId = (db.run("INSERT INTO conversations (task_id) VALUES (NULL)").lastInsertRowid) as number;
+    const execA = insertSessionExecution(db, sessionConversationId);
+
+    let doneEmitted = false;
+    const sp = makeProcessor(() => { doneEmitted = true; });
+
+    await sp.consume(null, sessionConversationId, execA, makeDecisionRequestEngine(DECISION_REQUEST_PAYLOAD).execute(makeParams(null, sessionConversationId, execA)));
+
+    const prompt = db.query<{ type: string }, [number]>(
+      "SELECT type FROM conversation_messages WHERE conversation_id = ? AND type = 'decision_request_prompt'",
+    ).get(sessionConversationId);
+    expect(prompt).toBeDefined();
+
+    const execRow = db.query<{ status: string }, [number]>("SELECT status FROM executions WHERE id = ?").get(execA);
+    expect(execRow!.status).toBe("waiting_user");
+
+    expect(doneEmitted).toBe(true);
+  });
+});

@@ -477,6 +477,30 @@ export class StreamProcessor {
           }
 
           case "decision_request": {
+            // D7 — superseded-execution guard: if this execution is no longer the
+            // conversation's current one, discard the flush entirely (no prompt
+            // persist, no state flip). This keeps the invariant that a terminal
+            // `decision_request_prompt` is never persisted after the user already
+            // answered/submitted (early-submit race), and a superseded execution
+            // can never flip the task back to waiting_user.
+            let superseded = false;
+            if (taskId != null) {
+              const current = db.query<{ current_execution_id: number | null }, [number]>(
+                "SELECT current_execution_id FROM tasks WHERE id = ?",
+              ).get(taskId);
+              superseded = current?.current_execution_id !== executionId;
+            } else {
+              const newer = db.query<{ id: number }, [number, number]>(
+                "SELECT id FROM executions WHERE conversation_id = ? AND id > ? LIMIT 1",
+              ).get(conversationId, executionId);
+              superseded = newer != null;
+            }
+            if (superseded) {
+              console.debug(`[stream-processor] discarding superseded decision_request flush (execution ${executionId})`);
+              this.onStreamEvent?.({ taskId, conversationId, executionId, seq: 0, blockId: `${executionId}-done`, type: "done", content: "", metadata: null, parentBlockId: null, done: true, subagentId: null });
+              this.onToken(taskId, conversationId, executionId, "", true);
+              return;
+            }
             convBuffer.enqueue({ taskId, conversationId, type: "decision_request_prompt", role: null, content: event.payload, notify: true });
             convBuffer.flush().forEach((msg) => this.onNewMessage(msg));
             if (taskId != null) {

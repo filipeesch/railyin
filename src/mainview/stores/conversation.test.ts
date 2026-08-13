@@ -728,5 +728,80 @@ describe("live interview pages", () => {
     store.setActiveConversation(2);
     expect(store.activeLiveInterview).toHaveLength(0);
   });
+
+  it("DR-7: terminal decision_request_prompt is appended even while the stream is active (drop-guard exemption)", () => {
+    const store = useConversationStore();
+    store.setActiveConversation(1);
+
+    // Stream a page — creates a live stream state with isDone=false.
+    store.onStreamEvent(pageEvent(1, "Q1", 1));
+    expect(store.liveInterviews.get(1)).toHaveLength(1);
+
+    // The terminal prompt push arrives BEFORE the done event: it must be
+    // appended (not dropped) and must clear the live pages (reconcile runs).
+    store.onNewMessage({
+      id: 100,
+      taskId: null,
+      conversationId: 1,
+      type: "decision_request_prompt",
+      role: null,
+      content: '{"questions":[{"question":"Q1","type":"freetext"}]}',
+      metadata: null,
+      createdAt: new Date().toISOString(),
+    });
+
+    expect(store.messages.some((m) => m.id === 100 && m.type === "decision_request_prompt")).toBe(true);
+    expect(store.liveInterviews.get(1) ?? []).toHaveLength(0);
+    expect(store.liveInterviewExecutions.get(1)).toBeUndefined();
+  });
+
+  it("DR-8: setActiveConversation(null) clears live interview state for the closed conversation", () => {
+    const store = useConversationStore();
+    store.setActiveConversation(1);
+
+    store.onStreamEvent(pageEvent(1, "Q1", 1));
+    expect(store.liveInterviews.get(1)).toHaveLength(1);
+    expect(store.liveInterviewExecutions.get(1)).toBe(1);
+
+    store.setActiveConversation(null);
+
+    expect(store.liveInterviews.get(1) ?? []).toHaveLength(0);
+    expect(store.liveInterviewExecutions.get(1)).toBeUndefined();
+  });
+
+  it("DR-9: dismissedInterviews stores and clears episode keys per conversation", () => {
+    const store = useConversationStore();
+    store.setActiveConversation(1);
+
+    store.dismissInterview(1, "exec:5");
+    expect(store.dismissedInterviews.get(1)).toBe("exec:5");
+
+    store.clearDismissedInterview(1);
+    expect(store.dismissedInterviews.get(1)).toBeUndefined();
+  });
+
+  it("DR-10: terminal reconcile migrates a mid-stream dismissal key (exec → prompt)", () => {
+    const store = useConversationStore();
+    store.setActiveConversation(1);
+
+    // Dismiss while the interview is still streaming (live execution tracked).
+    store.onStreamEvent(pageEvent(1, "Q1", 1));
+    store.dismissInterview(1, "exec:1");
+
+    // Terminal prompt arrives — the dismissal key migrates to the prompt id so
+    // the panel stays dismissed after the drawer reopens.
+    store.onNewMessage({
+      id: 100,
+      taskId: null,
+      conversationId: 1,
+      type: "decision_request_prompt",
+      role: null,
+      content: '{"questions":[{"question":"Q1","type":"freetext"}]}',
+      metadata: null,
+      createdAt: new Date().toISOString(),
+    });
+
+    expect(store.dismissedInterviews.get(1)).toBe("prompt:100");
+  });
 });
 
