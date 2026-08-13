@@ -207,7 +207,15 @@ test("S-D5: orphaned delegate children render as standalone tool entries when pa
         ...makeOrphanChild(5, "tc-child-3", "write_file"),
     ];
 
-    api.handle("conversations.getMessages", () => ({ messages, hasMore: true }));
+    api.handle("conversations.getMessages", (params) => {
+        const { beforeMessageId } = params as { beforeMessageId?: number };
+        // The delegate parent lives on an older page, so there is nothing to
+        // fetch further back: answer the virtualizer's "load older" request with
+        // an empty page. Otherwise the same slice would be prepended again and
+        // the orphaned children would render duplicated (6 cards instead of 3).
+        if (beforeMessageId != null) return { messages: [], hasMore: false };
+        return { messages, hasMore: true };
+    });
 
     await page.goto("/");
     await openTaskDrawer(page, task.id);
