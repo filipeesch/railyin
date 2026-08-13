@@ -1,7 +1,8 @@
 import { runMigrations } from "./db/migrations/runner.ts";
 import { seedDefaultWorkspace } from "./db/seed.ts";
-import { getDb } from "./db/index.ts";
-import { loadConfig, getDataDir, getWorkspaceRegistry, markWorkflowDirSeeded, type EngineConfig, type EngineEntry } from "./config/index.ts";
+import { getDb, getDbPath } from "./db/index.ts";
+import { StartupMaintenance } from "./db/startup-maintenance.ts";
+import { loadConfig, getWorkspaceRegistry, markWorkflowDirSeeded, type EngineConfig, type EngineEntry } from "./config/index.ts";
 import { seedWorkflows } from "./config/workflows.ts";
 import { getTmpDir } from "./utils/platform.ts";
 import * as path from "path";
@@ -92,12 +93,23 @@ if (argv.includes("--memory-db")) process.env.RAILYN_DB = ":memory:";
 await getResolvedShellEnv();
 markBoot("shell env resolved");
 
-// 1. Run DB migrations, sync config-backed rows, then seed any test-only defaults.
+// 1. Startup DB maintenance: a consistent `VACUUM INTO` backup BEFORE
+//    migrations (true pre-change rollback point), then migrations, then
+//    compaction AFTER migrations so free pages left by deleted conversations
+//    AND by the migrations themselves are reclaimed. Best-effort — a locked
+//    DB (another instance) logs a warning and boot continues.
+const db = getDb();
+const startupMaintenance = new StartupMaintenance(db, getDbPath());
+startupMaintenance.backup();
+markBoot("db backup done");
+
+// 1a. Run DB migrations, sync config-backed rows, then seed any test-only defaults.
 await runMigrations();
 seedDefaultWorkspace();
 markBoot("migrations done");
 
-const db = getDb();
+startupMaintenance.compact();
+markBoot("db compact done");
 const modelSettingsRepo = new SqliteModelSettingsRepository(db);
 const wsRepo = new WorkspaceRepository(db);
 
