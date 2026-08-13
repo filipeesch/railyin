@@ -505,6 +505,11 @@ export class StreamProcessor {
             convBuffer.flush().forEach((msg) => this.onNewMessage(msg));
             if (taskId != null) {
               db.run("UPDATE tasks SET execution_state = 'waiting_user' WHERE id = ?", [taskId]);
+            } else {
+              // Chat sessions have no task row: persist the awaiting-input state
+              // so the UI (and any drawer reopen) sees `waiting_user`, not the
+              // stale `running` status the chat turn left behind.
+              db.run("UPDATE chat_sessions SET status = 'waiting_user' WHERE conversation_id = ?", [conversationId]);
             }
             db.run(
               "UPDATE executions SET status = 'waiting_user', finished_at = datetime('now') WHERE id = ?",

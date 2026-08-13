@@ -1052,3 +1052,103 @@ test.describe("T-V — session interview panel", () => {
         await expect(page.locator(".decision-interview-panel")).not.toBeVisible();
     });
 });
+
+// ─── T-X: session multi-question round — panel stays visible + Submit enables ──
+
+test.describe("T-X — session multi-question round", () => {
+    test("T-X: 3-question session round stays visible and Submit enables after answering all", async ({ page, api, ws }) => {
+        const session = makeChatSession({ id: 702, title: "3Q Session", status: "running" });
+        const q1 = { question: "Question one?", type: "freetext" as const, weight: "easy" as const };
+        const q2 = { question: "Question two?", type: "freetext" as const, weight: "easy" as const };
+        const q3 = { question: "Question three?", type: "freetext" as const, weight: "easy" as const };
+        const promptId = 7200;
+        const promptMsg = makeInterviewPrompt(
+            session.conversationId,
+            { questions: [q1, q2, q3] },
+            { id: promptId, taskId: null },
+        );
+
+        api.returns("chatSessions.list", [session]);
+        api.returns("chatSessions.get", session);
+
+        // The conversation starts empty; after the turn ends, the server serves
+        // the persisted terminal prompt.
+        let serveMessages: ConversationMessage[] = [];
+        api.handle("conversations.getMessages", () => messagePage(serveMessages));
+
+        await page.goto("/");
+        await openSessionDrawer(page, session.id);
+
+        // The model streams three question pages, one at a time.
+        [q1, q2, q3].forEach((q, i) => {
+            ws.pushStreamEvent({
+                taskId: null,
+                conversationId: session.conversationId,
+                executionId: 7201,
+                seq: i + 1,
+                blockId: `page-${i + 1}`,
+                type: "decision_request_page",
+                content: JSON.stringify(q),
+                metadata: null,
+                parentBlockId: null,
+                subagentId: null,
+                done: false,
+            });
+        });
+
+        // The terminal prompt is persisted, then the turn ends (done).
+        serveMessages = [promptMsg];
+        ws.pushNewMessage(promptMsg);
+        ws.pushSessionDone(session.conversationId, 7201);
+
+        // The panel must stay visible with the three persisted questions
+        // (regression: the turn-end done must not flip the session back to idle).
+        await expect(page.locator(".decision-interview-panel")).toBeVisible({ timeout: 5000 });
+        await expect(page.locator(".interview__counter")).toHaveText("1 / 3");
+
+        // Answer all three questions — Submit must enable (regression: Submit
+        // requires the session to be waiting_user, not answer completeness).
+        await page.locator(".interview__textarea--freetext").fill("Answer one");
+        await page.locator(".interview__primary").click(); // Next
+        await page.locator(".interview__textarea--freetext").fill("Answer two");
+        await page.locator(".interview__primary").click(); // Next
+        await page.locator(".interview__textarea--freetext").fill("Answer three");
+        await expect(page.locator(".interview__primary")).toBeEnabled();
+    });
+
+    test("T-X2: 3-question TASK round stays visible and Submit enables after answering all", async ({ page, api, ws, task }) => {
+        const q1 = { question: "Task question one?", type: "freetext" as const, weight: "easy" as const };
+        const q2 = { question: "Task question two?", type: "freetext" as const, weight: "easy" as const };
+        const q3 = { question: "Task question three?", type: "freetext" as const, weight: "easy" as const };
+        const promptId = 7300;
+        const promptMsg = makeInterviewPrompt(task.id, { questions: [q1, q2, q3] }, { id: promptId });
+
+        // The task is running while the model streams; the turn end flips it to waiting_user.
+        api.handle("tasks.list", () => [makeTask({ id: task.id, executionState: "running" })]);
+
+        let serveMessages: ConversationMessage[] = [];
+        api.handle("conversations.getMessages", () => messagePage(serveMessages));
+
+        await page.goto("/");
+        await openTaskDrawer(page, task.id);
+
+        [q1, q2, q3].forEach((q, i) => {
+            ws.pushDecisionRequestPage(task.id, 7301, q, i + 1);
+        });
+
+        serveMessages = [promptMsg];
+        ws.pushNewMessage(promptMsg);
+        ws.pushDone(task.id, 7301);
+        ws.push({ type: "task.updated", payload: makeTask({ id: task.id, executionState: "waiting_user" }) });
+
+        await expect(page.locator(".decision-interview-panel")).toBeVisible({ timeout: 5000 });
+        await expect(page.locator(".interview__counter")).toHaveText("1 / 3");
+
+        await page.locator(".interview__textarea--freetext").fill("Answer one");
+        await page.locator(".interview__primary").click(); // Next
+        await page.locator(".interview__textarea--freetext").fill("Answer two");
+        await page.locator(".interview__primary").click(); // Next
+        await page.locator(".interview__textarea--freetext").fill("Answer three");
+        await expect(page.locator(".interview__primary")).toBeEnabled();
+    });
+});
