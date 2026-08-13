@@ -591,4 +591,32 @@ describe("SP-DR: terminal decision_request flush + superseded guard", () => {
 
     expect(doneEmitted).toBe(true);
   });
+
+  it("SP-DR-5: a SECOND wave from the still-current (resumed) execution persists — the guard does not discard it (regression)", async () => {
+    db.run("UPDATE tasks SET current_execution_id = ?, execution_state = 'running' WHERE id = ?", [executionId, taskId]);
+
+    const sp = makeProcessor(() => {});
+
+    // ── Wave 1 flush (current execution) → prompt persisted, task waiting_user.
+    await sp.consume(taskId, conversationId, executionId, makeDecisionRequestEngine(DECISION_REQUEST_PAYLOAD).execute(makeParams(taskId, conversationId, executionId)));
+    let prompts = db.query<{ content: string }, [number]>(
+      "SELECT content FROM conversation_messages WHERE conversation_id = ? AND type = 'decision_request_prompt' ORDER BY id ASC",
+    ).all(conversationId);
+    expect(prompts).toHaveLength(1);
+
+    // ── User answers: the task resumes the SAME execution (current_execution_id
+    //    unchanged) and the model asks a SECOND wave.
+    db.run("UPDATE tasks SET execution_state = 'running' WHERE id = ?", [taskId]);
+
+    await sp.consume(taskId, conversationId, executionId, makeDecisionRequestEngine(DECISION_REQUEST_PAYLOAD).execute(makeParams(taskId, conversationId, executionId)));
+
+    prompts = db.query<{ content: string }, [number]>(
+      "SELECT content FROM conversation_messages WHERE conversation_id = ? AND type = 'decision_request_prompt' ORDER BY id ASC",
+    ).all(conversationId);
+    // BOTH waves persisted — the second flush was NOT discarded as superseded.
+    expect(prompts).toHaveLength(2);
+
+    const taskRow = db.query<{ execution_state: string }, [number]>("SELECT execution_state FROM tasks WHERE id = ?").get(taskId);
+    expect(taskRow!.execution_state).toBe("waiting_user");
+  });
 });

@@ -102,3 +102,11 @@
 - [x] 10.6.9 T-K2: prompt push while stream ACTIVE still renders (drop-guard exemption)
 
 > **Fixture implication**: the default Playwright task is `idle`; with the corrected gating + stale rule, every pending-interview spec must seed `executionState: "waiting_user"` (10.6.3).
+
+## 11. Second-wave regression (reported bug: wave 1 reappearing after answering)
+
+Verified the reported flow (answer wave 1 → model sends wave 2 → panel must show wave 2) is NOT reproducible in the current code; added regression coverage at all three levels:
+
+- [x] 11.1 DR-11 (store): wave-1 pages → prompt 100 → user answer 101 → wave-2 pages → prompt 102 → `latestPromptId` = 102, live state cleared (wave 1 never resurfaced)
+- [x] 11.2 SP-DR-5 (stream processor): a SECOND flush from the still-current (resumed) execution persists — the D7 guard does not discard wave 2
+- [x] 11.3 T-W (Playwright): answer wave 1 → submit → panel closes → push wave-2 prompt → panel shows wave 2's question and NOT wave 1's

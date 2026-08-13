@@ -618,6 +618,44 @@ test.describe("T-J — streaming flow renders pages live + persisted prompt", ()
     });
 });
 
+// ─── T-W: a SECOND interview wave must replace the first after answering ──────
+
+test.describe("T-W — second interview wave replaces the first", () => {
+    test("T-W: after answering wave 1, the panel shows wave 2's questions (never wave 1 again)", async ({ page, api, ws, task }) => {
+        const wave1Prompt = makeInterviewPrompt(task.id, { questions: [exclusiveQuestion] }, { id: 6100 });
+        const wave2Prompt = makeInterviewPrompt(
+            task.id,
+            { questions: [{ question: "Second wave question?", type: "freetext", weight: "easy" }] },
+            { id: 6200 },
+        );
+        const replyMsg = makeUserMessage(task.id, "A: PostgreSQL", { id: 6101 });
+
+        let serveMessages: ConversationMessage[] = [wave1Prompt];
+        api.handle("conversations.getMessages", () => messagePage(serveMessages));
+        api.handle("tasks.submitDecisions", () => ({ message: replyMsg, executionId: 9999 }));
+
+        await page.goto("/");
+        await openTaskDrawer(page, task.id);
+
+        // Wave 1 is showing.
+        await expect(page.locator(".decision-interview-panel .interview__question-text")).toContainText("Which database do you prefer?", { timeout: 5000 });
+
+        // Answer wave 1 and submit → panel closes.
+        await page.locator(".interview__option").filter({ hasText: "PostgreSQL" }).click();
+        await page.locator(".interview__primary").click();
+        ws.pushNewMessage(replyMsg);
+        await expect(page.locator(".decision-interview-panel")).not.toBeVisible({ timeout: 5000 });
+
+        // The model sends a SECOND wave: new terminal prompt persisted server-side.
+        serveMessages = [wave1Prompt, replyMsg, wave2Prompt];
+        ws.pushNewMessage(wave2Prompt);
+
+        // The panel must show WAVE 2 — never wave 1 again.
+        await expect(page.locator(".decision-interview-panel .interview__question-text")).toContainText("Second wave question?", { timeout: 5000 });
+        await expect(page.locator(".decision-interview-panel")).not.toContainText("Which database do you prefer?");
+    });
+});
+
 // ─── T-K: message.new push delivers decision_request_prompt when stream done ──
 
 test.describe("T-K — message.new push event", () => {

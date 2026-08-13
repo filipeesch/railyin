@@ -7,6 +7,7 @@ vi.mock("../rpc", () => ({
 }));
 
 const { useConversationStore } = await import("./conversation");
+const { latestPromptId } = await import("../utils/decisionInterview");
 
 function makeMsg(id: number, conversationId: number, content = `msg-${id}`) {
   return {
@@ -802,6 +803,57 @@ describe("live interview pages", () => {
     });
 
     expect(store.dismissedInterviews.get(1)).toBe("prompt:100");
+  });
+
+  it("DR-11: a SECOND interview wave replaces the first after the user answers (regression)", () => {
+    const store = useConversationStore();
+    store.setActiveConversation(1);
+
+    // ── Wave 1: streams and finalizes (terminal prompt id 100). ──────────────
+    store.onStreamEvent(pageEvent(1, "W1Q1", 1));
+    store.onNewMessage({
+      id: 100,
+      taskId: null,
+      conversationId: 1,
+      type: "decision_request_prompt",
+      role: null,
+      content: '{"questions":[{"question":"W1Q1","type":"freetext"}]}',
+      metadata: null,
+      createdAt: new Date().toISOString(),
+    });
+    expect(store.liveInterviews.get(1) ?? []).toHaveLength(0);
+
+    // ── User answers wave 1. ──────────────────────────────────────────────────
+    store.onNewMessage({
+      id: 101,
+      taskId: null,
+      conversationId: 1,
+      type: "user",
+      role: "user",
+      content: "A: answer to W1Q1",
+      metadata: null,
+      createdAt: new Date().toISOString(),
+    });
+
+    // ── Wave 2: streams (same conversation; the resumed execution reuses the
+    //    execution id) and finalizes with a NEW terminal prompt id 102. ───────
+    store.onStreamEvent(pageEvent(1, "W2Q1", 2));
+    store.onNewMessage({
+      id: 102,
+      taskId: null,
+      conversationId: 1,
+      type: "decision_request_prompt",
+      role: null,
+      content: '{"questions":[{"question":"W2Q1","type":"freetext"}]}',
+      metadata: null,
+      createdAt: new Date().toISOString(),
+    });
+
+    // The LATEST prompt must be wave 2 — the panel must render wave 2, never
+    // wave 1.
+    expect(latestPromptId(store.messages, 1)).toBe(102);
+    expect(store.liveInterviews.get(1) ?? []).toHaveLength(0);
+    expect(store.liveInterviewExecutions.get(1)).toBeUndefined();
   });
 });
 
